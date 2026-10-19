@@ -1,0 +1,18 @@
+name = "zhipu-wasm-gateway"
+main = "build/index.js"
+compatibility_date = "2026-10-01"
+
+# 资源账本 Durable Object：渠道 / Key / 健康状态 / 降权事件都存这里。
+# 首次 deploy 时 [[migrations]] 会注册 ResourceStore 类；改了类名必须加新的 migration tag。
+[[durable_objects.bindings]]
+name = "RESOURCE_STORE"
+class_name = "ResourceStore"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ResourceStore"]
+
+# 密钥不要写在这里 —— 用 `npx wrangler secret put ZHIPU_API_KEY` / `ADMIN_TOKEN`。
+# 非敏感配置（可选）：
+# [vars]
+# ZHIPU_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
