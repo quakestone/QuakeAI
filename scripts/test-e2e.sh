@@ -206,7 +206,12 @@ curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: appli
   -d '{"id":"dyn-zhipu","provider":"zhipu","name":"智谱-JWT","base_url":"http://127.0.0.1:8788","api_key":"test-jwt-id.test-jwt-secret","models":["glm-4-flash"],"kind":"chat","tier":"T0","priority":400}' > /dev/null
 RESP=$(curl -sD /tmp/h8.txt http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-4-flash","messages":[{"role":"user","content":"hi"}]}')
 echo "$RESP" | grep -q 'glm-4-flash'; check "智谱渠道经 JWT 鉴权拿到响应" $? "$RESP"
-grep -qi 'x-gateway-channel: 智谱-JWT' /tmp/h8.txt; check "命中智谱 JWT 渠道" $? "$(tr -d '\r' < /tmp/h8.txt | grep -i gateway)"
+# 诊断头只允许 ASCII：中文渠道名经 percent-encoding 后上线（浏览器按 Latin-1
+# 解头，裸中文会变乱码），前端 decodeURIComponent 还原
+grep -qi 'x-gateway-channel: %E6%99%BA%E8%B0%B1-JWT' /tmp/h8.txt; check "命中智谱 JWT 渠道（头内 ASCII 编码）" $? "$(tr -d '\r' < /tmp/h8.txt | grep -i gateway)"
+# 往返验证：头值 decode 后必须还原为中文渠道名（模拟前端 decodeHeader）
+DECODED=$(tr -d '\r' < /tmp/h8.txt | grep -i 'x-gateway-channel:' | sed 's/.*: *//' | python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))')
+check "头值解码还原为「智谱-JWT」" $([ "$DECODED" = "智谱-JWT" ] && echo 0 || echo 1) "decoded=$DECODED"
 # 上游收到的 Authorization 必须是 JWT（eyJ 开头三段式）而非原始 Key
 LAST_AUTH=$(tail -1 "$MOCK_LOG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorization"])')
 echo "  上游 Authorization: ${LAST_AUTH:0:40}…"
@@ -249,7 +254,7 @@ curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: appli
   -d '{"id":"sf-cn","provider":"siliconflow","name":"硅基流动-Qwen","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","models":["Qwen/Qwen2.5-7B-Instruct"],"kind":"chat","tier":"T2","priority":300}' > /dev/null
 RESP=$(curl -sD /tmp/h5.txt http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"Qwen/Qwen2.5-7B-Instruct","messages":[{"role":"user","content":"hi"}]}')
 echo "$RESP" | grep -q 'Qwen/Qwen2.5-7B-Instruct'; check "硅基流动渠道透传响应" $? "$RESP"
-grep -qi 'x-gateway-channel: 硅基流动-Qwen' /tmp/h5.txt; check "命中硅基流动渠道" $? "$(tr -d '\r' < /tmp/h5.txt | grep -i gateway)"
+grep -qi 'x-gateway-channel: %E7%A1%85%E5%9F%BA%E6%B5%81%E5%8A%A8-Qwen' /tmp/h5.txt; check "命中硅基流动渠道（头内 ASCII 编码）" $? "$(tr -d '\r' < /tmp/h5.txt | grep -i gateway)"
 
 # 13.3 静态回退：删空动态 chat 渠道后回落 ZHIPU_CHANNELS 行为
 for id in sf-cn dyn-b; do curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/$id > /dev/null; done

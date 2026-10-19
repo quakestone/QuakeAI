@@ -185,7 +185,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.5.0",
+            "version": "0.5.1",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -310,7 +310,33 @@ fn build_restream_response(
         .map_err(|e| Error::RustError(format!("build stream response: {e:?}")))
 }
 
+/// HTTP 响应头值只允许 ASCII：中文渠道名/ID 直接塞进头会被浏览器按 Latin-1
+/// 解成乱码（`智谱` → `æ™ºè°±`）。这里对非 ASCII 字节做 percent-encoding
+/// （RFC 3986 非保留字符原样保留），前端用 decodeURIComponent 还原。
+/// ASCII 值（版本号/URL/模型名等）不受影响，编码后仍是原值。
+fn header_safe(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        let keep = b.is_ascii_alphanumeric() || matches!(
+            b,
+            b'-' | b'.' | b'_' | b'~' | b':' | b'/' | b'?' | b'#' | b'[' | b']' | b'@'
+                | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'='
+        );
+        if keep {
+            out.push(b as char);
+        } else {
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
 /// 给客户端响应统一注入诊断头（兼容旧 x-zhipu-* + 新增 x-gateway-*）。
+/// 所有可能含中文的值（渠道名、attempts 里的渠道 ID）都经 header_safe 编码，
+/// 保证线上响应头是纯 ASCII，前端 decodeURIComponent 还原。
 fn diag_headers(
     channel: &Channel,
     model: &str,
@@ -321,20 +347,22 @@ fn diag_headers(
     let h = web_sys::Headers::new()
         .map_err(|e| Error::RustError(format!("headers: {e:?}")))?;
     let attempt_str = attempts.join(";");
+    let ch_name = header_safe(&channel.name);
+    let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.5.0"),
-        ("x-gateway-channel", channel.name.as_str()),
-        ("x-gateway-provider", channel.provider.as_str()),
-        ("x-gateway-base-url", channel.base_url.as_str()),
-        ("x-gateway-model", model),
-        ("x-gateway-attempts", attempt_str.as_str()),
-        ("x-zhipu-gateway", "wasm"),
-        ("x-zhipu-channel", channel.name.as_str()),
-        ("x-zhipu-base-url", channel.base_url.as_str()),
-        ("x-zhipu-model", model),
-        ("x-zhipu-attempts", attempt_str.as_str()),
+        ("x-gateway-version", "0.5.1".to_string()),
+        ("x-gateway-channel", ch_name.clone()),
+        ("x-gateway-provider", channel.provider.clone()),
+        ("x-gateway-base-url", channel.base_url.clone()),
+        ("x-gateway-model", model.to_string()),
+        ("x-gateway-attempts", ch_attempts.clone()),
+        ("x-zhipu-gateway", "wasm".to_string()),
+        ("x-zhipu-channel", ch_name),
+        ("x-zhipu-base-url", channel.base_url.clone()),
+        ("x-zhipu-model", model.to_string()),
+        ("x-zhipu-attempts", ch_attempts),
     ] {
-        h.set(k, v)
+        h.set(k, &v)
             .map_err(|e| Error::RustError(format!("set header {k}: {e:?}")))?;
     }
     h.set("Content-Type", content_type)
@@ -359,10 +387,11 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.5.0")?;
+    hdrs.set("x-gateway-version", "0.5.1")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
-    hdrs.set("x-gateway-attempts", &attempts.join(";"))?;
-    hdrs.set("x-zhipu-attempts", &attempts.join(";"))?;
+    let attempts_safe = header_safe(&attempts.join(";"));
+    hdrs.set("x-gateway-attempts", &attempts_safe)?;
+    hdrs.set("x-zhipu-attempts", &attempts_safe)?;
     Ok(Response::from_bytes(err_body.into_bytes())?
         .with_status(status)
         .with_headers(hdrs))
@@ -718,5 +747,48 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             "not_found",
             "routes: GET / (admin UI), GET /health, POST /v1/chat/completions, POST /v1/audio/transcriptions, /admin/api/*",
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::header_safe;
+
+    /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
+    /// 解响应头，裸中文会变乱码，如 `智谱` → `æ™ºè°±`）。
+    #[test]
+    fn header_safe_encodes_non_ascii() {
+        assert_eq!(header_safe("智谱-JWT"), "%E6%99%BA%E8%B0%B1-JWT");
+        assert_eq!(header_safe("硅基流动-Qwen"), "%E7%A1%85%E5%9F%BA%E6%B5%81%E5%8A%A8-Qwen");
+        // 空串与纯 ASCII 原样返回（URL / 模型名 / 版本号不受影响）
+        assert_eq!(header_safe(""), "");
+        assert_eq!(header_safe("dyn-b"), "dyn-b");
+        assert_eq!(header_safe("https://open.bigmodel.cn/api/paas/v4"), "https://open.bigmodel.cn/api/paas/v4");
+        assert_eq!(header_safe("ch-a=HTTP429;ch-b=ok"), "ch-a=HTTP429;ch-b=ok");
+    }
+
+    /// 编码值必须能被 JS decodeURIComponent 语义还原（标准 percent-encoding，
+    /// 含 % 自身的转义，保证往返无损）。
+    #[test]
+    fn header_safe_roundtrip() {
+        for s in ["智谱-JWT", "硅基流动-Qwen", "渠道 100%", "a&b=c", "emoji-🎙️"] {
+            let enc = header_safe(s);
+            assert!(enc.is_ascii(), "编码后必须纯 ASCII: {enc}");
+            // 手写解码（std 无 percent 解码），与 JS decodeURIComponent 行为一致
+            let mut dec = Vec::new();
+            let bytes = enc.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'%' && i + 2 < bytes.len() {
+                    let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap();
+                    dec.push(u8::from_str_radix(hex, 16).unwrap());
+                    i += 3;
+                } else {
+                    dec.push(bytes[i]);
+                    i += 1;
+                }
+            }
+            assert_eq!(String::from_utf8(dec).unwrap(), s, "往返必须无损: {s}");
+        }
     }
 }

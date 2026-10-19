@@ -246,7 +246,7 @@
     <div id="convo-list"></div>
     <div class="sidebar-foot">
       <button onclick="navigate('models')">⚙ 模型管理</button>
-      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">v0.5</span></div>
+      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">v0.5.1</span></div>
     </div>
   </aside>
   <div id="scrim" onclick="closeSidebar()"></div>
@@ -412,6 +412,12 @@ function toast(msg, cls="") {
   setTimeout(() => t.remove(), 4600);
 }
 function token() { return localStorage.getItem("gw_admin_token") || ""; }
+// HTTP 头不允许非 ASCII：网关把中文渠道名/ID 做了 percent-encoding（header_safe），
+// 这里还原。解码失败（异常值）时原样返回，不抛错。
+function decodeHeader(v) {
+  if (!v) return "";
+  try { return decodeURIComponent(v); } catch (e) { return v; }
+}
 async function api(path, method="GET", body=null) {
   const h = { "Content-Type": "application/json" };
   if (token()) h["x-admin-token"] = token();
@@ -622,8 +628,8 @@ async function sendOrStop() {
     const h = { "Content-Type": "application/json", "Accept": "text/event-stream" };
     if (token()) h["x-admin-token"] = token();
     const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: aborter.signal });
-    asst.channel = resp.headers.get("x-gateway-channel") || "";
-    asst.attempts = resp.headers.get("x-gateway-attempts") || "";
+    asst.channel = decodeHeader(resp.headers.get("x-gateway-channel"));
+    asst.attempts = decodeHeader(resp.headers.get("x-gateway-attempts"));
     if (!resp.ok) {
       const j = await resp.json().catch(() => ({}));
       throw new Error(j.error?.message || ("HTTP " + resp.status));

@@ -21,7 +21,7 @@ use crate::json_error;
 use crate::json_response;
 use crate::store::*;
 
-const VERSION: &str = "0.5.0";
+const VERSION: &str = "0.5.1";
 
 /// 资源账本不可用（Durable Object 绑定缺失/类未注册/storage 异常）。
 /// 以前这里直接 `?` 抛出，用户只看到裸的 500，完全不知道要绑 DO。

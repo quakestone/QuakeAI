@@ -1,5 +1,26 @@
 # CHANGES
 
+## v0.5.1（2026-10-19）—— 诊断头中文乱码修复
+
+**现象**：线上聊天回复的渠道徽章显示 `via Ã¦ÂÂç GLM ä¸­ç«`——中文渠道名变乱码。
+
+**根因**：HTTP 响应头不允许非 ASCII 字节。浏览器按 Latin-1 解响应头，
+网关此前把中文渠道名（`智谱-JWT`）的 UTF-8 字节直接写进
+`x-gateway-channel` 头，前端读出来就是 Mojibake。响应体（JSON）不受影响，
+所以只有徽章乱，聊天内容正常。
+
+**修复**：所有可能含中文的诊断头值（渠道名、attempts 里的渠道 ID）
+在 Rust 侧经 `header_safe()` 做 percent-encoding（RFC 3986 非保留字符
+原样保留，非 ASCII 字节 → `%XX` 大写十六进制），上线响应头保证纯 ASCII；
+前端读取处用 `decodeHeader()`（`decodeURIComponent` + 失败兜底）还原。
+`x-gateway-version` / `provider` / `base-url` / `model` 等 ASCII 值不受影响。
+
+**验证**：单测 +2（共 7/7：编码正确性 + 往返无损，含 `%`/`&`/emoji 边界）；
+e2e +1（共 70/70：头内 ASCII 编码断言 + 解码还原「智谱-JWT」往返断言）；
+前端 JS 语法校验通过。
+
+---
+
 ## v0.5（2026-10-19）—— 智谱 JWT 自动鉴权
 
 背景：用户最初提供的智谱 Key 是控制台显示界面里的**掩码值**（`5bc8...4bRY`），
