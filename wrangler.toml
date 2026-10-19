@@ -1,4 +1,4 @@
-name = "zhipu-wasm-gateway"
+name = "quakeai-gateway"
 main = "build/index.js"
 compatibility_date = "2026-10-01"
 

@@ -22,6 +22,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Preflight - DO protocol self-test
+        run: node scripts/test-storage-do.mjs
+
       - name: Deploy to Cloudflare Workers
         run: npx --yes wrangler@latest deploy
         env:

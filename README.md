@@ -181,6 +181,7 @@ v0.4 新增验证（浏览器交互回归，puppeteer + 手机/桌面双视口�
 ├── workerd.real-test.capnp   # 真端点配置（填你的 Key 即可真实对话）
 ├── wrangler.toml             # 线上部署（含 DO migration）
 ├── CHANGES.md                # 版本变更记录（v0.4 三项修复根因与改法）
+├── LINUX.md                  # Linux 自托管方案（workerd + systemd）
 ├── README.md / DEPLOY.md     # 使用说明 / 部署完整指南（三条路线 + 无 Rust 说明）
 └── .tools/workerd            # 本地运行时二进制（npm @cloudflare/workerd-linux-64，.gitignore 忽略）
 ```
@@ -236,6 +237,36 @@ npx --yes wrangler@latest deploy                       # wrangler.toml 已含 DO
 `bash scripts/make-single-file.sh`（刷新路线 B 的单文件）。产物中的
 `build/index.js` + `build/index_bg.wasm` 是部署必需的两个模块，`.gitignore`
 已放行提交（云端 CI 部署免 Rust 工具链的关键）。
+
+## 标准交付模式：GitHub commit → Cloudflare Worker 自动发布
+
+交付不止于文档——仓库已把「commit 即上线」链路配好（`.github/workflows/deploy.yml`）：
+
+```
+git push origin main
+   └─▶ GitHub Actions（ubuntu-latest）
+         ├─ checkout（含预编译产物 build/index.js + index_bg.wasm）
+         ├─ preflight：node scripts/test-storage-do.mjs（DO 协议自测）
+         └─ npx wrangler deploy  ──▶ Cloudflare Worker「quakeai-gateway」
+                                      （DO migration v1 自动应用）
+```
+
+一次性配置（仓库建好后）：
+
+1. **GitHub 仓库**：`Settings → Secrets and variables → Actions` 加两个 secret：
+   `CLOUDFLARE_API_TOKEN`（权限模板 **Edit Cloudflare Workers**）、
+   `CLOUDFLARE_ACCOUNT_ID`（Cloudflare 面板右侧栏）。
+2. **密钥**（二选一）：
+   - 推前执行 `npx wrangler secret put ZHIPU_API_KEY` / `ADMIN_TOKEN`；
+   - 或部署后全部在 `/admin` 页面登记各资源 Key（静态 fallback 可留空）。
+3. 之后每次 `git push`（或 Actions 页手动 Run workflow）即自动部署，
+   本地不需要 Node 也不需要 Rust。
+
+> worker 名取 `wrangler.toml` 的 `name = "quakeai-gateway"`；要部署到已有
+> worker 就把它改成那个名字。改动只碰 `src/` 时才需要重新
+> `bash scripts/build.sh` 编译（CI 直接部署仓库里的预编译产物）。
+>
+> Linux 自托管（workerd + systemd）方案见 **[LINUX.md](LINUX.md)**。
 
 ## 仍存在的真实限制（诚实清单）
 
