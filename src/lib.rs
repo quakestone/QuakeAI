@@ -185,7 +185,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.5.1",
+            "version": "0.6.0",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -350,7 +350,7 @@ fn diag_headers(
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.5.1".to_string()),
+        ("x-gateway-version", "0.6.0".to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
@@ -387,7 +387,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.5.1")?;
+    hdrs.set("x-gateway-version", "0.6.0")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;
@@ -614,13 +614,25 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
 
 const MULTIPART_BOUNDARY: &str = "ZhipuWasmGatewayBoundary7f3A9c";
 
-/// 手工拼装 multipart/form-data 字节体（不依赖 FormData 序列化，任何平台稳成）
-fn build_multipart_body(file_field: (&str, &str), text_fields: &[(&str, String)], bytes: &[u8]) -> Vec<u8> {
+/// 手工拼装 multipart/form-data 字节体（不依赖 FormData 序列化，任何平台稳成）。
+/// `content_type` 透传客户端上传的原始 MIME（空则回退 octet-stream）——
+/// 上游按文件名/Content-Type 识别音视频格式（如 audio/webm），不能一律 octet-stream。
+fn build_multipart_body(
+    file_field: (&str, &str),
+    content_type: &str,
+    text_fields: &[(&str, String)],
+    bytes: &[u8],
+) -> Vec<u8> {
     let (field, filename) = file_field;
+    let ct = if content_type.is_empty() {
+        "application/octet-stream"
+    } else {
+        content_type
+    };
     let mut body: Vec<u8> = Vec::with_capacity(bytes.len() + 512);
     body.extend_from_slice(
         format!(
-            "--{MULTIPART_BOUNDARY}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+            "--{MULTIPART_BOUNDARY}\r\nContent-Disposition: form-data; name=\"{field}\"; filename=\"{filename}\"\r\nContent-Type: {ct}\r\n\r\n"
         )
         .as_bytes(),
     );
@@ -663,6 +675,7 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
 
     // ---- 2. 裸字节读取（File::bytes：Blob.arrayBuffer -> Vec<u8>） ----
     let bytes = file.bytes().await?;
+    let file_mime = file.type_();
 
     // ---- 3. 重建 multipart 字节体 ----
     let mut text_fields: Vec<(String, String)> = vec![("model".into(), model.clone())];
@@ -671,6 +684,7 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
     }
     let body_bytes = build_multipart_body(
         ("file", &filename),
+        &file_mime,
         &text_fields
             .iter()
             .map(|(k, v)| (k.as_str(), v.clone()))

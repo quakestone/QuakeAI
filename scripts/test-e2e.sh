@@ -14,16 +14,31 @@ check() { # name, condition(0/1), detail
 }
 
 start_workerd() { # $1=capnp 文件（项目内相对路径）
-  (setsid "$WORKERD" serve "$1" > "$ROOT/workerd.log" 2>&1 & echo $! > /tmp/wd.pid)
+  (setsid "$WORKERD" serve "$1" > "$ROOT/workerd.log" 2>&1 &)
   for i in $(seq 1 30); do curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && return 0; sleep 0.3; done
   return 1
 }
-stop_workerd() { [ -f /tmp/wd.pid ] && kill "$(cat /tmp/wd.pid)" 2>/dev/null; rm -f /tmp/wd.pid; }
+stop_workerd() {
+  # 按 8787 端口反查真实 workerd pid：setsid 可能 fork，$! 未必是 workerd 本身；
+  # 杀不干净会让下一段 start 的新实例绑定失败，而 readiness 却打到旧实例上，
+  # 导致后续段实际跑的是上一段配置。
+  pids=$(ss -tlnpH 2>/dev/null | grep ':8787 ' | grep -oP 'pid=\K[0-9]+' | sort -u)
+  [ -n "$pids" ] && kill $pids 2>/dev/null
+  rm -f /tmp/wd.pid
+  # 等端口真正释放（不只是 health 不通——健康检查也可能命中正在退出的旧实例）
+  for i in $(seq 1 30); do
+    ss -tlnpH 2>/dev/null | grep -q ':8787 ' || return 0
+    kill $pids 2>/dev/null
+    sleep 0.2
+  done
+}
 
 echo "== 1. 启动 mock 智谱 (127.0.0.1:8788) =="
-pkill -f "mock-zhipu\.mjs" 2>/dev/null; sleep 0.3
-node "$ROOT/scripts/mock-zhipu.mjs" > "$ROOT/mock.log" 2>&1 &
-MOCK_PID=$!
+pkill -f "mock-zhipu\.mjs" 2>/dev/null
+for i in $(seq 1 30); do curl -sf http://127.0.0.1:8788/models >/dev/null 2>&1 || break; sleep 0.2; done
+# setsid：脱离本脚本会话，避免脚本被子进程清理逻辑带走（保持与 workerd 一致）
+(setsid node "$ROOT/scripts/mock-zhipu.mjs" > "$ROOT/mock.log" 2>&1 &)
+MOCK_PID=$(pgrep -f "mock-zhipu\.mjs" | head -1)
 rm -f "$MOCK_LOG"; touch "$MOCK_LOG"
 for i in $(seq 1 20); do curl -sf http://127.0.0.1:8788/models >/dev/null 2>&1 && break; sleep 0.2; done
 curl -sf http://127.0.0.1:8788/models >/dev/null; check "mock 已就绪" $? "mock not reachable"
