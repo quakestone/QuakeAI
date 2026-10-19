@@ -154,3 +154,34 @@ curl https://zhipu-wasm-gateway.<你的子域>.workers.dev/admin
   映射后在代码里注入。
 - 免费层限制：Worker 脚本压缩后 1MB（本项目 gzip 214KB，余量充足）、
   请求体 100MB、DO 有读写行数免费额度（本项目的账本操作都在免费额度内）。
+
+---
+
+## 路线 D：部署到 Render / Railway / Fly.io 等容器云（Docker）
+
+> ⚠️ **关键**：这些平台的 **Rust Runtime 会跑 `cargo run --release`**，而本项目是
+> Rust→WASM 的 Worker（`crate-type = ["cdylib"]`，没有 bin target），必然报
+> `error: a bin target must be available for 'cargo run'`（Exit 101）。
+> **必须把服务类型切成 Docker（Runtime: Docker）**，仓库根已有现成 `Dockerfile`。
+
+### Render 操作步骤
+
+1. New + → Web Service → 连接 GitHub 仓库；
+2. **Language / Runtime 选 `Docker`**（不要选 Rust）；
+3. Environment Variables 加：
+   - `ZHIPU_API_KEY` = 你的智谱 Key（或留空，上线后在管理页登记渠道 Key）
+   - `ADMIN_TOKEN` = 管理页密码（强烈建议设置）
+   - `ZHIPU_BASE_URL` 可选（默认 `https://open.bigmodel.cn/api/paas/v4`）
+4. （推荐）Disks → Add Disk，挂载路径 `/data` —— **不挂的话每次重启/升级，
+   管理页登记的渠道与 Key 全部丢失**（v0.7 的 localDisk DO 持久化写在 `/data`）；
+5. Deploy。启动命令无需填，`deploy/start.sh` 会按 `PORT`/环境变量自动生成
+   workerd 配置并起服务（Render Docker 默认 `PORT=10000`，已对齐）。
+
+Railway / Fly.io 同理：Fly 用 `fly launch --dockerfile Dockerfile`，
+Railway 直接识别根 `Dockerfile`。环境变量与 `/data` 卷语义一致。
+
+### 已验证（本仓库 Docker 构建 + 运行实测）
+
+- ✅ 镜像构建通过（node:22-slim + `@cloudflare/workerd-linux-64` + ca-certificates，无 Rust 工具链）
+- ✅ `/health` 返回 `{"status":"ok","version":"0.7.0"}`、`/admin` 管理页 200
+- ✅ 登记渠道 → `docker restart` → 渠道与 Key 掩码仍在（`/data` 持久化生效）

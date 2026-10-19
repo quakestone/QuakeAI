@@ -229,7 +229,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.6.0",
+            "version": "0.7.0",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -394,7 +394,7 @@ fn diag_headers(
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.6.0".to_string()),
+        ("x-gateway-version", "0.7.0".to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
@@ -431,7 +431,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.6.0")?;
+    hdrs.set("x-gateway-version", "0.7.0")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;

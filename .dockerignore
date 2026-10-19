@@ -1,0 +1,11 @@
+target/
+node_modules/
+.wd-storage/
+wd-storage/
+*.log
+docs-shots/
+scripts/
+src/
+*.capnp
+deploy/single-file-worker.js
+mock-received.log

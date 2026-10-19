@@ -5,6 +5,16 @@
 围绕用户三条核心诉求落地：**「模型要精细化管理、出错自动换模型」**、**「key 要绑定设备、
 别因升级丢失」**、**「回答可复制分享播音、能一键双向通话」**。
 
+### 容器云部署（Render / Railway / Fly，Docker Runtime）
+
+- 新增根 `Dockerfile` + `deploy/start.sh` + `.dockerignore`：镜像内无 Rust 工具链
+  （`build/` 两产物已随仓库提交），启动时按 `PORT` / `ZHIPU_API_KEY` / `ADMIN_TOKEN` /
+  `ZHIPU_BASE_URL` 生成 workerd 配置并 `exec workerd serve`；DO 持久化落 `STORAGE_DIR`
+  （默认 `/data`，对应 Render Persistent Disk）。
+- **不能用 Rust Runtime**：本项目是 cdylib 无 bin target，`cargo run` 报
+  `a bin target must be available`（Exit 101）——服务类型必须切 Docker。
+- 实测通过：镜像构建、`/health` 0.7.0、`/admin` 200、登记渠道后容器重启 Key/渠道仍在。
+
 ### 模型选择引擎（后端 `src/lib.rs` / `src/channels.rs`）
 
 - **四级能力模型**：每个模型标注 `text / vision / stt / tts` 之一（旧账本按模型名
