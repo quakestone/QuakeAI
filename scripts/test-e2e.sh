@@ -376,6 +376,38 @@ echo "$RESP" | grep -q 'glm-4.7-flash'; check "冷却模型被跳过，自动换
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-cool > /dev/null
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-other > /dev/null
 
+echo "== 15. 呼叫页二次通话回归（v0.7.5：麦克风竞争 / 播报叠加 / AudioContext 累积）=="
+# 用户实测「第一次识别可以，第二次就挂」。三个根因都在前端 admin_ui.html：
+# ① callBusy 加锁太晚（曾在 await rec.stop() 之后）→ 松手瞬间连按第二次，
+#    两个 MediaStream 并发，iOS 直接拒绝 getUserMedia（硬件占用）；
+# ② pumpTts 未被 await → callBusy 早释，第二轮说话与第一轮播报声音叠加；
+# ③ 每次阶段性 STT 都 new AudioContext → iOS 实时 AudioContext 并发上限触顶，
+#    后续识别/播音全面失灵。
+UI="$ROOT/src/admin_ui.html"
+# ① 早锁：录音启动（start(250)）后立即持锁，「录音→识别→思考→播报」全程禁第二轮
+grep -A4 'callRec.start(250);' "$UI" | grep -q 'callBusy = true'; check "呼叫录音启动即持锁 callBusy（防两轮 MediaStream 并发）" $? "no early lock after start"
+python3 -c "
+import re, sys
+ui = open('$UI').read()
+m = re.search(r'async function finishCallVoice\(\) \{(.*?)\n\}', ui, re.S)
+b = re.sub(r'//[^\n]*', '', m.group(1))  # 去行注释：注释里提到的 await 字样不算代码
+lock = b.find('callBusy = true'); aw = b.find('await ')
+sys.exit(0 if (lock != -1 and lock < aw) else 1)
+"; check "finishCallVoice 在首个 await 前加锁（松手连按不再交错收尾）" $? "lock still after await"
+# ② 播报排空：chatStream 结束≠播报结束，必须等队列播空才松 callBusy
+grep -q 'await ttsQueueDrained();' "$UI"; check "callAskStreaming 等播报队列排空（callBusy 不早释）" $? "no drain await"
+grep -q 'function ttsQueueDrained' "$UI" && grep -q 'flushTtsWaiters()' "$UI"; check "drain 等待者有 flush 唤醒机制" $? "no flush fn"
+grep -A2 'ttsPlaying = false;' "$UI" | grep -q 'flushTtsWaiters'; check "pumpTts 播空时唤醒 drain 等待者" $? "no flush in pumpTts"
+grep -A6 'function stopCallAudio' "$UI" | grep -q 'ttsCurResolve'; check "挂断时唤醒被 pause 卡住的播放（pumpTts 不会永挂）" $? "no manual resolve on hangup"
+# ③ AudioContext 单例：全局复用，不再每次 new（iOS 并发上限）
+if grep -q '_wavCtx' "$UI" && ! grep -q 'ctx\.close()' "$UI"; then check "AudioContext 全局单例复用（iOS 并发上限不再触顶）" 0; else check "AudioContext 全局单例复用（iOS 并发上限不再触顶）" 1 "per-call context still present"; fi
+# ④ 防重入 + 超时兜底 + 入口清理 + 流式中断
+grep -q 'callFinishing' "$UI" && grep -q 'voiceFinishing' "$UI"; check "finish 函数防重入（60s 超时兜底与 pointerup 不双入）" $? "no reentry guard"
+grep -q 'if (callRec === rec0) finishCallVoice(); }, 60000)' "$UI"; check "呼叫录音 60s 超时自动收尾（pointerup 丢失不锁死）" $? "no timeout guard"
+grep -B8 'callStream = await navigator.mediaDevices.getUserMedia' "$UI" | grep -q 'clearInterval(callSttTimer)'; check "呼叫入口先回收残留定时器/录音器（防旧流占麦克风）" $? "no residual cleanup"
+grep -A3 'mediaRec.start(250);' "$UI" | grep -q 'setVoiceBusy(true)'; check "输入框录音启动即持锁 voiceBusy（与呼叫页同策略）" $? "no early voice lock"
+grep -q 'chatAbort = new AbortController' "$UI" && grep -q 'chatAbort.abort()' "$UI"; check "挂断中断进行中的流式请求（不必等上游把话说完）" $? "no chat abort"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

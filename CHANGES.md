@@ -1,5 +1,53 @@
 # CHANGES
 
+## v0.7.5（2026-10-21）—— 修复呼叫页「第二次就挂」（麦克风竞争 + 播报叠加）
+
+用户实测「呼叫 第一次识别可以 第二次就挂了」，并精准怀疑「麦克风资源占用了
+没释放」。前端实测复现后实锤三个根因，全部修复：
+
+### 根因① callBusy 加锁太晚 → 两个 MediaStream 并发（主因）
+
+`finishCallVoice` 的 `callBusy = true` 加在 `await rec.stop()` **之后**：
+松手瞬间连按第二次按钮，第一轮的收尾还在 await 里（MediaStream 还活着），
+第二轮已经拿到锁又去 `getUserMedia`——**iOS 对硬件占用直接拒绝**，
+表现就是「第二次就挂」。
+
+- 修复：锁提前到 **录音启动即持锁**（`callRec.start(250)` 后立即
+  `callBusy = true`），整个「录音→识别→思考→播报」全程禁第二轮；
+  `finishCallVoice` 同样在首个 await 之前加锁；
+- 兜底：入口先回收可能残留的定时器/录音器/流；`pointerup` 丢失
+  （切后台/来电）时 60s 自动收尾；两个 finish 函数加防重入标志
+  （超时兜底与 pointerup 可能同时触发）。
+
+### 根因② pumpTts 未被 await → callBusy 早释、两轮播报声音叠加
+
+`chatStream` 结束只代表**文字生成完**，分句 TTS 的句子还在队列里播。
+原来 `callAskStreaming` 不等队列排空就返回，`callBusy` 提前松掉，
+第二轮说话与第一轮播报**声音叠加**、UI 状态与实际播放不符。
+
+- 修复：新增 `ttsQueueDrained()`/`flushTtsWaiters()`，
+  `callAskStreaming` 在 `chatStream` 后 `await` 播报排空；
+- `pumpTts` 播空时唤醒等待者；`stopCallAudio` 手动唤醒被 `pause()`
+  卡住的当前播放（pause 不触发 onended，否则 pumpTts 永挂）；
+- drain 期间用户挂断 → 旧链路干净收尾，不再向已重置的历史入账。
+
+### 根因③ 每次阶段性 STT 都 new AudioContext → iOS 并发上限触顶
+
+实时文字流每 2s 一次阶段转写，每次 `toWavBlob` 都 `new AudioContext()`
+再 `close()`——**iOS 对实时 AudioContext 并发数有上限**，累积触顶后
+麦克风/音频全面失灵，同样表现为「第二次挂」。
+
+- 修复：全局单例 `_wavCtx` 复用（解码失败才丢弃重建）；
+  OfflineAudioContext 本就是轻量一次性对象，不受影响。
+
+### 附带改进
+
+- 挂断时 `AbortController` 中断进行中的 chat SSE 流——不必等上游把话说完；
+- 输入框长按语音同步同款策略：录音启动即持锁 `voiceBusy`，
+  所有出口（取消/空录音/识别失败/自动发送）统一走 finally 松锁；
+- e2e §15 新增 11 条前端防回归断言（早锁位置/drain/AudioContext 单例/
+  防重入/超时兜底/入口清理/流式中断）。
+
 ## v0.7.4（2026-10-20）—— 修复侧栏版本号显示过期值（「前端版本变成 6.0」）
 
 ### 根因

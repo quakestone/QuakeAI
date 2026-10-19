@@ -222,10 +222,12 @@ const server = createServer((req, res) => {
         model: payload.model ?? null, voice: payload.voice ?? null,
         inputChars: (payload.input ?? "").length,
       }) + "\n");
-      // 合法 WAV（RIFF 44 字节头 + 0.05s 16bit 单声道 8kHz 静音）：
+      // 合法 WAV（RIFF 44 字节头 + 16bit 单声道 8kHz）：
       // 早期用「ID3+两帧」的畸形 MP3，浏览器 audio decode 直接拒收
       // （onerror → 播报失败），误导成前端 bug。智谱默认就回 wav，贴近真实。
-      const sr = 8000, samples = sr * 0.05;
+      // 时长走 MOCK_TTS_SECONDS（默认 0.05s）：浏览器回归需要拉长播报窗口
+      // 来复现「播报中连按第二次」。
+      const sr = 8000, samples = Math.round(sr * (parseFloat(process.env.MOCK_TTS_SECONDS || "0.05") || 0.05));
       const dataBytes = samples * 2;
       const wav = Buffer.alloc(44 + dataBytes);
       wav.write("RIFF", 0); wav.writeUInt32LE(36 + dataBytes, 4); wav.write("WAVE", 8);

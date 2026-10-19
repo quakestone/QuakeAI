@@ -1203,6 +1203,10 @@ function setVoiceBusy(b) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
       toast("当前浏览器不支持录音（需 HTTPS 或 localhost）", "err"); return;
     }
+    // 兜底清理：上一轮异常残留的定时器/录音器/流先回收，避免麦克风被旧流占着
+    if (recSttTimer) { clearInterval(recSttTimer); recSttTimer = null; }
+    if (mediaRec) { try { mediaRec.stop(); } catch {} mediaRec = null; }
+    if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
     try {
       recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
@@ -1217,6 +1221,11 @@ function setVoiceBusy(b) {
     }
     mediaRec.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
     mediaRec.start(250); // 250ms 时间片，避免松开时丢数据
+    // 同呼叫页：录音一开始就占锁，识别+自动发送全程禁止第二次触发
+    setVoiceBusy(true);
+    const rec0 = mediaRec;
+    // 兜底：pointerup 丢失（切后台/来电）时 60s 自动收尾，避免 voiceBusy 锁死
+    setTimeout(() => { if (mediaRec === rec0) finishVoice(); }, 60000);
     btn.classList.add("rec");
     const t0 = Date.now();
     const startY = e.clientY;
@@ -1248,7 +1257,10 @@ function setVoiceBusy(b) {
     window.addEventListener("pointercancel", up);
   });
 })();
+let voiceFinishing = false; // 防重入：60s 超时兜底与 pointerup 可能同时触发
 async function finishVoice() {
+  if (voiceFinishing) return;
+  voiceFinishing = true;
   clearInterval(recTimer); recTimer = null;
   if (recSttTimer) { clearInterval(recSttTimer); recSttTimer = null; }
   recSttGuard.stopped = true;
@@ -1259,16 +1271,17 @@ async function finishVoice() {
   $("btn-voice").classList.remove("rec");
   const rec = mediaRec, stream = recStream;
   mediaRec = null; recStream = null;
-  if (!rec) return;
-  const blob = await new Promise((res) => {
-    rec.onstop = () => res(new Blob(recChunks, { type: rec.mimeType || "audio/webm" }));
-    try { rec.stop(); } catch { res(null); }
-  });
-  stream && stream.getTracks().forEach(t => t.stop());
-  if (canceled) { toast("已取消发送", ""); return; }
-  if (!blob || !blob.size) { toast("录音为空", "err"); return; }
-  setVoiceBusy(true);
+  // 早锁（pointerdown 里 setVoiceBusy(true)）之后，取消/空录音/识别失败/
+  // 自动发送每条出口都必须走 finally 松锁，否则按钮会永久失灵
   try {
+    if (!rec) return;
+    const blob = await new Promise((res) => {
+      rec.onstop = () => res(new Blob(recChunks, { type: rec.mimeType || "audio/webm" }));
+      try { rec.stop(); } catch { res(null); }
+    });
+    stream && stream.getTracks().forEach(t => t.stop());
+    if (canceled) { toast("已取消发送", ""); return; }
+    if (!blob || !blob.size) { toast("录音为空", "err"); return; }
     const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
     const text = await transcribeBlob(blob, "voice." + ext);
     if (!text) throw new Error("识别结果为空");
@@ -1279,6 +1292,7 @@ async function finishVoice() {
   } catch (e) {
     toast("语音识别失败：" + e.message, "err");
   } finally {
+    voiceFinishing = false;
     setVoiceBusy(false);
   }
 }
@@ -1287,15 +1301,17 @@ async function finishVoice() {
 /// 且模型须为 glm-asr-2512（glm-4-voice 是端到端语音模型，走 chat 端点，转写端点不认）。
 /// 只认 wav/mp3，直接上传会报「transcriptions不支持当前文件格式」。
 /// 已受支持的格式（wav/mp3）原样透传；其余走 WebAudio 解码 → 重采样 → WAV 编码。
+/// AudioContext 全局复用：iOS 对并发的实时 AudioContext 数量有上限，每次 new 会
+/// 累积触顶（表现为「第 N 次识别后麦克风/音频全面失灵」）。
+let _wavCtx = null;
 async function toWavBlob(blob) {
   const t = (blob.type || "").toLowerCase();
   if (t.includes("wav") || t.includes("mpeg") || t.includes("mp3")) return blob;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC || !blob.size) return blob; // 无 WebAudio：原样上传，让上游给出明确错误
-  let ctx = null;
   try {
-    ctx = new AC();
-    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    if (!_wavCtx) _wavCtx = new AC();
+    const decoded = await _wavCtx.decodeAudioData(await blob.arrayBuffer());
     const sr = 16000;
     const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     const offline = new OC(1, Math.max(1, Math.ceil(decoded.duration * sr)), sr);
@@ -1306,9 +1322,8 @@ async function toWavBlob(blob) {
     const rendered = await offline.startRendering();
     return new Blob([encodeWav(rendered)], { type: "audio/wav" });
   } catch (e) {
+    _wavCtx = null; // 解码失败：丢弃这个 context，下次调用重建，避免坏状态被复用
     return blob; // 解码失败（罕见编码）：原样上传兜底
-  } finally {
-    try { ctx && ctx.close(); } catch {}
   }
 }
 /// AudioBuffer → 16bit PCM WAV（单声道）
@@ -1351,6 +1366,9 @@ let callModel = localStorage.getItem("gw_call_model") || ""; // 通话模型（�
 let callSttTimer = null, callSttGuard = { busy: false, stopped: false }; // 阶段性转写定时器 / 防叠加
 const ttsQueue = [];                                         // 待播报的句子队列
 let ttsPlaying = false, ttsCur = null, ttsAbort = false;     // 播报状态
+let ttsDrainWaiters = [];                                    // 等队列排空的回调（callAskStreaming 的 drain 用）
+let ttsCurResolve = null;                                    // 当前播放句的 resolve（挂断时手动唤醒 pumpTts）
+let chatAbort = null;                                        // 挂断时中断进行中的流式请求
 
 /// 精灵球四态：idle（呼吸）/ listening（聆听波纹）/ thinking（思考脉冲）/ speaking（播报声浪）
 function setOrb(state) {
@@ -1385,6 +1403,7 @@ function openCall() {
 function endCall() {
   callOpen = false;
   stopCallAudio();
+  if (chatAbort) { try { chatAbort.abort(); } catch {} chatAbort = null; }
   if (callRec) { try { callRec.stop(); } catch {} callRec = null; }
   if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
   if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
@@ -1407,6 +1426,11 @@ function callLog(html) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
       toast("当前浏览器不支持录音（需 HTTPS 或 localhost）", "err"); return;
     }
+    // 兜底清理：上一轮若因异常路径残留了定时器/录音器/流，先回收再开新一轮，
+    // 否则残留的 MediaStream 会让这次 getUserMedia 在 iOS 上直接失败（硬件占用）。
+    if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
+    if (callRec) { try { callRec.stop(); } catch {} callRec = null; }
+    if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
     try {
       callStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
@@ -1421,6 +1445,12 @@ function callLog(html) {
     }
     callRec.ondataavailable = (ev) => { if (ev.data && ev.data.size) callChunks.push(ev.data); };
     callRec.start(250);
+    // 录音启动即持锁：整个「录音→识别→思考→播报」全程禁止第二轮（finishCallVoice
+    // 同样从入口持锁到播报结束）。松手前绝不开锁，两个 MediaStream 就不会并发。
+    callBusy = true;
+    const rec0 = callRec;
+    // 兜底：极端情况下 pointerup 丢失（切后台/来电），60s 自动收尾，避免 callBusy 锁死
+    setTimeout(() => { if (callRec === rec0) finishCallVoice(); }, 60000);
     btn.classList.add("rec");
     setOrb("listening");
     callSttGuard = { busy: false, stopped: false, t0: Date.now(), maxSec: 45 };
@@ -1469,7 +1499,10 @@ async function partialStt(chunks, mime, onText, guard) {
   } catch { /* 阶段失败静默：松手后的最终转写会兜底 */ }
   finally { guard.busy = false; }
 }
+let callFinishing = false; // 防重入：60s 超时兜底与 pointerup 可能同时触发
 async function finishCallVoice() {
+  if (callFinishing) return;
+  callFinishing = true;
   const btn = $("btn-call-talk");
   btn.classList.remove("rec");
   setOrb("idle");
@@ -1478,20 +1511,23 @@ async function finishCallVoice() {
   const canceled = callCancel;
   const rec = callRec, stream = callStream;
   callRec = null; callStream = null;
-  if (!rec) return;
-  const blob = await new Promise((res) => {
-    rec.onstop = () => res(new Blob(callChunks, { type: rec.mimeType || "audio/webm" }));
-    try { rec.stop(); } catch { res(null); }
-  });
-  stream && stream.getTracks().forEach(t => t.stop());
-  if (canceled || !callOpen) return;
-  if (!blob || !blob.size) {
-    $("call-live").hidden = true;
-    $("call-status").textContent = "录音为空，再试一次";
-    return;
-  }
+  // 早锁：callBusy 从录音启动一直锁到播报结束（见 pointerdown）。
+  // 曾经锁加在 await rec.stop() 之后——松手瞬间连按第二次，两轮收尾交错，
+  // 第一个 MediaStream 还活着就又 getUserMedia，iOS 直接拒（硬件占用）→「第二次就挂」。
   callBusy = true;
   try {
+    if (!rec) return;
+    const blob = await new Promise((res) => {
+      rec.onstop = () => res(new Blob(callChunks, { type: rec.mimeType || "audio/webm" }));
+      try { rec.stop(); } catch { res(null); }
+    });
+    stream && stream.getTracks().forEach(t => t.stop());
+    if (canceled || !callOpen) return;
+    if (!blob || !blob.size) {
+      $("call-live").hidden = true;
+      $("call-status").textContent = "录音为空，再试一次";
+      return;
+    }
     $("call-status").textContent = "识别中…";
     const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
     const text = (await transcribeBlob(blob, "voice." + ext)).trim();
@@ -1512,6 +1548,7 @@ async function finishCallVoice() {
     $("call-status").textContent = "出错：" + e.message + "（重试或挂断）";
     callLog(`<span class="who err">!</span>${esc(e.message)}`);
   } finally {
+    callFinishing = false;
     callBusy = false;
   }
 }
@@ -1533,6 +1570,10 @@ async function callAskStreaming(userText) {
   };
   const content = await chatStream(callHistory, callModel, { onSentence });
   if (!content) throw new Error("AI 无有效回复");
+  // 等播报队列排空：chatStream 结束只代表文字生成完，句子还在队列里播。
+  // 不等它，callBusy 会早释，第二轮说话与第一轮播报声音叠加、麦克风交错。
+  await ttsQueueDrained();
+  if (!callOpen) return; // 等待期间用户已挂断：历史由 endCall 重置，不再入账
   callHistory.push({ role: "assistant", content });
 }
 
@@ -1542,6 +1583,12 @@ function ttsEnqueue(text) {
   ttsQueue.push(text);
   pumpTts();
 }
+/// 等队列播空（已在播最后一句也会等它 onended）。挂断时由 endCall flush。
+function ttsQueueDrained() {
+  if (!ttsPlaying && !ttsQueue.length) return Promise.resolve();
+  return new Promise((res) => ttsDrainWaiters.push(res));
+}
+function flushTtsWaiters() { const ws = ttsDrainWaiters; ttsDrainWaiters = []; ws.forEach((w) => w()); }
 async function pumpTts() {
   if (ttsPlaying) return;
   ttsPlaying = true;
@@ -1558,21 +1605,28 @@ async function pumpTts() {
     }
   }
   ttsPlaying = false;
-  if (!ttsQueue.length && callOpen && !callBusy) setOrb("idle");
+  if (!ttsQueue.length) {
+    flushTtsWaiters(); // 队列真正播空：唤醒 callAskStreaming 的 drain 等待（此时 callBusy 才会松）
+    if (callOpen && !callBusy) setOrb("idle");
+  }
 }
 function playCallBlob(blob) {
   return new Promise((resolve, reject) => {
     const a = new Audio(URL.createObjectURL(blob));
-    ttsCur = a;
-    a.onended = () => { ttsCur = null; resolve(); };
-    a.onerror = () => { ttsCur = null; reject(new Error("播放失败")); };
-    a.play().catch((e) => { ttsCur = null; reject(e); });
+    ttsCur = a; ttsCurResolve = resolve;
+    const done = (err) => { if (ttsCur === a) { ttsCur = null; ttsCurResolve = null; } err ? reject(err) : resolve(); };
+    a.onended = () => done(null);
+    a.onerror = () => done(new Error("播放失败"));
+    a.play().catch((e) => done(e));
   });
 }
 function stopCallAudio() {
   ttsAbort = true;
   ttsQueue.length = 0;
   if (ttsCur) { try { ttsCur.pause(); } catch {} ttsCur = null; }
+  // pause() 不会触发 onended——不手动唤醒，pumpTts 会永远卡在这一句的 await 上
+  if (ttsCurResolve) { const r = ttsCurResolve; ttsCurResolve = null; r(); }
+  flushTtsWaiters(); // 同时唤醒 callAskStreaming 的 drain 等待，让旧链路干净收尾
 }
 /// TTS 上游报错的人类可读补充（旧版 glm-4-voice 打到合成端点的经典 1214）
 function ttsErrHint(msg) {
@@ -1605,7 +1659,8 @@ async function chatStream(messages, model, handlers) {
   const body = { messages, stream: true };
   if (model) body.model = model;
   const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
-  const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body) });
+  chatAbort = new AbortController(); // endCall 会 abort 它：挂断不必等上游把话说完
+  const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: chatAbort.signal });
   if (!resp.ok) {
     const j = await resp.json().catch(() => ({}));
     throw new Error(j.error?.message || ("HTTP " + resp.status));
