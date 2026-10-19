@@ -37,13 +37,40 @@ pub async fn store_rpc(env: &Env, method: Method, path: &str, body: Option<&str>
 }
 
 /// 读取完整渠道账本（Err = DO 不可用，调用方回退静态通道）。
+/// 出口处做一次「语音端点模型」零迁移：老账本音频渠道登记的是
+/// glm-4-voice（端到端语音模型，转写/合成端点都不认），按能力改成
+/// glm-asr-2512（stt）/ glm-tts（tts）——只改内存态，不回写 DO，
+/// 用户在管理页看到的仍是登记值（显示层另行提示）。
 pub async fn load_all_channels(env: &Env) -> Result<Vec<Channel>> {
     let mut resp = store_rpc(env, Method::Get, "/channels", None).await?;
     let text = resp.text().await?;
     let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
-    Ok(v.get("channels")
+    let mut list: Vec<Channel> = v
+        .get("channels")
         .and_then(|c| serde_json::from_value::<Vec<Channel>>(c.clone()).ok())
-        .unwrap_or_default())
+        .unwrap_or_default();
+    for ch in list.iter_mut() {
+        if ch.kind != "audio" {
+            continue;
+        }
+        for m in ch.models_meta.iter_mut() {
+            let migrated = match (m.name.as_str(), m.kind.as_str()) {
+                ("glm-4-voice" | "glm-4-voice-flash", "stt") => Some("glm-asr-2512"),
+                ("glm-4-voice" | "glm-4-voice-flash", "tts") => Some("glm-tts"),
+                ("glm-asr", "stt") => Some("glm-asr-2512"),
+                _ => None,
+            };
+            if let Some(new) = migrated {
+                m.name = new.to_string();
+            }
+        }
+        for name in ch.models.iter_mut() {
+            if name == "glm-asr" {
+                *name = "glm-asr-2512".to_string();
+            }
+        }
+    }
+    Ok(list)
 }
 
 /// 全量覆盖渠道账本。

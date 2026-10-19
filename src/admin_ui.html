@@ -204,15 +204,44 @@
   .call-panel { width: min(460px, 100%); height: 100%; display: flex; flex-direction: column; padding: 18px; box-sizing: border-box; }
   .call-top { display: flex; align-items: center; justify-content: space-between; }
   .call-ttl { font-weight: 600; }
-  .call-status { text-align: center; color: var(--dim); font-size: 13px; margin: 16px 0 8px; min-height: 18px; }
-  .call-wave { display: flex; gap: 5px; justify-content: center; align-items: flex-end; height: 30px; opacity: .3; }
-  .call-wave span { width: 4px; height: 40%; border-radius: 2px; background: var(--acc2); }
-  .call-wave.live { opacity: 1; }
-  .call-wave.live span { animation: rec-bar 1s ease-in-out infinite; }
-  .call-wave.live span:nth-child(2) { animation-delay: .12s; }
-  .call-wave.live span:nth-child(3) { animation-delay: .24s; }
-  .call-wave.live span:nth-child(4) { animation-delay: .36s; }
-  .call-wave.live span:nth-child(5) { animation-delay: .48s; }
+  .call-top-actions { display: flex; align-items: center; gap: 8px; }
+  .call-model-btn { font-size: 12px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 999px; padding: 4px 12px; cursor: pointer; }
+  .call-model-btn:hover { color: var(--fg); border-color: var(--acc2); }
+  .call-stage { display: flex; flex-direction: column; align-items: center; padding: 10px 0 4px; }
+  .call-status { text-align: center; color: var(--dim); font-size: 13px; margin: 18px 0 6px; min-height: 18px; }
+  /* 实时识别文字（STT 阶段性转写） */
+  .call-live { width: 100%; min-height: 44px; box-sizing: border-box; border: 1px dashed var(--border); border-radius: 10px; background: var(--bg2); padding: 8px 12px; font-size: 14px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
+  .call-live[hidden] { display: none; }
+  .call-live::after { content: "▍"; color: var(--acc2); animation: live-blink 1s steps(2) infinite; }
+  .call-live:empty::before { content: "聆听中…"; color: var(--dim); }
+  @keyframes live-blink { 50% { opacity: 0; } }
+
+  /* ---- 拟人化 AI 精灵球：四态（idle 呼吸 / listening 波纹 / thinking 脉冲 / speaking 声浪） ---- */
+  .ai-orb { position: relative; width: 128px; height: 128px; flex: none; }
+  .orb-body { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 32% 28%, var(--acc2), var(--acc) 62%); box-shadow: 0 0 34px -6px var(--acc), inset 0 -8px 18px rgba(0,0,0,.18); animation: orb-breathe 3.4s ease-in-out infinite; }
+  /* 高光小点，让球更拟人 */
+  .orb-body::before { content: ""; position: absolute; left: 24%; top: 18%; width: 18%; height: 12%; border-radius: 50%; background: rgba(255,255,255,.75); filter: blur(2px); }
+  @keyframes orb-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.055); } }
+  /* 聆听：双波纹外扩 */
+  .orb-ripple { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--acc2); opacity: 0; pointer-events: none; }
+  .ai-orb.listening .orb-ripple { animation: orb-ripple 1.7s ease-out infinite; }
+  .ai-orb.listening .orb-ripple.r2 { animation-delay: .85s; }
+  @keyframes orb-ripple { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.75); opacity: 0; } }
+  /* 思考：球体快速微颤 + 边缘提亮 */
+  .ai-orb.thinking .orb-body { animation: orb-think 1.1s ease-in-out infinite; box-shadow: 0 0 44px -2px var(--acc2), inset 0 -8px 18px rgba(0,0,0,.18); }
+  @keyframes orb-think { 0%,100% { transform: scale(.965); } 50% { transform: scale(1.035); } }
+  /* 播报：球内声浪柱 */
+  .orb-bars { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 7px; }
+  .orb-bars span { width: 6px; height: 34%; border-radius: 3px; background: rgba(255,255,255,.92); }
+  .ai-orb.speaking .orb-bars { display: flex; }
+  .ai-orb.speaking .orb-body { animation: orb-speak 1.4s ease-in-out infinite; }
+  .ai-orb.speaking .orb-bars span { animation: orb-bar .62s ease-in-out infinite; }
+  .ai-orb.speaking .orb-bars span:nth-child(1) { animation-delay: 0s; }
+  .ai-orb.speaking .orb-bars span:nth-child(2) { animation-delay: .16s; }
+  .ai-orb.speaking .orb-bars span:nth-child(3) { animation-delay: .32s; }
+  .ai-orb.speaking .orb-bars span:nth-child(4) { animation-delay: .48s; }
+  @keyframes orb-speak { 0%,100% { transform: scale(1.02); } 50% { transform: scale(1.07); } }
+  @keyframes orb-bar { 0%,100% { height: 26%; } 50% { height: 78%; } }
   .call-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--bg2); padding: 12px; font-size: 13px; margin: 10px 0; }
   .call-line { margin-bottom: 10px; line-height: 1.55; overflow-wrap: anywhere; }
   .call-line .who { display: inline-block; font-size: 10px; border-radius: 4px; padding: 0 5px; margin-right: 6px; vertical-align: 1px; }
@@ -222,6 +251,9 @@
   .call-talk { width: 84px; height: 84px; border-radius: 50%; font-size: 32px; margin: 0 auto; display: block; border: none; background: linear-gradient(135deg, var(--acc), var(--acc2)); color: #fff; box-shadow: var(--shadow); touch-action: none; cursor: pointer; }
   .call-talk.rec { animation: rec-pulse 1.2s ease-in-out infinite; }
   .call-hint { text-align: center; color: var(--dim); font-size: 11px; margin-top: 12px; }
+  /* 录音浮层内的实时识别文字（长按发语音） */
+  .rec-live { max-width: 240px; margin-top: 10px; font-size: 13px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; min-height: 20px; }
+  .rec-live:not(:empty)::after { content: "▍"; color: var(--bad); animation: live-blink 1s steps(2) infinite; }
   /* 消息气泡内的附件 */
   .att-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
   .att-row img.att-thumb { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
@@ -400,19 +432,31 @@
         <div class="rec-wave"><span></span><span></span><span></span><span></span><span></span></div>
         <div class="rec-hint" id="rec-hint">松开发送 · 上滑取消</div>
         <div class="rec-time" id="rec-time">0:00</div>
+        <div class="rec-live" id="rec-live"></div>
       </div>
     </div>
     <div id="call-overlay" hidden>
       <div class="call-panel">
         <div class="call-top">
           <div class="call-ttl">📞 语音通话</div>
-          <button class="icon-btn" onclick="endCall()" aria-label="挂断" title="挂断">✕</button>
+          <div class="call-top-actions">
+            <button class="call-model-btn" id="btn-call-model" onclick="openCallModelPicker()" title="切换通话模型">自动 ▾</button>
+            <button class="icon-btn" onclick="endCall()" aria-label="挂断" title="挂断">✕</button>
+          </div>
         </div>
-        <div class="call-status" id="call-status">按住下方按钮说话，松开发送</div>
-        <div class="call-wave" id="call-wave"><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="call-stage">
+          <div class="ai-orb" id="ai-orb">
+            <div class="orb-ripple"></div>
+            <div class="orb-ripple r2"></div>
+            <div class="orb-body"></div>
+            <div class="orb-bars"><span></span><span></span><span></span><span></span></div>
+          </div>
+          <div class="call-status" id="call-status">按住下方按钮说话，松开发送</div>
+          <div class="call-live" id="call-live" hidden></div>
+        </div>
         <div class="call-log" id="call-log"></div>
         <button id="btn-call-talk" type="button" class="call-talk" aria-label="按住说话">🎙</button>
-        <div class="call-hint">按住说话 · 上滑取消 · AI 用语音回答 · 说完自动播放</div>
+        <div class="call-hint">按住说话 · 上滑取消 · AI 实时转写 + 流式语音回答</div>
       </div>
     </div>
   </main>
@@ -868,7 +912,7 @@ async function speakMsg(btn) {
     toast("播音中…再点一次停止", "ok");
   } catch (e) {
     resetSpeakBtn(btn);
-    toast("播音失败：" + e.message, "err");
+    toast("播音失败：" + e.message + ttsErrHint(e.message), "err");
   }
 }
 function quickAsk(btn) { $("input").value = btn.textContent.trim(); sendOrStop(); }
@@ -1144,6 +1188,7 @@ function buildApiContent(m) {
 // /v1/audio/transcriptions（复用网关 multipart 上传 + audio 渠道）转写成
 // 文字后填入输入框并自动发送。需要 audio 渠道（智谱音频 GLM-4-Voice 等）。
 let mediaRec = null, recChunks = [], recStream = null, recTimer = null, recCancel = false, voiceBusy = false;
+let recSttTimer = null, recSttGuard = { busy: false, stopped: false };
 
 function setVoiceBusy(b) {
   voiceBusy = b;
@@ -1177,6 +1222,10 @@ function setVoiceBusy(b) {
     const startY = e.clientY;
     $("rec-overlay").hidden = false;
     $("rec-time").textContent = "0:00";
+    $("rec-live").textContent = "";
+    recSttGuard = { busy: false, stopped: false, t0: Date.now(), maxSec: 45 };
+    // 实时文字流：录音中每 2s 阶段性转写，识别过程即时可见
+    recSttTimer = setInterval(() => partialStt(recChunks, mediaRec && mediaRec.mimeType, (t) => { $("rec-live").textContent = t; }, recSttGuard), 2000);
     recTimer = setInterval(() => {
       const s = Math.floor((Date.now() - t0) / 1000);
       $("rec-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -1201,6 +1250,8 @@ function setVoiceBusy(b) {
 })();
 async function finishVoice() {
   clearInterval(recTimer); recTimer = null;
+  if (recSttTimer) { clearInterval(recSttTimer); recSttTimer = null; }
+  recSttGuard.stopped = true;
   const canceled = recCancel;
   $("rec-overlay").hidden = true;
   $("rec-overlay").classList.remove("cancel");
@@ -1292,22 +1343,52 @@ async function transcribeBlob(blob, name) {
 }
 
 // ================= 语音通话（右上角 📞 呼叫） =================
-// 流程：按住大按钮说话 → 松手 STT 转写 → chat/completions → TTS 自动播报 → 回到待命。
-// 复用 transcribeBlob / chatOnce / ttsBlob；挂断时停止一切（含进行中的播放）。
+// 流程：按住大按钮说话（录音中每 2s 阶段性 STT → 实时文字流）→ 松手最终转写
+// → chat 流式按句切分 → 每句立即 TTS 合成入队、顺序播放 → 回到待命。
+// 挂断时停止一切（含进行中的播放与合成）。
 let callOpen = false, callRec = null, callStream = null, callChunks = [], callCancel = false, callBusy = false, callHistory = [];
+let callModel = localStorage.getItem("gw_call_model") || ""; // 通话模型（空 = 网关自动选路）
+let callSttTimer = null, callSttGuard = { busy: false, stopped: false }; // 阶段性转写定时器 / 防叠加
+const ttsQueue = [];                                         // 待播报的句子队列
+let ttsPlaying = false, ttsCur = null, ttsAbort = false;     // 播报状态
 
+/// 精灵球四态：idle（呼吸）/ listening（聆听波纹）/ thinking（思考脉冲）/ speaking（播报声浪）
+function setOrb(state) {
+  const orb = $("ai-orb");
+  orb.classList.toggle("listening", state === "listening");
+  orb.classList.toggle("thinking", state === "thinking");
+  orb.classList.toggle("speaking", state === "speaking");
+}
+function refreshCallModelBtn() { $("btn-call-model").textContent = (callModel || "自动") + " ▾"; }
+function openCallModelPicker() {
+  renderModelList(callModel, (m) => {
+    callModel = m;
+    try { localStorage.setItem("gw_call_model", m); } catch {}
+    refreshCallModelBtn();
+    modelDlg.close();
+    if (callOpen) $("call-status").textContent = "已切换模型：" + (m || "自动") + "，按住按钮继续说话";
+  });
+  modelDlg.showModal();
+}
 function openCall() {
   callOpen = true;
   callHistory = [];
+  ttsAbort = false;
   $("call-log").innerHTML = "";
   $("call-status").textContent = "按住下方按钮说话，松开发送";
+  $("call-live").hidden = true;
+  $("call-live").textContent = "";
+  refreshCallModelBtn();
+  setOrb("idle");
   $("call-overlay").hidden = false;
 }
 function endCall() {
   callOpen = false;
-  stopSpeak();
+  stopCallAudio();
   if (callRec) { try { callRec.stop(); } catch {} callRec = null; }
   if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
+  if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
+  callSttGuard.stopped = true;
   callBusy = false; callCancel = true; callHistory = [];
   $("call-overlay").hidden = true;
 }
@@ -1341,8 +1422,13 @@ function callLog(html) {
     callRec.ondataavailable = (ev) => { if (ev.data && ev.data.size) callChunks.push(ev.data); };
     callRec.start(250);
     btn.classList.add("rec");
-    $("call-wave").classList.add("live");
+    setOrb("listening");
+    callSttGuard = { busy: false, stopped: false, t0: Date.now(), maxSec: 45 };
+    $("call-live").hidden = false;
+    $("call-live").textContent = "";
     $("call-status").textContent = "正在听…松开发送";
+    // 实时文字流：每 2s 把到目前为止的录音整体转写一次（智谱无状态，全量重发即可）
+    callSttTimer = setInterval(() => partialStt(callChunks, callRec && callRec.mimeType, (t) => callLiveShow(t), callSttGuard), 2000);
     const startY = e.clientY;
     const move = (ev) => {
       const cancel = ev.clientY < startY - 60;
@@ -1360,10 +1446,35 @@ function callLog(html) {
     window.addEventListener("pointercancel", up);
   });
 })();
+/// 实时识别区显示
+function callLiveShow(text) {
+  const el = $("call-live");
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = text || "";
+}
+/// 阶段性 STT：录音过程中定时把「到目前为止的音频」整体转写，实现实时文字流。
+/// 智谱转写无状态，重复发全量即可；busy 防慢请求叠加；失败静默（最终转写兜底）。
+/// guard.maxSec：超过时长就停阶段转写（全量重发的体积随时间线性增长，长录音
+/// 只保留松手后的最终转写，避免无谓上传）。
+async function partialStt(chunks, mime, onText, guard) {
+  if (!guard || guard.busy || guard.stopped || !chunks.length) return;
+  if (guard.maxSec && guard.t0 && (Date.now() - guard.t0) / 1000 > guard.maxSec) return;
+  const blob = new Blob(chunks, { type: mime || "audio/webm" });
+  if (blob.size < 2048) return;
+  guard.busy = true;
+  try {
+    const t = (await transcribeBlob(blob, "partial.wav")).trim();
+    if (t && !guard.stopped) onText(t);
+  } catch { /* 阶段失败静默：松手后的最终转写会兜底 */ }
+  finally { guard.busy = false; }
+}
 async function finishCallVoice() {
   const btn = $("btn-call-talk");
   btn.classList.remove("rec");
-  $("call-wave").classList.remove("live");
+  setOrb("idle");
+  if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
+  callSttGuard.stopped = true;
   const canceled = callCancel;
   const rec = callRec, stream = callStream;
   callRec = null; callStream = null;
@@ -1374,37 +1485,100 @@ async function finishCallVoice() {
   });
   stream && stream.getTracks().forEach(t => t.stop());
   if (canceled || !callOpen) return;
-  if (!blob || !blob.size) { $("call-status").textContent = "录音为空，再试一次"; return; }
+  if (!blob || !blob.size) {
+    $("call-live").hidden = true;
+    $("call-status").textContent = "录音为空，再试一次";
+    return;
+  }
   callBusy = true;
   try {
     $("call-status").textContent = "识别中…";
     const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
     const text = (await transcribeBlob(blob, "voice." + ext)).trim();
     if (!text) throw new Error("识别结果为空");
+    $("call-live").hidden = true;
+    $("call-live").textContent = "";
     callLog(`<span class="who me">我</span>${esc(text)}`);
     callHistory.push({ role: "user", content: text });
+    setOrb("thinking");
     $("call-status").textContent = "AI 思考中…";
-    const r = await chatOnce(callHistory, curModel);
-    if (!r.content) throw new Error("AI 无有效回复");
-    callHistory.push({ role: "assistant", content: r.content });
-    callLog(`<span class="who ai">AI</span>${esc(r.content)}`);
-    $("call-status").textContent = "AI 播报中…";
-    const audio = await ttsBlob(r.content);
-    await new Promise((resolve, reject) => {
-      const a = new Audio(URL.createObjectURL(audio));
-      a.onended = resolve;
-      a.onerror = () => reject(new Error("播放失败"));
-      a.play().catch(reject);
-    });
+    await callAskStreaming(text);
     if (!callOpen) return;
+    setOrb("idle");
     $("call-status").textContent = "按住下方按钮继续说话";
   } catch (e) {
     if (!callOpen) return;
+    setOrb("idle");
     $("call-status").textContent = "出错：" + e.message + "（重试或挂断）";
     callLog(`<span class="who err">!</span>${esc(e.message)}`);
   } finally {
     callBusy = false;
   }
+}
+
+/// 流式对话 + 分句实时 TTS：chat SSE 按句边界切分，每句立即合成入队顺序播放，
+/// AI 文字同步滚动进通话记录。全程可被挂断中断。
+async function callAskStreaming(userText) {
+  let aiLine = null;
+  const onSentence = (s) => {
+    if (!aiLine) {
+      aiLine = document.createElement("div");
+      aiLine.className = "call-line";
+      aiLine.innerHTML = `<span class="who ai">AI</span>`;
+      $("call-log").appendChild(aiLine);
+    }
+    aiLine.appendChild(document.createTextNode(s));
+    $("call-log").scrollTop = $("call-log").scrollHeight;
+    ttsEnqueue(s);
+  };
+  const content = await chatStream(callHistory, callModel, { onSentence });
+  if (!content) throw new Error("AI 无有效回复");
+  callHistory.push({ role: "assistant", content });
+}
+
+/// TTS 播放队列：合成一句播一句，顺序播放；ttsAbort（挂断）时全部中断。
+function ttsEnqueue(text) {
+  if (ttsAbort || !callOpen || !text) return;
+  ttsQueue.push(text);
+  pumpTts();
+}
+async function pumpTts() {
+  if (ttsPlaying) return;
+  ttsPlaying = true;
+  while (ttsQueue.length && !ttsAbort && callOpen) {
+    const s = ttsQueue.shift();
+    setOrb("speaking");
+    $("call-status").textContent = "AI 播报中…";
+    try {
+      const blob = await ttsBlob(s);
+      if (ttsAbort || !callOpen) break;
+      await playCallBlob(blob);
+    } catch (e) {
+      callLog(`<span class="who err">!</span>播报失败：${esc(e.message)}${ttsErrHint(e.message)}`);
+    }
+  }
+  ttsPlaying = false;
+  if (!ttsQueue.length && callOpen && !callBusy) setOrb("idle");
+}
+function playCallBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const a = new Audio(URL.createObjectURL(blob));
+    ttsCur = a;
+    a.onended = () => { ttsCur = null; resolve(); };
+    a.onerror = () => { ttsCur = null; reject(new Error("播放失败")); };
+    a.play().catch((e) => { ttsCur = null; reject(e); });
+  });
+}
+function stopCallAudio() {
+  ttsAbort = true;
+  ttsQueue.length = 0;
+  if (ttsCur) { try { ttsCur.pause(); } catch {} ttsCur = null; }
+}
+/// TTS 上游报错的人类可读补充（旧版 glm-4-voice 打到合成端点的经典 1214）
+function ttsErrHint(msg) {
+  return /messages|参数非法|1214/.test(msg || "")
+    ? "（TTS 模型不被合成端点支持：请把网关升级到 v0.7.3+，或在模型管理检查音频渠道的播音模型）"
+    : "";
 }
 
 /// 解析一段 SSE data 块并累积到 sink（{content, reasoning}）
@@ -1424,8 +1598,10 @@ function feedSseBlock(block, sink) {
   } catch {}
 }
 function handleSseBlock(block, asst) { feedSseBlock(block, asst); }
-/// 一次性对话（语音通话用）：发 messages，收完整流，返回 {content, reasoning}
-async function chatOnce(messages, model) {
+/// 流式对话（按句切分）：SSE 增量进来就按句末标点切句，凑满一句立即
+/// handlers.onSentence(s)——供通话页做「模型边想边播」的准实时 TTS。
+/// handlers: { onSentence(sentence) }；返回完整 content。
+async function chatStream(messages, model, handlers) {
   const body = { messages, stream: true };
   if (model) body.model = model;
   const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
@@ -1438,26 +1614,60 @@ async function chatOnce(messages, model) {
   const reader = resp.body.getReader();
   const dec = new TextDecoder();
   const sink = { content: "", reasoning: "" };
+  let pending = "";
+  // 句末标点：中文 。！？；换行 + 英文 .!?（英文句点要求后跟空白，避免切开 3.14 这类小数）
+  const SENT_END = /[。！？；!?\n]|\.(?=\s)/;
+  const emitReady = () => {
+    for (;;) {
+      const m = pending.match(SENT_END);
+      if (!m) break;
+      const cut = m.index + 1;
+      const s = pending.slice(0, cut).trim();
+      pending = pending.slice(cut);
+      if (s && handlers && handlers.onSentence) handlers.onSentence(s);
+    }
+    // 超长无标点片段（URL/代码块）：到 120 字也切，避免播报迟迟开始
+    if (pending.length >= 120) {
+      const s = pending.trim();
+      pending = "";
+      if (s && handlers && handlers.onSentence) handlers.onSentence(s);
+    }
+  };
   let buf = "";
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
     let idx;
-    while ((idx = buf.indexOf("\n\n")) >= 0) { feedSseBlock(buf.slice(0, idx), sink); buf = buf.slice(idx + 2); }
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const block = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const before = sink.content.length;
+      feedSseBlock(block, sink);
+      if (sink.content.length !== before) {
+        pending += sink.content.slice(before);
+        emitReady();
+      }
+    }
   }
   if (buf.trim()) feedSseBlock(buf, sink);
-  return sink;
+  // 收尾：flush 残留片段
+  if (pending.trim() && handlers && handlers.onSentence) handlers.onSentence(pending.trim());
+  return sink.content;
 }
 
 // ================= 模型选择器 =================
+// sel/onPick 参数化：聊天页用 curModel + pickModel；通话页用 callModel + 自己的回调。
+let modelPickCb = null;
 function openModelPicker() { renderModelList(); modelDlg.showModal(); }
-function renderModelList() {
+function renderModelList(sel, onPick) {
+  sel = sel === undefined ? curModel : sel;
+  modelPickCb = onPick || pickModel;
   const usable = usableChatChannels();
-  let html = `<div class="model-opt ${curModel ? "" : "sel"}" onclick="pickModel('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div></div>`;
+  let html = `<div class="model-opt ${sel ? "" : "sel"}" onclick="modelPickCb('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div></div>`;
   for (const c of usable) {
     for (const m of (c.models || [])) {
-      html += `<div class="model-opt ${curModel === m ? "sel" : ""}" onclick="pickModel('${esc(m)}')"><div><b>${esc(m)}</b></div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)}</span></div>`;
+      html += `<div class="model-opt ${sel === m ? "sel" : ""}" onclick="modelPickCb('${esc(m)}')"><div><b>${esc(m)}</b></div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)}</span></div>`;
     }
   }
   if (!usable.length) html += `<div class="empty">还没有可用渠道 —— 去「模型管理」登记资源并启用</div>`;

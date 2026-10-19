@@ -222,14 +222,19 @@ const server = createServer((req, res) => {
         model: payload.model ?? null, voice: payload.voice ?? null,
         inputChars: (payload.input ?? "").length,
       }) + "\n");
-      // 最小合法 MP3（ID3 头 + 两帧静音），验证网关透传二进制音频
-      const mp3 = Buffer.from([
-        0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00,
-        0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00,
-      ]);
-      res.writeHead(200, { "Content-Type": "audio/mpeg" });
-      res.end(mp3);
+      // 合法 WAV（RIFF 44 字节头 + 0.05s 16bit 单声道 8kHz 静音）：
+      // 早期用「ID3+两帧」的畸形 MP3，浏览器 audio decode 直接拒收
+      // （onerror → 播报失败），误导成前端 bug。智谱默认就回 wav，贴近真实。
+      const sr = 8000, samples = sr * 0.05;
+      const dataBytes = samples * 2;
+      const wav = Buffer.alloc(44 + dataBytes);
+      wav.write("RIFF", 0); wav.writeUInt32LE(36 + dataBytes, 4); wav.write("WAVE", 8);
+      wav.write("fmt ", 12); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20);
+      wav.writeUInt16LE(1, 22); wav.writeUInt32LE(sr, 24); wav.writeUInt32LE(sr * 2, 28);
+      wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
+      wav.write("data", 36); wav.writeUInt32LE(dataBytes, 40);
+      res.writeHead(200, { "Content-Type": "audio/wav" });
+      res.end(wav);
       return;
     }
 

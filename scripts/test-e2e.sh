@@ -336,8 +336,16 @@ echo "== 14.3 TTS 播音：音频渠道只有 stt 模型时也能播音（能力
 CT=$(curl -s -o /tmp/tts.bin -w '%{http_code} %{content_type}' http://127.0.0.1:8787/v1/audio/speech -H 'Content-Type: application/json' -d '{"input":"你好世界，这是播音测试"}')
 CODE=$(echo "$CT" | cut -d' ' -f1); MT=$(echo "$CT" | cut -d' ' -f2)
 check "TTS 返回 200（stt-only 音频渠道回落）" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$CT"
-check "TTS 内容类型 audio/mpeg" $([ "$MT" = "audio/mpeg" ] && echo 0 || echo 1) "$CT"
+check "TTS 内容类型 audio/wav（mock 回合法 WAV，智谱默认格式）" $([ "$MT" = "audio/wav" ] && echo 0 || echo 1) "$CT"
 grep -q '"op":"tts-received"' "$MOCK_LOG" 2>/dev/null; check "mock 收到 TTS 请求" $? "no tts-received in mock-received.log"
+# v0.7.3：智谱系渠道一律收敛到合成端点唯一模型 glm-tts + 默认音色 tongtong。
+# 老账本登记的 glm-4-voice（含 stt 回落）会被请求前改写——glm-4-voice 是
+# 端到端语音模型，原样打到 /audio/speech 会被上游按 chat 校验报 1214。
+LAST_TTS=$(grep '"op":"tts-received"' "$MOCK_LOG" | tail -1)
+TTS_MODEL=$(echo "$LAST_TTS" | python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])')
+TTS_VOICE=$(echo "$LAST_TTS" | python3 -c 'import json,sys; print(json.load(sys.stdin)["voice"])')
+check "TTS 模型收敛为 glm-tts（防 1214 messages 参数非法）" $([ "$TTS_MODEL" = "glm-tts" ] && echo 0 || echo 1) "upstream model=$TTS_MODEL"
+check "TTS 默认音色 tongtong" $([ "$TTS_VOICE" = "tongtong" ] && echo 0 || echo 1) "upstream voice=$TTS_VOICE"
 
 echo "== 14.4 模型级冷却 + 自动换模型（隔离环境，仅 eng-cool 避免被其他文本模型回退）=="
 stop_workerd; sleep 0.3

@@ -1,10 +1,10 @@
-# zhipu-wasm-gateway（v0.7.0）
+# zhipu-wasm-gateway（v0.7.3）
 
 **Rust → WASM 的免费资源 AI 聚合网关：资源管理 + 智能路由单例。**
 
 网关主体是 Rust 代码，编译为 `wasm32-unknown-unknown`，跑在 **Cloudflare Workers** 运行时上
 （本地用官方 `workerd` 二进制运行，与线上同一运行时）。对外暴露 OpenAI 兼容端点
-（`/v1/chat/completions`、`/v1/audio/transcriptions`），对内把请求路由到登记过的国内优先
+（`/v1/chat/completions`、`/v1/audio/transcriptions`、`/v1/audio/speech`），对内把请求路由到登记过的国内优先
 资源（智谱、硅基流动……）。
 
 版本演进：
@@ -16,8 +16,11 @@
 | v0.3 | **资源管理前端页面**（登记/更新/轮换 Key/探测/事件账本）+ **Durable Object 账本** + **429 冷却跳过** + 接入**硅基流动**（下一个国内资源） | ✅ e2e **64/64** |
 | v0.4 | **登记 500 修复**（DO 不可用 → 503 + 绑定指引；未预期错误 → JSON 500 兜底）+ **类 ChatGPT 前端**（对话首页 + 模型管理二级子页，hash 路由，流式聊天/停止/渠道徽章）+ 移动端适配 + 掩码 Key 前后双预检 | ✅ e2e **64/64** + 浏览器交互回归 **17/17** |
 | v0.5.1 | **诊断头中文乱码修复**：中文渠道名经 `header_safe()` percent-encoding 后上线（HTTP 头不允许非 ASCII，浏览器按 Latin-1 解会导致 `智谱` → `Ã¦ÂÂç`），前端 `decodeHeader()` 还原 | ✅ e2e **70/70** + 单测 **7/7** |
-| v0.6.0（上一版） | **输入区增强**：🎙 长按语音（录音→`/v1/audio/transcriptions` 转写→自动发送，上滑取消）+ `+` 号提交本地资源（图片走 vision parts / 音频转写 / 其他文件降级文字说明；dataUrl 不落 localStorage）；顺手修复刷新后当前会话丢失 | ✅ e2e **70/70** + 单测 **7/7** + 浏览器交互回归 **24/24** |
-| v0.7.0（本版） | **模型选择引擎**：四级能力（text/vision/stt/tts）+ 模型级路由/健康/冷却/自动换模型 + TTS 播音端点（`/v1/audio/speech`）+ 跨渠道 Key 复用（音频渠道借同 provider 主线 Key）；**设备级隔离**：`gw_device_keys` 头 + 本机 Key 卡片 + DO localDisk 持久化（重启不丢 Key）；**前端**：回答复制/分享/播音、最近会话缓存、右上角双向通话、消息长按重发、明暗主题、模型管理模型行/能力徽章/筛选 | ✅ e2e **89/89** + 单测 **7/7** + WASM 编译 0 警告 |
+| v0.6.0 | **输入区增强**：🎙 长按语音（录音→`/v1/audio/transcriptions` 转写→自动发送，上滑取消）+ `+` 号提交本地资源（图片走 vision parts / 音频转写 / 其他文件降级文字说明；dataUrl 不落 localStorage）；顺手修复刷新后当前会话丢失 | ✅ e2e **70/70** + 单测 **7/7** + 浏览器交互回归 **24/24** |
+| v0.7.0 | **模型选择引擎**：四级能力（text/vision/stt/tts）+ 模型级路由/健康/冷却/自动换模型 + TTS 播音端点（`/v1/audio/speech`）+ 跨渠道 Key 复用（音频渠道借同 provider 主线 Key）；**设备级隔离**：`gw_device_keys` 头 + 本机 Key 卡片 + DO localDisk 持久化（重启不丢 Key）；**前端**：回答复制/分享/播音、最近会话缓存、右上角双向通话、消息长按重发、明暗主题、模型管理模型行/能力徽章/筛选 | ✅ e2e **89/89** + 单测 **7/7** + WASM 编译 0 警告 |
+| v0.7.1 | **三连修**：iOS 键盘弹起 App 消失（visualViewport offsetTop）、STT「不支持当前文件格式」（iOS mp4 → WebAudio 重采样 16kHz WAV）、播音无模型（tts 候选池 chat+audio 双池合并） | ✅ e2e **89/89** + 单测 **7/7** |
+| v0.7.2 | **智谱语音端点模型修正**：STT=glm-asr-2512（+stream=false）、TTS=glm-tts（音色 tongtong）——glm-4-voice 是端到端语音模型，放到转写/合成端点会被上游按 chat 校验（1210/1214）；旧模型名请求时自动改写，老账本零迁移 | ✅ e2e **90/90** + 单测 **7/7** |
+| v0.7.3（本版） | **实时语音通话**：① 根因根治「messages 参数非法」（1214）——智谱系渠道一律收敛到端点唯一模型 + 账本零迁移（audio 渠道旧名 glm-4-voice → glm-asr-2512/glm-tts）；② **STT 实时文字流**（录音中每 2s 阶段性全量转写 + diff 显示，通话页与长按发语音均支持）；③ **分句实时 TTS 播报**（chat SSE 按句切分，凑满一句立即合成入队顺序播放，文字同步滚动）；④ **呼叫页拟人化 UI**（AI 精灵球四态：呼吸/波纹/脉冲/声浪）+ 通话模型独立切换 | ✅ e2e **92/92** + 单测 **10/10** + 前端 JS 语法/切句逻辑单测 + Playwright 全链路实测（假麦克风录音→实时转写→流式对话→WAV 播报） |
 | v0.5 | **智谱 JWT 自动鉴权**：provider=zhipu 且 Key 为 `{id}.{secret}` → 现场生成 HS256 短期 JWT（sign_type=SIGN，TTL 1h，官方推荐方式）；真实联调证实：完整 Key 直调 200 / JWT 直调 200 / 经网关 JWT 200（此前 401 纯因掩码 Key 无效） | ✅ e2e **69/69** + 密码学标准向量单测 **5/5** + 真实端点联调 **13/13**（智谱 + 硅基双通道，经网关含流式/探测/掩码） |
 
 > 各版本的详细根因与改法见 **[CHANGES.md](CHANGES.md)**。

@@ -58,25 +58,30 @@ fn is_zhipu_like(provider: &str, base_url: &str) -> bool {
 /// glm-4-voice 是端到端语音对话模型（走 chat.completions + input_audio），
 /// 拿到转写端点会被上游按 chat 参数校验拒绝（400 "message should not be empty"）。
 /// 老账本里登记的 glm-4-voice / glm-asr 自动改写为 glm-asr-2512，用户零感知。
+/// 智谱转写端点（/audio/transcriptions）当前唯一模型就是 glm-asr-2512，
+/// 因此智谱系渠道一律收敛到它——任何误配（含 glm-4-voice 端到端语音模型）
+/// 都会在请求前被改写，从根上消除「1214 messages 参数非法」类错误。
 fn resolve_stt_model(provider: &str, base_url: &str, model: &str) -> String {
     if !is_zhipu_like(provider, base_url) {
         return model.to_string();
     }
     match model {
-        "glm-4-voice" | "glm-4-voice-flash" | "glm-asr" => "glm-asr-2512".to_string(),
-        _ => model.to_string(),
+        "glm-asr-2512" => model.to_string(),
+        _ => "glm-asr-2512".to_string(),
     }
 }
 
 /// TTS 模型迁移（智谱）：`/audio/speech` 的合成模型是 glm-tts；
-/// glm-4-voice 不是合成端点模型，同样改写。
+/// glm-4-voice 是端到端语音模型（走 chat + input_audio），不是合成端点模型，
+/// 放到 /audio/speech 会被上游按 chat 参数校验 → 1214「messages 参数非法」。
+/// 智谱合成端点当前唯一模型就是 glm-tts，智谱系渠道一律收敛到它。
 fn resolve_tts_model(provider: &str, base_url: &str, model: &str) -> String {
     if !is_zhipu_like(provider, base_url) {
         return model.to_string();
     }
     match model {
-        "glm-4-voice" | "glm-4-voice-flash" => "glm-tts".to_string(),
-        _ => model.to_string(),
+        "glm-tts" => model.to_string(),
+        _ => "glm-tts".to_string(),
     }
 }
 /// 429 降权冷却窗口（毫秒）：与 DO 账本里的 cooldown_until_ms 对齐
@@ -267,7 +272,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.7.2",
+            "version": "0.7.3",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -432,7 +437,7 @@ fn diag_headers(
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.7.2".to_string()),
+        ("x-gateway-version", "0.7.3".to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
@@ -469,7 +474,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.7.2")?;
+    hdrs.set("x-gateway-version", "0.7.3")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;
@@ -1191,7 +1196,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::header_safe;
+    use super::{header_safe, resolve_stt_model, resolve_tts_model};
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
     /// 解响应头，裸中文会变乱码，如 `智谱` → `æ™ºè°±`）。
@@ -1229,5 +1234,36 @@ mod tests {
             }
             assert_eq!(String::from_utf8(dec).unwrap(), s, "往返必须无损: {s}");
         }
+    }
+
+    /// 智谱系渠道：转写端点唯一模型 glm-asr-2512——旧名与误配一律收敛。
+    /// 这是 v0.7.1 遗留「messages 参数非法」事故的根因防线：
+    /// glm-4-voice 是端到端语音模型，放到转写端点会被上游按 chat 校验。
+    #[test]
+    fn resolve_stt_converges_on_zhipu() {
+        for m in ["glm-4-voice", "glm-4-voice-flash", "glm-asr", "随便配的名字"] {
+            assert_eq!(resolve_stt_model("zhipu-audio", "https://open.bigmodel.cn/api/paas/v4", m), "glm-asr-2512");
+        }
+        assert_eq!(resolve_stt_model("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-asr-2512"), "glm-asr-2512");
+        // 非智谱渠道不碰用户配置
+        assert_eq!(resolve_stt_model("siliconflow", "https://api.siliconflow.cn/v1", "FunAudioLLM/SenseVoiceSmall"), "FunAudioLLM/SenseVoiceSmall");
+    }
+
+    /// 智谱系渠道：合成端点唯一模型 glm-tts——旧名 glm-4-voice 等一律收敛。
+    #[test]
+    fn resolve_tts_converges_on_zhipu() {
+        for m in ["glm-4-voice", "glm-4-voice-flash", "tongyi-qwen", "随便配的名字"] {
+            assert_eq!(resolve_tts_model("zhipu-audio", "https://open.bigmodel.cn/api/paas/v4", m), "glm-tts");
+        }
+        assert_eq!(resolve_tts_model("zhipu", "https://open.bigmodel.cn/api/paas/v4", "glm-tts"), "glm-tts");
+        // 非智谱渠道不碰用户配置
+        assert_eq!(resolve_tts_model("siliconflow", "https://api.siliconflow.cn/v1", "FunAudioLLM/CosyVoice2-0.5B"), "FunAudioLLM/CosyVoice2-0.5B");
+    }
+
+    /// z.ai（智谱海外站）同族收敛。
+    #[test]
+    fn resolve_converges_on_z_ai() {
+        assert_eq!(resolve_stt_model("zhipu", "https://api.z.ai/api/paas/v4", "glm-4-voice"), "glm-asr-2512");
+        assert_eq!(resolve_tts_model("z.ai", "https://api.z.ai/api/paas/v4", "glm-4-voice"), "glm-tts");
     }
 }
