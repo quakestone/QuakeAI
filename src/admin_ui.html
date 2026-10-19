@@ -499,7 +499,7 @@
   -d '{"model":"glm-4-flash","stream":true,"messages":[{"role":"user","content":"你好"}]}'
 
 # 音频/视频 multipart 上传（同端点，任意二进制）
-curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm-4-voice'</pre>
+curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm-asr-2512'</pre>
         <div class="hint">响应头 <code>x-gateway-channel</code> / <code>x-gateway-attempts</code> 可观测命中渠道与降权链（如 <code>ch-a=HTTP429;ch-b=ok</code>）。</div>
       </div>
     </details>
@@ -1232,7 +1232,8 @@ async function finishVoice() {
   }
 }
 /// 把录音/音频附件统一转成智谱可识别的 WAV（PCM 16bit / 16kHz / 单声道）。
-/// MediaRecorder 在 iOS 出 audio/mp4、Android/桌面出 webm/ogg——glm-4-voice
+/// MediaRecorder 在 iOS 出 audio/mp4、Android/桌面出 webm/ogg——智谱转写只认 wav/mp3，
+/// 且模型须为 glm-asr-2512（glm-4-voice 是端到端语音模型，走 chat 端点，转写端点不认）。
 /// 只认 wav/mp3，直接上传会报「transcriptions不支持当前文件格式」。
 /// 已受支持的格式（wav/mp3）原样透传；其余走 WebAudio 解码 → 重采样 → WAV 编码。
 async function toWavBlob(blob) {

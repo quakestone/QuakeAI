@@ -1,5 +1,27 @@
 # CHANGES
 
+## v0.7.2（2026-10-20）—— 智谱语音端点模型修正（STT/TTS 各归其位）
+
+用户实测「语音识别失败: API 调用参数有误…message should not be empty」后的根因修复：
+
+### 根因（查官方文档确认）
+
+- 智谱 `/audio/transcriptions`（转写）只认 **ASR 模型 glm-asr-2512**；
+- 智谱 `/audio/speech`（合成）只认 **TTS 模型 glm-tts**（音色 tongtong 等）；
+- 我们此前两处都用 `glm-4-voice`——它是**端到端语音对话模型**（走
+  chat.completions + input_audio），拿到转写/合成端点会被上游按 chat 参数校验
+  拒绝，即 "message should not be empty"；TTS 默认音色还是阿里的 `tongyi-qwen`。
+
+### 修复
+
+- `resolve_stt_model()` / `resolve_tts_model()`：智谱系渠道自动把旧模型名
+  （glm-4-voice 等）改写为正确端点模型——**老账本零迁移，用户零感知**。
+- 转写请求补 `stream=false`（官方基础调用必带，否则流式处理拿不到 text）。
+- TTS 默认音色 `tongtong`、显式 `response_format=wav`、content-type 回退改 wav。
+- 默认模型/种子渠道/预设全部更新为 glm-asr-2512（stt）+ glm-tts（tts）；
+  音频渠道按模型名推导能力（`*tts*` → tts，其余 → stt）。
+- mock multipart 日志补 authorization 字段；e2e 90/90（含旧模型名改写断言）。
+
 ## v0.7.1（2026-10-20）—— 输入法布局 / STT 格式 / 播音模型 三修复
 
 用户实测反馈的三连修：

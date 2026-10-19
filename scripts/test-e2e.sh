@@ -154,7 +154,7 @@ RESP=$(curl -s -w '\n%{http_code}' http://127.0.0.1:8787/v1/audio/transcriptions
 CODE=$(echo "$RESP" | tail -1)
 check "音频上传返回 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$RESP"
 echo "$RESP" | grep -q 'received 512 bytes'; check "上游收到完整 512 字节音频" $? "$RESP"
-echo "$RESP" | grep -q 'model=glm-4-voice'; check "multipart 文本字段 model 透传" $? "$RESP"
+echo "$RESP" | grep -q 'model=glm-asr-2512'; check "旧模型名 glm-4-voice 被改写为 glm-asr-2512 透传上游" $? "$RESP"
 MP=$(grep 'multipart-received' "$MOCK_LOG" | tail -1)
 echo "  mock multipart: $MP"
 echo "$MP" | grep -q '"fileBytes":512'; check "mock 侧解析 gateway 重建的 multipart 字节数正确" $? "$MP"
@@ -322,7 +322,10 @@ head -c 512 /dev/urandom > /tmp/stt.wav
 RESP=$(curl -s -w '\n%{http_code}' http://127.0.0.1:8787/v1/audio/transcriptions -F 'file=@/tmp/stt.wav;type=audio/wav' -F 'model=glm-4-voice')
 CODE=$(echo "$RESP" | tail -1)
 check "音频渠道(无Key)转录返回 200（借主线Key）" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$RESP"
-echo "$RESP" | grep -q 'glm-4-voice'; check "转写命中 STT 模型 glm-4-voice" $? "$RESP"
+echo "$RESP" | grep -q 'glm-asr-2512'; check "转写命中 ASR 模型 glm-asr-2512" $? "$RESP"
+# 渠道登记的是旧名 glm-4-voice——网关应自动改写为智谱当前 ASR 模型再发上游
+LAST_MODEL=$(grep '"modelField"' "$MOCK_LOG" | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["modelField"])')
+check "旧模型名 glm-4-voice 已改写为 glm-asr-2512 发给上游" $([ "$LAST_MODEL" = "glm-asr-2512" ] && echo 0 || echo 1) "upstream model=$LAST_MODEL"
 LAST_AUTH=$(grep '"authorization"' "$MOCK_LOG" | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorization"])')
 check "跨渠道借用生效：上游收到主线 Key" $(echo "$LAST_AUTH" | grep -q 'Bearer test-key-local' && echo 0 || echo 1) "$LAST_AUTH"
 

@@ -152,7 +152,7 @@ impl Channel {
         }
         if self.models.is_empty() {
             let (name, kind) = if self.kind == "audio" {
-                ("glm-4-voice".to_string(), "stt".to_string())
+                ("glm-asr-2512".to_string(), "stt".to_string())
             } else {
                 ("glm-4-flash".to_string(), "text".to_string())
             };
@@ -167,8 +167,14 @@ impl Channel {
         self.models
             .iter()
             .map(|name| {
+                // 音频渠道按模型名分能力：*-tts* → 播音，其余 → 转写
+                // （智谱转写用 glm-asr-2512、合成用 glm-tts，分属两个端点模型）
                 let kind = if self.kind == "audio" {
-                    "stt".to_string()
+                    if name.to_lowercase().contains("tts") {
+                        "tts".to_string()
+                    } else {
+                        "stt".to_string()
+                    }
                 } else if model_supports_vision(name) {
                     "vision".to_string()
                 } else {
@@ -265,7 +271,7 @@ pub const PRESETS: &[Preset] = &[
     Preset { provider: "qianfan", name: "百度千帆 AppBuilder", base_url: "https://qianfan.baidubce.com/v2", models: &["ernie-speed", "ernie-lite"], tier: "T2", kind: "chat", region: "CN", free_tier: "ERNIE-Speed/Lite 长期免费，QPS ≤ 50", doc: "https://cloud.baidu.com/product/qianfan.html" },
     Preset { provider: "volces", name: "火山方舟 豆包", base_url: "https://ark.cn-beijing.volces.com/api/v3", models: &["doubao-lite"], tier: "T2", kind: "chat", region: "CN", free_tier: "火山引擎每月赠 100 万 Token", doc: "https://www.volcengine.com/product/doubao" },
     Preset { provider: "spark", name: "讯飞星火 Spark", base_url: "https://spark-api.xf-yun.com/v1", models: &["4.0Ultra"], tier: "T2", kind: "chat", region: "CN", free_tier: "注册赠免费额度", doc: "https://xinghuo.xfyun.cn/" },
-    Preset { provider: "zhipu-audio", name: "智谱音频（GLM-4-Voice）", base_url: "https://open.bigmodel.cn/api/paas/v4", models: &["glm-4-voice"], tier: "T2", kind: "audio", region: "CN", free_tier: "语音转写端点 /audio/transcriptions", doc: "https://open.bigmodel.cn/" },
+    Preset { provider: "zhipu-audio", name: "智谱语音（GLM-ASR / GLM-TTS）", base_url: "https://open.bigmodel.cn/api/paas/v4", models: &["glm-asr-2512", "glm-tts"], tier: "T2", kind: "audio", region: "CN", free_tier: "语音转写 /audio/transcriptions + 播音 /audio/speech", doc: "https://open.bigmodel.cn/" },
     // ---- 海外补充（低优先，边缘部署时启用） ----
     Preset { provider: "openrouter", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", models: &[":free"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "免费模型 50 次/天", doc: "https://openrouter.ai/" },
     Preset { provider: "groq", name: "Groq", base_url: "https://api.groq.com/openai/v1", models: &["llama-3.1-8b-instant"], tier: "T1", kind: "chat", region: "OVERSEAS", free_tier: "免费层限速", doc: "https://groq.com/" },
@@ -313,13 +319,13 @@ pub fn default_cn_channels(now_iso: &str) -> Vec<Channel> {
                mm("glm-4-plus", "text", 80),
                mm("glm-4v-flash", "vision", 70),
            ]),
-        mk("zhipu", "智谱音频 GLM-4-Voice", "https://open.bigmodel.cn/api/paas/v4",
-           &["glm-4-voice"], "T2", "audio", 80,
-           "语音转写/合成；与主线同 Key（引擎会自动复用同 provider 主线 Key）。登记 Key 后启用。",
+        mk("zhipu", "智谱语音（GLM-ASR / GLM-TTS）", "https://open.bigmodel.cn/api/paas/v4",
+           &["glm-asr-2512", "glm-tts"], "T2", "audio", 80,
+           "语音转写(glm-asr-2512)/播音(glm-tts)；与主线同 Key（引擎会自动复用同 provider 主线 Key）。登记 Key 后启用。",
            &["stt", "tts"],
            vec![
-               mm("glm-4-voice", "stt", 100),
-               mm("glm-4-voice", "tts", 100),
+               mm("glm-asr-2512", "stt", 100),
+               mm("glm-tts", "tts", 100),
            ]),
         mk("siliconflow", "硅基流动 SiliconFlow", "https://api.siliconflow.cn/v1",
            &["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen3-8B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "Qwen/Qwen2.5-VL-7B-Instruct"], "T2", "chat", 90,

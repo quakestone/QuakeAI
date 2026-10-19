@@ -198,6 +198,7 @@ const server = createServer((req, res) => {
       appendFileSync(LOG, JSON.stringify({
         ts: new Date().toISOString(), op: "multipart-received",
         boundary, fileField, fileBytes, modelField, filename: (parts.find(p=>/filename=/.test(p))?.match(/filename="([^"]+)"/)||[])[1],
+        authorization: req.headers["authorization"] ?? "",
       }) + "\n");
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({

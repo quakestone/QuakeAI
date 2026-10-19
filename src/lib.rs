@@ -42,7 +42,43 @@ mod zhipu_jwt;
 
 const DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 const DEFAULT_MODEL: &str = "glm-4-flash";
-const DEFAULT_AUDIO_MODEL: &str = "glm-4-voice";
+const DEFAULT_AUDIO_MODEL: &str = "glm-asr-2512";
+const DEFAULT_TTS_MODEL: &str = "glm-tts";
+const DEFAULT_TTS_VOICE: &str = "tongtong";
+
+/// 智谱系判定（ provider 或 base_url 命中即算 ）
+fn is_zhipu_like(provider: &str, base_url: &str) -> bool {
+    provider.contains("zhipu")
+        || provider.contains("bigmodel")
+        || base_url.contains("bigmodel.cn")
+        || base_url.contains("z.ai")
+}
+
+/// STT 模型代次迁移（智谱）：`/audio/transcriptions` 只认 ASR 模型。
+/// glm-4-voice 是端到端语音对话模型（走 chat.completions + input_audio），
+/// 拿到转写端点会被上游按 chat 参数校验拒绝（400 "message should not be empty"）。
+/// 老账本里登记的 glm-4-voice / glm-asr 自动改写为 glm-asr-2512，用户零感知。
+fn resolve_stt_model(provider: &str, base_url: &str, model: &str) -> String {
+    if !is_zhipu_like(provider, base_url) {
+        return model.to_string();
+    }
+    match model {
+        "glm-4-voice" | "glm-4-voice-flash" | "glm-asr" => "glm-asr-2512".to_string(),
+        _ => model.to_string(),
+    }
+}
+
+/// TTS 模型迁移（智谱）：`/audio/speech` 的合成模型是 glm-tts；
+/// glm-4-voice 不是合成端点模型，同样改写。
+fn resolve_tts_model(provider: &str, base_url: &str, model: &str) -> String {
+    if !is_zhipu_like(provider, base_url) {
+        return model.to_string();
+    }
+    match model {
+        "glm-4-voice" | "glm-4-voice-flash" => "glm-tts".to_string(),
+        _ => model.to_string(),
+    }
+}
 /// 429 降权冷却窗口（毫秒）：与 DO 账本里的 cooldown_until_ms 对齐
 pub(crate) const COOLDOWN_MS: f64 = 60_000.0;
 
@@ -145,8 +181,10 @@ async fn resolve_default_model(env: &Env, channels: &[Channel], want_kind: &str)
         }
     }
     best.map(|b| b.2).unwrap_or_else(|| {
-        if want_kind == "stt" || want_kind == "tts" {
+        if want_kind == "stt" {
             DEFAULT_AUDIO_MODEL.to_string()
+        } else if want_kind == "tts" {
+            DEFAULT_TTS_MODEL.to_string()
         } else {
             DEFAULT_MODEL.to_string()
         }
@@ -229,7 +267,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.7.1",
+            "version": "0.7.2",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -394,7 +432,7 @@ fn diag_headers(
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.7.1".to_string()),
+        ("x-gateway-version", "0.7.2".to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
@@ -431,7 +469,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.7.1")?;
+    hdrs.set("x-gateway-version", "0.7.2")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;
@@ -965,9 +1003,15 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
         env,
         &candidates,
         "/audio/transcriptions",
-        // 每个候选用自己的模型名重建 multipart（model 文本字段随候选变）
-        |_ch, m| {
-            let mut tf: Vec<(String, String)> = vec![("model".into(), m.to_string())];
+        // 每个候选用自己的模型名重建 multipart（model 文本字段随候选变）。
+        // 智谱转写端点只认 ASR 模型：glm-4-voice 等旧名自动改写为 glm-asr-2512；
+        // stream=false 为官方基础调用必带（否则上游按流式处理，非流式解析会拿不到 text）。
+        |ch, m| {
+            let model = resolve_stt_model(&ch.provider, &ch.base_url, m);
+            let mut tf: Vec<(String, String)> = vec![
+                ("model".into(), model),
+                ("stream".into(), "false".into()),
+            ];
             if let Some(lang) = fd.get_field("language") {
                 tf.push(("language".into(), lang));
             }
@@ -1032,7 +1076,8 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
     let voice = payload
         .get("voice")
         .and_then(|v| v.as_str())
-        .unwrap_or("tongyi-qwen")
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_TTS_VOICE)
         .to_string();
     let requested = payload
         .get("model")
@@ -1071,11 +1116,15 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
         env,
         &candidates,
         "/audio/speech",
-        |_ch, m| {
+        // 智谱合成模型是 glm-tts（glm-4-voice 是端到端语音模型，不是合成端点模型）；
+        // response_format=wav 为官方默认，显式带上避免不同 Provider 默认值不一致。
+        |ch, m| {
+            let model = resolve_tts_model(&ch.provider, &ch.base_url, m);
             let p = serde_json::json!({
-                "model": m,
+                "model": model,
                 "input": input,
                 "voice": voice,
+                "response_format": "wav",
             });
             JsValue::from_str(&p.to_string())
         },
@@ -1091,7 +1140,7 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
                 .get("content-type")
                 .ok()
                 .flatten()
-                .unwrap_or_else(|| "audio/mpeg".to_string())
+                .unwrap_or_else(|| "audio/wav".to_string())
         },
         "tts",
     )
