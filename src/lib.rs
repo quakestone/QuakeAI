@@ -272,7 +272,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.7.3",
+            "version": env!("CARGO_PKG_VERSION"),
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -437,7 +437,7 @@ fn diag_headers(
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.7.3".to_string()),
+        ("x-gateway-version", env!("CARGO_PKG_VERSION").to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
@@ -474,7 +474,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.7.3")?;
+    hdrs.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;
@@ -1197,6 +1197,16 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::{header_safe, resolve_stt_model, resolve_tts_model};
+
+    /// 版本号单一事实源：admin.rs 的 VERSION 与 /health 的字面量都必须来自
+    /// Cargo.toml（编译期注入）。曾经 admin.rs 常量停在 0.7.2 没跟着升级，
+    /// 侧栏版本号（取 /admin/api/channels 的 version）一直显示旧版本——
+    /// 用户看到「前端版本变成 6.0/7.2」。此断言防止再次分裂。
+    #[test]
+    fn version_single_source_of_truth() {
+        assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
+        assert_eq!(crate::admin::VERSION, "0.7.4");
+    }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
     /// 解响应头，裸中文会变乱码，如 `智谱` → `æ™ºè°±`）。

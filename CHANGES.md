@@ -1,5 +1,35 @@
 # CHANGES
 
+## v0.7.4（2026-10-20）—— 修复侧栏版本号显示过期值（「前端版本变成 6.0」）
+
+### 根因
+
+管理页侧栏版本号 `<span id="side-version">` 的 HTML 初始值是 **v0.6.0 时代
+的硬编码**，之后 v0.7.0~v0.7.3 四个版本都没改。只有 `loadAll()` 成功拿到
+`/channels` 数据时才会被真实版本覆盖——**接口一失败（store 报错/网络抖动），
+侧栏就一直显示 v0.6.0**，用户误以为部署退回了旧版本。
+
+### 修复
+
+- HTML 初始值 `v0.6.0` → `…`（永不再显示假版本）；
+- 新增 `refreshVersion()`：`loadAll` 的 catch 分支也尝试从 `/health`
+  取真实版本兜底——`/channels` 挂了口径也不丢；
+- e2e 新增防回归断言：`GET /admin` 的 HTML 禁止出现硬编码版本号
+  （`id="side-version">v<数字>`），且必须含 refreshVersion 兜底。
+
+### 更深根因（实测顺带挖出）
+
+侧栏版本取自 `/admin/api/channels` 的 `version` 字段，而 `admin.rs` 里有个
+**独立的 `const VERSION = "0.7.2"`**——从 v0.7.2 起每次升级只改了 Cargo.toml
+和 lib.rs 的三处字面量，**从来没改过这个常量**，所以接口一直报旧版本。
+- 根治：`admin.rs` 的 VERSION 与 lib.rs 三处版本字面量全部改为
+  `env!("CARGO_PKG_VERSION")`（编译期从 Cargo.toml 注入）——**版本号
+  单一事实源，以后升级只改 Cargo.toml 一处**；
+- 单测断言 `admin::VERSION == CARGO_PKG_VERSION`；e2e 断言
+  health / channels / Cargo.toml **三处版本一致**；
+- Playwright 三场景实测：正常加载 → v0.7.4；channels 接口 500 →
+  v0.7.4（/health 兜底）；全部接口挂 → `…`（绝不显示假版本）。
+
 ## v0.7.3（2026-10-20）—— 实时语音通话：STT 文字流 / 分句实时播报 / 拟人化呼叫页
 
 用户实测「播音失败: messages 参数非法」+「呼叫页要改」后的根修与升级：

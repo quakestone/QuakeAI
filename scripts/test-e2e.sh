@@ -177,6 +177,16 @@ echo "$UI" | grep -q '资源管理'; check "管理页含标题" $? "no title"
 echo "$UI" | grep -q 'id="preset-cn"'; check "管理页含国内预设目录" $? "no preset list"
 echo "$UI" | grep -q 'id="channel-rows"'; check "管理页含渠道表格" $? "no channel table"
 echo "$UI" | grep -q '一键载入国内默认'; check "管理页含 seed 按钮" $? "no seed button"
+# v0.7.4 防回归：侧栏版本号曾是 HTML 硬编码 v0.6.0——接口一失败就显示
+# 过期版本（用户实测「前端版本变成 6.0」）。HTML 里禁止再出现任何硬编码版本。
+if echo "$UI" | grep -qE 'id="side-version">v[0-9]'; then check "HTML 无硬编码版本号（防过期显示）" 1 "$(echo "$UI" | grep -oE 'id="side-version">[^<]*' | head -1)"; else check "HTML 无硬编码版本号（防过期显示）" 0 ""; fi
+echo "$UI" | grep -q 'refreshVersion'; check "版本号有 /health 兜底刷新" $? "no refreshVersion fn"
+# 版本单一事实源：/admin/api/channels 与 /health 的 version 必须一致
+# （曾经 admin.rs 的 VERSION 常量停在 0.7.2 没升级，侧栏一直显示旧版本）。
+HV=$(curl -s http://127.0.0.1:8787/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+CV=$(curl -s http://127.0.0.1:8787/admin/api/channels | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version"))')
+PV=$(grep -m1 '^version = ' "$ROOT/Cargo.toml" | sed -E 's/version = "([^"]+)"/\1/')
+check "health/channels/Cargo.toml 三处版本一致" $([ "$HV" = "$CV" ] && [ "$CV" = "$PV" ] && echo 0 || echo 1) "health=$HV channels=$CV cargo=$PV"
 
 # 12.2 一键载入国内默认（智谱/硅基流动/智谱音频，均为 disabled 待登记）
 SEED=$(curl -s -X POST http://127.0.0.1:8787/admin/api/seed)

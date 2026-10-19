@@ -398,7 +398,7 @@
     <div id="convo-list"></div>
     <div class="sidebar-foot">
       <button onclick="navigate('models')">⚙ 模型管理</button>
-      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">v0.6.0</span></div>
+      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">…</span></div>
     </div>
   </aside>
   <div id="scrim" onclick="closeSidebar()"></div>
@@ -1701,6 +1701,7 @@ async function loadAll() {
     $("store-badge").textContent = "store: error";
     $("store-badge").className = "badge err";
     toast("加载失败：" + e.message, "err");
+    refreshVersion(); // /channels 挂了也尽量显示真实版本（/health 兜底）
   }
   try {
     const ev = await api("/events");
@@ -1708,6 +1709,16 @@ async function loadAll() {
   } catch { /* 事件账本失败不阻塞主界面 */ }
   // 管理页不可见时也刷新聊天首页的渠道可用性提示
   if (currentView() === "chat") renderMessages();
+}
+
+/// 侧栏版本号刷新：优先 /channels 的 version；失败回落 /health。
+/// 曾经 HTML 里硬编码 v0.6.0 作初始值——接口一失败就显示过期版本号，
+/// 用户误以为「前端版本变成 6.0」。初始值改为「…」，永不再显示假版本。
+async function refreshVersion() {
+  try {
+    const h = await (await fetch("/health")).json();
+    if (h && h.version) $("side-version").textContent = "v" + h.version;
+  } catch { /* health 也不通：保持「…」 */ }
 }
 
 function renderStore(data) {
