@@ -24,7 +24,7 @@
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
-  body { background: var(--bg); color: var(--txt); font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; overscroll-behavior: none; -webkit-text-size-adjust: 100%; }
+  body { background: var(--bg); color: var(--txt); font: 14px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; overscroll-behavior: none; -webkit-text-size-adjust: 100%; height: 100%; height: var(--app-h, 100dvh); transform: translateY(var(--app-top, 0px)); }
   body.nav-open { overflow: hidden; }
   a { color: var(--acc2); text-decoration: none; }
   button { font: inherit; cursor: pointer; border: 1px solid var(--border); background: var(--panel2); color: var(--txt); border-radius: 10px; padding: 6px 12px; min-height: 36px; -webkit-tap-highlight-color: transparent; }
@@ -966,20 +966,25 @@ function autoGrow() {
   t.style.height = Math.min(t.scrollHeight, Math.round(vh * 0.4)) + "px";
 }
 
-// ================= 输入法弹起布局：visualViewport 驱动 --app-h =================
+// ================= 输入法弹起布局：visualViewport 驱动 --app-h / --app-top =================
 // 移动端键盘弹起时部分 WebView 的 100dvh 不收缩，导致输入框被键盘盖住/跳动；
-// 用 visualViewport.height 实时驱动 CSS 变量 --app-h（三个主容器已用 var 兜底 100dvh）。
+// 更隐蔽的是 iOS 的 visualViewport 会整体上移（offsetTop>0）——只改高度的话
+// 应用仍贴在布局视口顶部，被顶出可视区（屏幕只剩输入条，即"输入法不行"）。
+// 对策：--app-h = 可视高度，body 再按 --app-top 平移对齐可视区。
 (function bindViewport() {
   const apply = () => {
     const vv = window.visualViewport;
-    if (vv) document.documentElement.style.setProperty("--app-h", vv.height + "px");
+    if (!vv) return;
+    const de = document.documentElement;
+    de.style.setProperty("--app-h", (vv.height || window.innerHeight) + "px");
+    de.style.setProperty("--app-top", (vv.offsetTop || 0) + "px");
   };
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", apply);
     window.visualViewport.addEventListener("scroll", apply);
+    window.addEventListener("orientationchange", () => setTimeout(apply, 300));
     apply();
   }
-  window.addEventListener("orientationchange", () => setTimeout(apply, 300));
 })();
 
 // ================= 对话发送（SSE 流式 + 停止 + 附件/语音） =================
@@ -1226,9 +1231,58 @@ async function finishVoice() {
     setVoiceBusy(false);
   }
 }
+/// 把录音/音频附件统一转成智谱可识别的 WAV（PCM 16bit / 16kHz / 单声道）。
+/// MediaRecorder 在 iOS 出 audio/mp4、Android/桌面出 webm/ogg——glm-4-voice
+/// 只认 wav/mp3，直接上传会报「transcriptions不支持当前文件格式」。
+/// 已受支持的格式（wav/mp3）原样透传；其余走 WebAudio 解码 → 重采样 → WAV 编码。
+async function toWavBlob(blob) {
+  const t = (blob.type || "").toLowerCase();
+  if (t.includes("wav") || t.includes("mpeg") || t.includes("mp3")) return blob;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !blob.size) return blob; // 无 WebAudio：原样上传，让上游给出明确错误
+  let ctx = null;
+  try {
+    ctx = new AC();
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    const sr = 16000;
+    const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const offline = new OC(1, Math.max(1, Math.ceil(decoded.duration * sr)), sr);
+    const src = offline.createBufferSource();
+    src.buffer = decoded;
+    src.connect(offline.destination);
+    src.start(0);
+    const rendered = await offline.startRendering();
+    return new Blob([encodeWav(rendered)], { type: "audio/wav" });
+  } catch (e) {
+    return blob; // 解码失败（罕见编码）：原样上传兜底
+  } finally {
+    try { ctx && ctx.close(); } catch {}
+  }
+}
+/// AudioBuffer → 16bit PCM WAV（单声道）
+function encodeWav(buf) {
+  const sr = buf.sampleRate;
+  const data = buf.getChannelData(0);
+  const ab = new ArrayBuffer(44 + data.length * 2);
+  const v = new DataView(ab);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, ab.byteLength - 8, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, data.length * 2, true);
+  let o = 44;
+  for (let i = 0; i < data.length; i++) {
+    const s = Math.max(-1, Math.min(1, data[i]));
+    v.setInt16(o, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    o += 2;
+  }
+  return ab;
+}
 async function transcribeBlob(blob, name) {
+  const wav = await toWavBlob(blob);
+  const nm = (wav.type || "").includes("wav") ? "audio.wav" : name;
   const fd = new FormData();
-  fd.append("file", blob, name);
+  fd.append("file", wav, nm);
   const h = gwHeaders();
   const r = await fetch("/v1/audio/transcriptions", { method: "POST", headers: h, body: fd });
   const j = await r.json().catch(() => ({}));

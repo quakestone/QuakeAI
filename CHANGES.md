@@ -1,5 +1,32 @@
 # CHANGES
 
+## v0.7.1（2026-10-20）—— 输入法布局 / STT 格式 / 播音模型 三修复
+
+用户实测反馈的三连修：
+
+### 1. 输入法弹起后 App 内容消失（iOS）
+
+- 根因：旧代码只用 `visualViewport.height` 驱动 `--app-h`，没处理 iOS 键盘弹起时
+  `visualViewport.offsetTop > 0`（可视区整体上移）——App 仍贴在布局视口顶部，
+  被顶出可视区，屏幕只剩输入条。
+- 修复：新增 `--app-top` 变量，`body { height: var(--app-h); transform: translateY(var(--app-top)) }`，
+  App 与可视区精确对齐；固定定位元素（侧栏/浮层/Toast）随 body 变换，全部落在键盘上方。
+
+### 2. 语音识别报「transcriptions不支持当前文件格式」
+
+- 根因：iOS Safari 的 MediaRecorder 产出 `audio/mp4`，智谱 glm-4-voice 只认 wav/mp3。
+- 修复：前端新增 `toWavBlob()` / `encodeWav()`——录音/音频附件统一走 WebAudio 解码 →
+  OfflineAudioContext 重采样 16kHz → 16bit PCM WAV 再上传（wav/mp3 原样透传，
+  解码失败原样兜底）。麦克风长按、附件语音、通话浮层三条链路同时生效。
+
+### 3. 播音提示无可用模型
+
+- 根因一：`handle_audio_speech` 的候选池只加载 chat 渠道，而 tts 模型登记在音频
+  渠道上 → 永远选不到。修复：候选池 = chat + audio 双池合并。
+- 根因二：`pick_model_attempts` 能力匹配过严，音频渠道的 stt 模型（glm-4-voice
+  兼具转写与合成）被排除。修复：tts 允许回落 `kind=="stt" && 渠道 kind=="audio"` 的模型。
+- 加固：Key 借用后仍为空的候选直接剔除并返回明确 503（不再带着空 Bearer 吃上游 401）。
+
 ## v0.7.0（2026-10-20）—— 模型选择引擎 + 设备级隔离 + 通话/播音
 
 围绕用户三条核心诉求落地：**「模型要精细化管理、出错自动换模型」**、**「key 要绑定设备、

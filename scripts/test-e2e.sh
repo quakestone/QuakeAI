@@ -326,12 +326,13 @@ echo "$RESP" | grep -q 'glm-4-voice'; check "转写命中 STT 模型 glm-4-voice
 LAST_AUTH=$(grep '"authorization"' "$MOCK_LOG" | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorization"])')
 check "跨渠道借用生效：上游收到主线 Key" $(echo "$LAST_AUTH" | grep -q 'Bearer test-key-local' && echo 0 || echo 1) "$LAST_AUTH"
 
-echo "== 14.3 TTS 播音：/v1/audio/speech 返回 audio/mpeg =="
-curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
-  -d '{"id":"eng-tts","provider":"zhipu","name":"智谱TTS","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":200,"models_meta":[{"name":"glm-4-voice","kind":"tts","priority":50}]}' > /dev/null
+echo "== 14.3 TTS 播音：音频渠道只有 stt 模型时也能播音（能力回落 + 跨渠道借 Key）=="
+# 回归场景（用户实测"播音无模型"）：eng-audio 只有 stt 模型且无 Key，
+# eng-chat 有 Key 但只有 text 模型。修复前 tts 候选池只取 chat 渠道 → 503 无播音模型。
+# 修复后：候选池 = chat+audio，tts 回落到音频渠道的 stt 模型，并借主线 Key。
 CT=$(curl -s -o /tmp/tts.bin -w '%{http_code} %{content_type}' http://127.0.0.1:8787/v1/audio/speech -H 'Content-Type: application/json' -d '{"input":"你好世界，这是播音测试"}')
 CODE=$(echo "$CT" | cut -d' ' -f1); MT=$(echo "$CT" | cut -d' ' -f2)
-check "TTS 返回 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$CT"
+check "TTS 返回 200（stt-only 音频渠道回落）" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$CT"
 check "TTS 内容类型 audio/mpeg" $([ "$MT" = "audio/mpeg" ] && echo 0 || echo 1) "$CT"
 grep -q '"op":"tts-received"' "$MOCK_LOG" 2>/dev/null; check "mock 收到 TTS 请求" $? "no tts-received in mock-received.log"
 

@@ -229,7 +229,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.7.0",
+            "version": "0.7.1",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -394,7 +394,7 @@ fn diag_headers(
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
     for (k, v) in [
-        ("x-gateway-version", "0.7.0".to_string()),
+        ("x-gateway-version", "0.7.1".to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
@@ -431,7 +431,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.7.0")?;
+    hdrs.set("x-gateway-version", "0.7.1")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;
@@ -517,11 +517,16 @@ fn pick_model_attempts(
         })
         .collect();
 
-    // 收集全部可用（渠道×模型）对：渠道提供该能力、模型启用且未冷却
+    // 收集全部可用（渠道×模型）对：渠道提供该能力、模型启用且未冷却。
+    // 能力匹配放宽：tts 允许回落到**音频渠道的 stt 模型**——智谱 glm-4-voice
+    // 等语音模型兼具转写与合成，用户只登记了 stt 时播音也能用。
+    let kind_ok = |c: &Channel, m: &ModelMeta| {
+        m.kind == want_kind || (want_kind == "tts" && m.kind == "stt" && c.kind == "audio")
+    };
     let mut pairs: Vec<(ModelMeta, &Channel)> = Vec::new();
     for c in &usable {
         for m in c.effective_models() {
-            if m.kind == want_kind && m.enabled && !m.health.cooling(now) {
+            if m.enabled && !m.health.cooling(now) && kind_ok(c, &m) {
                 pairs.push((m, c));
             }
         }
@@ -946,6 +951,15 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
     for c in candidates.iter_mut() {
         borrow_key_if_absent(&mut c.ch, &donor_pool);
     }
+    // 借完仍无 Key 的候选剔除（空 Bearer 打上游只会吃 401，白烧一次尝试）
+    candidates.retain(|c| !c.ch.api_key.is_empty());
+    if candidates.is_empty() {
+        return json_error(
+            503,
+            "no_usable_key",
+            "没有带 Key 的渠道可用于语音识别——请先在模型管理给渠道登记 Key",
+        );
+    }
 
     let outcome = try_model_attempts(
         env,
@@ -1026,12 +1040,15 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
         .filter(|s| !s.is_empty())
         .map(String::from);
 
-    let mut channels = load_channels(env, "chat", &fallback_key, &default_base).await;
-    apply_device_keys(&mut channels, &req);
-    // Key 借用池：tts 候选可能落在音频渠道（无 Key）→ 借同 provider 聊天渠道的 Key
-    let mut donors = load_channels(env, "audio", &fallback_key, &default_base).await;
-    apply_device_keys(&mut donors, &req);
-    let donor_pool: Vec<Channel> = channels.iter().chain(donors.iter()).cloned().collect();
+    // 候选池 = 聊天渠道 + 音频渠道：tts 模型（glm-4-voice 等）登记在音频渠道上，
+    // 只取 chat 会「播音无模型」；Key 借用池同理（音频渠道常缺 Key，借主线）。
+    let mut chat_ch = load_channels(env, "chat", &fallback_key, &default_base).await;
+    let mut audio_ch = load_channels(env, "audio", &fallback_key, &default_base).await;
+    apply_device_keys(&mut chat_ch, &req);
+    apply_device_keys(&mut audio_ch, &req);
+    let mut channels: Vec<Channel> = chat_ch;
+    channels.extend(audio_ch);
+    let donor_pool: Vec<Channel> = channels.clone();
     let (mut candidates, notes) =
         pick_model_attempts(&channels, "tts", requested.as_deref(), admin::now_ms());
     if candidates.is_empty() {
@@ -1039,6 +1056,15 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
     }
     for c in candidates.iter_mut() {
         borrow_key_if_absent(&mut c.ch, &donor_pool);
+    }
+    // 借完仍无 Key 的候选直接剔除（否则带着空 Bearer 打上游只会吃 401）
+    candidates.retain(|c| !c.ch.api_key.is_empty());
+    if candidates.is_empty() {
+        return json_error(
+            503,
+            "no_usable_key",
+            "没有带 Key 的渠道可用于播音——请先在模型管理给渠道登记 Key",
+        );
     }
 
     let outcome = try_model_attempts(
