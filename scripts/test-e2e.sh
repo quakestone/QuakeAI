@@ -200,6 +200,31 @@ curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/dyn-a > /dev/null
 LIST3=$(curl -s http://127.0.0.1:8787/admin/api/channels)
 echo "$LIST3" | grep -q '"id":"dyn-a"'; if [ $? -ne 0 ]; then check "删除 dyn-a 生效" 0; else check "删除 dyn-a 生效" 1 "$LIST3"; fi
 
+# 12.9 智谱 JWT 鉴权：provider=zhipu + Key 为 {id}.{secret} → 网关自动换 JWT
+# （v4 端点对原始 Key 支持不稳定；JWT = HS256 + sign_type=SIGN，TTL 1h）
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"dyn-zhipu","provider":"zhipu","name":"智谱-JWT","base_url":"http://127.0.0.1:8788","api_key":"test-jwt-id.test-jwt-secret","models":["glm-4-flash"],"kind":"chat","tier":"T0","priority":400}' > /dev/null
+RESP=$(curl -sD /tmp/h8.txt http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-4-flash","messages":[{"role":"user","content":"hi"}]}')
+echo "$RESP" | grep -q 'glm-4-flash'; check "智谱渠道经 JWT 鉴权拿到响应" $? "$RESP"
+grep -qi 'x-gateway-channel: 智谱-JWT' /tmp/h8.txt; check "命中智谱 JWT 渠道" $? "$(tr -d '\r' < /tmp/h8.txt | grep -i gateway)"
+# 上游收到的 Authorization 必须是 JWT（eyJ 开头三段式）而非原始 Key
+LAST_AUTH=$(tail -1 "$MOCK_LOG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorization"])')
+echo "  上游 Authorization: ${LAST_AUTH:0:40}…"
+echo "$LAST_AUTH" | grep -qE '^Bearer eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$'; check "上游收到 JWT（非原始 Key）" $? "$LAST_AUTH"
+# JWT payload 结构：api_key=id、exp-timestamp=3600000（1 小时）
+JWT_OK=$(tail -1 "$MOCK_LOG" | python3 -c '
+import json,sys,base64
+auth = json.load(sys.stdin)["authorization"]
+h,p,_ = auth[len("Bearer "):].split(".")
+dec = lambda s: json.loads(base64.urlsafe_b64decode(s + "=" * (-len(s) % 4)))
+hdr, pl = dec(h), dec(p)
+ok = hdr.get("alg")=="HS256" and hdr.get("sign_type")=="SIGN" and pl.get("api_key")=="test-jwt-id" and pl.get("exp")-pl.get("timestamp")==3600000
+print("ok" if ok else f"bad: {hdr} {pl}")')
+check "JWT 结构合规（alg/sign_type/api_key/1h TTL）" $([ "$JWT_OK" = "ok" ] && echo 0 || echo 1) "$JWT_OK"
+# mock 侧同步记录了 jwt-verified
+grep -q '"op":"jwt-verified"' "$ROOT/mock.log" 2>/dev/null; check "mock 验证到合规 JWT" $? "no jwt-verified in mock.log"
+curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/dyn-zhipu > /dev/null
+
 echo "== 13. 下一个国内资源：硅基流动 + 429 冷却 =="
 # 先删 dyn-b，让 dyn-429 成为唯一 chat 动态渠道（429 需要透传而非切换）
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/dyn-b > /dev/null

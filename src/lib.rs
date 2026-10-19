@@ -9,12 +9,17 @@
 //!         - 路由：priority 大者优先；429/冷却中的渠道自动跳过（"先选能力强的，
 //!           被降权后换一个"）；Key 只回掩码，明文不出 DO
 //!         - 流式语义不变：首包前失败可重试、已吐字不切换
-//!   v0.4  管理面硬化 + ChatGPT 式前端（本版）：
+//!   v0.4  管理面硬化 + ChatGPT 式前端：
 //!         - 登记 500 修复：api_update 裸 ? → 503 store_unavailable（含 DO 绑定指引）；
 //!           handle_admin 外层兜底把未预期 Err 转 JSON 500；空 body 视为 {}
 //!         - 前端重写：类 ChatGPT 布局（对话首页 + 模型管理二级子页，hash 路由），
 //!           流式聊天（SSE 逐帧 + 停止按钮 + 渠道徽章），移动端抽屉/底部弹层适配
 //!         - 掩码 Key 前端预检（含 ***/.../… 直接拦截，不再打后端）
+//!   v0.5  智谱 JWT 自动鉴权（本版）：
+//!         - provider=zhipu 且 Key 为 {id}.{secret} → 现场生成 HS256 短期 JWT
+//!           （sign_type=SIGN，TTL 1h）；v4 端点对原始 Key 支持不稳定（401）
+//!         - 零依赖手写 SHA-256/HMAC/base64url（src/zhipu_jwt.rs，标准向量单测）
+//!         - chat / audio / 连通性探测三条路径全部走 bearer_token() 统一出口
 //!
 //! 路由：
 //!   GET    /                         对话首页（管理 UI，hash 路由：/ 与 #/models）
@@ -32,6 +37,7 @@ use crate::channels::Channel;
 mod admin;
 mod channels;
 mod store;
+mod zhipu_jwt;
 
 const DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 const DEFAULT_MODEL: &str = "glm-4-flash";
@@ -156,6 +162,22 @@ pub(crate) fn json_error(status: u16, code: &str, message: &str) -> Result<Respo
     )
 }
 
+/// 上游 Authorization 的 Bearer 值：
+/// - 智谱（provider=zhipu）且 Key 为 `{id}.{secret}` 两段式 → 现场生成
+///   短期 JWT（v4 端点对原始 Key 支持不稳定，会 401「令牌已过期或验证不正确」，
+///   详见 zhipu_jwt.rs 模块文档）；
+/// - 其余（硅基流动 / OpenRouter 等 OpenAI 兼容源）原样用 Key。
+/// JWT 有效期 1 小时（与 report_degraded 的 60s 冷却无关，独立常量）。
+pub(crate) fn bearer_token(ch: &Channel) -> String {
+    const JWT_TTL_MS: f64 = 3_600_000.0;
+    if ch.provider == "zhipu" && zhipu_jwt::looks_like_zhipu_key(&ch.api_key) {
+        if let Some(jwt) = zhipu_jwt::sign_zhipu_jwt(&ch.api_key, admin::now_ms(), JWT_TTL_MS) {
+            return jwt;
+        }
+    }
+    ch.api_key.clone()
+}
+
 /// GET /health：证明 WASM Worker 本体在运行
 fn handle_health() -> Result<Response> {
     json_response(
@@ -163,7 +185,7 @@ fn handle_health() -> Result<Response> {
         serde_json::json!({
             "status": "ok",
             "gateway": "zhipu-wasm-gateway",
-            "version": "0.4.0",
+            "version": "0.5.0",
             "runtime": "cloudflare-workers-wasm",
             "features": [
                 "resource-management-admin-ui",
@@ -300,7 +322,7 @@ fn diag_headers(
         .map_err(|e| Error::RustError(format!("headers: {e:?}")))?;
     let attempt_str = attempts.join(";");
     for (k, v) in [
-        ("x-gateway-version", "0.4.0"),
+        ("x-gateway-version", "0.5.0"),
         ("x-gateway-channel", channel.name.as_str()),
         ("x-gateway-provider", channel.provider.as_str()),
         ("x-gateway-base-url", channel.base_url.as_str()),
@@ -337,7 +359,7 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", "0.4.0")?;
+    hdrs.set("x-gateway-version", "0.5.0")?;
     hdrs.set("x-zhipu-gateway", "wasm")?;
     hdrs.set("x-gateway-attempts", &attempts.join(";"))?;
     hdrs.set("x-zhipu-attempts", &attempts.join(";"))?;
@@ -523,7 +545,7 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
         &body_js,
         |ch| {
             let mut headers = vec![
-                ("Authorization".to_string(), format!("Bearer {}", ch.api_key)),
+                ("Authorization".to_string(), format!("Bearer {}", bearer_token(ch))),
                 ("Content-Type".to_string(), "application/json".to_string()),
             ];
             if stream {
@@ -640,7 +662,7 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
         &body_js,
         |ch| {
             Ok(vec![
-                ("Authorization".to_string(), format!("Bearer {}", ch.api_key)),
+                ("Authorization".to_string(), format!("Bearer {}", bearer_token(ch))),
                 ("Content-Type".to_string(), content_type.clone()),
             ])
         },

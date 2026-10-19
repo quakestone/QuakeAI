@@ -246,7 +246,7 @@
     <div id="convo-list"></div>
     <div class="sidebar-foot">
       <button onclick="navigate('models')">⚙ 模型管理</button>
-      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">v0.4</span></div>
+      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">v0.5</span></div>
     </div>
   </aside>
   <div id="scrim" onclick="closeSidebar()"></div>
@@ -363,6 +363,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
     <div><label>类型</label><select id="f-kind"><option value="chat">chat（对话）</option><option value="audio">audio（转写）</option></select></div>
     <div><label>能力档位</label><select id="f-tier"><option>T0</option><option selected>T1</option><option>T2</option></select></div>
     <div class="full"><label>API Key（登记后启用；可稍后补）</label><input id="f-key" placeholder="sk-…（粘贴完整 Key，勿填掩码）" autocomplete="off"></div>
+    <div class="full" id="zhipu-hint" hidden><p class="hint">💡 智谱 Key 是 <b>{id}.{secret}</b> 两段式（open.bigmodel.cn 控制台整串复制）。网关会自动把它换成短期 JWT 调用 <code>/api/paas/v4</code>——原始 Key 直调该端点会 401，切勿只填其中一段。</p></div>
     <div class="full"><label>模型列表（逗号分隔）</label><input id="f-models" placeholder="glm-4-flash, glm-4-plus"></div>
     <div><label>优先级（大者优先）</label><input id="f-priority" type="number" value="50"></div>
     <div><label>启用</label><select id="f-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
@@ -840,7 +841,14 @@ function openDrawer(editId) {
   $("f-priority").value = c ? (c.priority ?? 50) : 50;
   $("f-enabled").value = c ? (c.enabled ? "1" : "0") : "1";
   $("f-note").value = c ? (c.note || "") : "";
+  syncZhipuHint();
   channelDlg.showModal();
+}
+
+/// 智谱专属提示：provider 含 zhipu 时说明 Key 的 {id}.{secret} 格式与自动 JWT。
+function syncZhipuHint() {
+  const p = ($("f-provider").value || "").toLowerCase();
+  $("zhipu-hint").hidden = !p.includes("zhipu");
 }
 
 function presetFill(i) {
@@ -854,8 +862,10 @@ function presetFill(i) {
   $("f-tier").value = p.tier || "T1";
   $("f-models").value = (p.models || []).join(", ");
   $("f-note").value = p.free_tier || "";
+  syncZhipuHint();
   setTimeout(() => $("f-key").focus(), 80);
 }
+$("f-provider").addEventListener("input", syncZhipuHint);
 
 function looksMaskedKey(k) { return /\*\*\*|\.\.\.|…/.test(k); }
 

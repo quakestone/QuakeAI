@@ -1,11 +1,12 @@
 [package]
 name = "zhipu-wasm-gateway"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "WASM AI 聚合网关：资源管理 + 智能路由（Rust → Cloudflare Workers）"
 
 [lib]
-crate-type = ["cdylib"]
+# rlib 仅用于 host target 跑单元测试（cargo test --lib）；wasm 构建仍取 cdylib。
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 worker = { version = "0.8" }

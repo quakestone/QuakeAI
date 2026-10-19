@@ -1,5 +1,37 @@
 # CHANGES
 
+## v0.5（2026-10-19）—— 智谱 JWT 自动鉴权
+
+真实 Key 联调发现：`/api/paas/v4/*` 端点对「Authorization: Bearer 原始 API Key」
+支持不稳定（实测返回 401「令牌已过期或验证不正确」），而 JWT 方式
+（官方 develop 文档的「JWT Token 鉴权」）一直受支持。本版让网关自动处理：
+
+- **自动换 JWT**：`provider=zhipu` 且 Key 为 `{id}.{secret}` 两段式时，
+  上游请求头改为现场生成的短期 JWT——header `{"alg":"HS256","sign_type":"SIGN"}`、
+  payload `{"api_key":id,"exp":now+1h,"timestamp":now}`（毫秒 epoch）、
+  HMAC-SHA256(secret) 签名。其余 provider（硅基流动等）仍原样 Bearer。
+- **三条路径统一出口**：chat、audio、连通性探测全部走 `bearer_token()`
+  （探测也换 JWT，否则智谱渠道测试永远 401）。
+- **零依赖实现**：`src/zhipu_jwt.rs` 手写 SHA-256 + HMAC-SHA256 + base64url，
+  不为百行算法拉入 ring/hmac 重型依赖；正确性由标准测试向量背书
+  （`cargo test --lib` 5/5：FIPS 180-4 向量、RFC 4231 HMAC 向量、
+  base64url 边界、JWT 结构可复算、坏 key 拒绝）。
+- **前端提示**：登记/预填智谱渠道时显示 Key 格式说明（两段式、自动换 JWT）。
+- **e2e 覆盖**（+5 项，共 69）：mock 验证 JWT 三段式结构与
+  alg/sign_type/api_key/1h-TTL，上游实收 `Bearer eyJ…` 而非原始 Key。
+
+### 验证
+
+| 套件 | 结果 |
+| --- | --- |
+| `cargo test --lib`（密码学标准向量） | ✅ 5/5 |
+| `cargo check --target wasm32-unknown-unknown` | ✅ 0 警告 |
+| `bash scripts/test-e2e.sh`（mock + workerd） | ✅ **69/69** |
+| puppeteer 浏览器交互回归 | ✅ 17/17 |
+| 真实 Key 联调 | ✅ 硅基流动 200 通（直连 + 经网关）；智谱待完整 Key |
+
+---
+
 ## v0.4（2026-10-19）—— 登记 500 修复 + ChatGPT 式前端 + 模型管理二级子页
 
 本轮修复三个用户反馈问题，全部经本地 workerd e2e（64/64）与浏览器交互回归

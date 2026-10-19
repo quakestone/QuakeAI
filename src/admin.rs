@@ -21,7 +21,7 @@ use crate::json_error;
 use crate::json_response;
 use crate::store::*;
 
-const VERSION: &str = "0.4.0";
+const VERSION: &str = "0.5.0";
 
 /// 资源账本不可用（Durable Object 绑定缺失/类未注册/storage 异常）。
 /// 以前这里直接 `?` 抛出，用户只看到裸的 500，完全不知道要绑 DO。
@@ -527,7 +527,7 @@ async fn probe_channel(ch: &Channel) -> (u16, u64, String) {
             Err(e) => return (0, (now_ms() - t0) as u64, format!("build request: {e:?}")),
         };
         if !ch.api_key.is_empty() {
-            let _ = web_req.headers().set("Authorization", &format!("Bearer {}", ch.api_key));
+            let _ = web_req.headers().set("Authorization", &format!("Bearer {}", crate::bearer_token(ch)));
         }
         let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
         let resp = match wasm_bindgen_futures::JsFuture::from(global.fetch_with_request(&web_req)).await {
@@ -564,7 +564,7 @@ async fn probe_channel(ch: &Channel) -> (u16, u64, String) {
     };
     let _ = web_req.headers().set("Content-Type", "application/json");
     if !ch.api_key.is_empty() {
-        let _ = web_req.headers().set("Authorization", &format!("Bearer {}", ch.api_key));
+        let _ = web_req.headers().set("Authorization", &format!("Bearer {}", crate::bearer_token(ch)));
     }
     let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
     let resp = match wasm_bindgen_futures::JsFuture::from(global.fetch_with_request(&web_req)).await {

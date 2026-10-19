@@ -57,7 +57,46 @@ const server = createServer((req, res) => {
     if (req.url === "/chat/completions" && req.method === "POST" ||
         isFlaky || isFlakyEmpty) {
       const auth = req.headers["authorization"];
-      if (!auth || auth !== `Bearer ${VALID_KEY}`) {
+      // 智谱 v4 端点两种鉴权都接受（模拟真实行为）：
+      //   1. 原始 API Key（Bearer {id}.{secret}）
+      //   2. 网关动态生成的短期 JWT（Bearer <header>.<payload>.<sig>）
+      //      —— 解码验证智谱规范：header {"alg":"HS256","sign_type":"SIGN"}，
+      //      payload {"api_key":{id},"exp":…,"timestamp":…}（毫秒 epoch）。
+      const b64urlJson = (s) => {
+        const b64 = s.replace(/-/g, "+").replace(/_/g, "/");
+        return JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+      };
+      const verifyZhipuJwt = (bearer) => {
+        const parts = bearer.split(".");
+        if (parts.length !== 3) return null;
+        try {
+          const header = b64urlJson(parts[0]);
+          const payload = b64urlJson(parts[1]);
+          if (header.alg !== "HS256" || header.sign_type !== "SIGN") return null;
+          if (!payload.api_key || typeof payload.exp !== "number" ||
+              typeof payload.timestamp !== "number") return null;
+          return payload;
+        } catch {
+          return null;
+        }
+      };
+      let jwtPayload = null;
+      if (auth?.startsWith("Bearer ")) {
+        const token = auth.slice(7);
+        if (token === VALID_KEY) {
+          // raw key 路径
+        } else if ((jwtPayload = verifyZhipuJwt(token))) {
+          console.log(JSON.stringify({
+            ts: new Date().toISOString(), op: "jwt-verified",
+            api_key: jwtPayload.api_key,
+            ttl_ms: jwtPayload.exp - jwtPayload.timestamp,
+          }));
+        } else {
+          res.writeHead(401, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { code: "1001", message: "auth failed" } }));
+          return;
+        }
+      } else {
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { code: "1001", message: "auth failed" } }));
         return;
