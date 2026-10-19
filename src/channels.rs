@@ -36,6 +36,16 @@ pub struct Health {
     pub last_error: Option<String>,
     /// 降权冷却截止（JS Date.now() 毫秒 epoch）：429/限流时写入，未过期前不参与路由
     pub cooldown_until_ms: Option<f64>,
+    /// 连续失败次数：模型引擎据此加速冷却（失败越多冷却越久）
+    #[serde(default)]
+    pub fail_count: u32,
+}
+
+impl Health {
+    /// 冷却中？（直接比较 JS 时钟，无定时器依赖）
+    pub fn cooling(&self, now_ms: f64) -> bool {
+        self.cooldown_until_ms.map(|until| now_ms < until).unwrap_or(false)
+    }
 }
 
 impl Default for Health {
@@ -46,8 +56,37 @@ impl Default for Health {
             last_check: None,
             last_error: None,
             cooldown_until_ms: None,
+            fail_count: 0,
         }
     }
+}
+
+/// 模型条目：渠道内的单个模型，带自己的能力分类与独立健康状态。
+/// 模型是路由/降权的一等公民——某个模型出错只冷却它自己，
+/// 同渠道其他模型与其他渠道的同能力模型继续可路由（模型级自动更换）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelMeta {
+    pub name: String,
+    /// text（文本对话） | stt（语音转写） | vision（图片/视频理解） | tts（语音合成/播音）
+    #[serde(default = "default_kind_text")]
+    pub kind: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 模型级优先级（同渠道内排序用；跨渠道由渠道 priority 主导）
+    #[serde(default = "default_model_prio")]
+    pub priority: i64,
+    #[serde(default)]
+    pub health: Health,
+}
+
+fn default_kind_text() -> String {
+    "text".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_model_prio() -> i64 {
+    50
 }
 
 /// 一个可切换资源单元：Provider × Base URL（+ 该资源登记的 API Key）。
@@ -69,10 +108,26 @@ pub struct Channel {
     pub priority: i64,
     pub enabled: bool,
     pub note: String,
+    /// 能力标签：vision（视觉/图片输入）/ audio（音频转写）等。
+    /// 模型选择引擎按请求能力匹配渠道；`#[serde(default)]` 保证旧账本数据
+    /// （无此字段）反序列化不失败。
+    #[serde(default)]
+    pub caps: Vec<String>,
+    /// 结构化模型清单（空 = 由 models + kind 推导，兼容旧账本数据）。
+    /// 每个模型带自己的能力（text/stt/vision/tts）与独立健康状态。
+    #[serde(default)]
+    pub models_meta: Vec<ModelMeta>,
     #[serde(default)]
     pub health: Health,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// 模型名是否支持视觉（图片输入）。覆盖主流国内免费资源的视觉模型命名：
+/// 智谱 glm-4v / glm-4.1v 系列、Qwen-VL 系列、以及名字里带 vision 的。
+pub fn model_supports_vision(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.contains("glm-4v") || m.contains("glm-4.1v") || m.contains("-vl") || m.contains("vision")
 }
 
 impl Channel {
@@ -85,6 +140,49 @@ impl Channel {
             .cooldown_until_ms
             .map(|until| now_ms < until)
             .unwrap_or(false)
+    }
+    /// 生效的模型清单：models_meta 非空则用之（管理页精细配置的结果）；
+    /// 否则由 models 字符串列表推导——audio 渠道 → stt，chat 渠道里
+    /// 视觉模型名 → vision、其余 → text。旧账本零迁移。
+    /// 两者皆空（如只配了 base_url 的精简 ZHIPU_CHANNELS 渠道）→ 回退到
+    /// 该渠道类型的默认模型，保证引擎仍能路由（兼容 v0.6 旧配置）。
+    pub fn effective_models(&self) -> Vec<ModelMeta> {
+        if !self.models_meta.is_empty() {
+            return self.models_meta.clone();
+        }
+        if self.models.is_empty() {
+            let (name, kind) = if self.kind == "audio" {
+                ("glm-4-voice".to_string(), "stt".to_string())
+            } else {
+                ("glm-4-flash".to_string(), "text".to_string())
+            };
+            return vec![ModelMeta {
+                name,
+                kind,
+                enabled: true,
+                priority: default_model_prio(),
+                health: Health::default(),
+            }];
+        }
+        self.models
+            .iter()
+            .map(|name| {
+                let kind = if self.kind == "audio" {
+                    "stt".to_string()
+                } else if model_supports_vision(name) {
+                    "vision".to_string()
+                } else {
+                    "text".to_string()
+                };
+                ModelMeta {
+                    name: name.clone(),
+                    kind,
+                    enabled: true,
+                    priority: default_model_prio(),
+                    health: Health::default(),
+                }
+            })
+            .collect()
     }
 }
 
@@ -176,8 +274,10 @@ pub const PRESETS: &[Preset] = &[
 
 /// "一键载入国内默认"：智谱主线 + 硅基流动，按国内优先排序。
 /// Key 留空、enabled=false —— 登记 Key 后才参与路由（避免空 Key 打爆上游）。
+/// models_meta 预填四类能力（text/vision/stt/tts），模型选择引擎据此路由；
+/// models 里带上各自的免费模型（glm-4v-flash 视觉 / glm-4-voice 语音 / Qwen2.5-VL 视觉）。
 pub fn default_cn_channels(now_iso: &str) -> Vec<Channel> {
-    let mk = |provider: &str, name: &str, url: &str, models: &[&str], tier: &str, kind: &str, priority: i64, note: &str| Channel {
+    let mk = |provider: &str, name: &str, url: &str, models: &[&str], tier: &str, kind: &str, priority: i64, note: &str, caps: &[&str], meta: Vec<ModelMeta>| Channel {
         id: format!("seed-{provider}-{kind}"),
         provider: provider.into(),
         name: name.into(),
@@ -189,20 +289,48 @@ pub fn default_cn_channels(now_iso: &str) -> Vec<Channel> {
         priority,
         enabled: false,
         note: note.into(),
+        caps: caps.iter().map(|s| s.to_string()).collect(),
+        models_meta: meta,
         health: Health::default(),
         created_at: now_iso.into(),
         updated_at: now_iso.into(),
     };
+    let mm = |name: &str, kind: &str, prio: i64| ModelMeta {
+        name: name.into(),
+        kind: kind.into(),
+        enabled: true,
+        priority: prio,
+        health: Health::default(),
+    };
     vec![
         mk("zhipu", "智谱 GLM 主线", "https://open.bigmodel.cn/api/paas/v4",
-           &["glm-4-flash", "glm-4.7-flash", "glm-4-plus"], "T0", "chat", 100,
-           "国内 T0 主力；新用户 2000 万 Token。登记 Key 后启用。"),
+           &["glm-4-flash", "glm-4.7-flash", "glm-4-plus", "glm-4v-flash"], "T0", "chat", 100,
+           "国内 T0 主力；新用户 2000 万 Token。登记 Key 后启用。",
+           &["text", "vision"],
+           vec![
+               mm("glm-4-flash", "text", 100),
+               mm("glm-4.7-flash", "text", 90),
+               mm("glm-4-plus", "text", 80),
+               mm("glm-4v-flash", "vision", 70),
+           ]),
         mk("zhipu", "智谱音频 GLM-4-Voice", "https://open.bigmodel.cn/api/paas/v4",
            &["glm-4-voice"], "T2", "audio", 80,
-           "音频转写；与主线同 Key。登记 Key 后启用。"),
+           "语音转写/合成；与主线同 Key（引擎会自动复用同 provider 主线 Key）。登记 Key 后启用。",
+           &["stt", "tts"],
+           vec![
+               mm("glm-4-voice", "stt", 100),
+               mm("glm-4-voice", "tts", 100),
+           ]),
         mk("siliconflow", "硅基流动 SiliconFlow", "https://api.siliconflow.cn/v1",
-           &["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen3-8B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"], "T2", "chat", 90,
-           "国内 OpenAI 兼容；≤10B 模型 0 元永久免费。登记 Key 后启用。"),
+           &["Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen3-8B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "Qwen/Qwen2.5-VL-7B-Instruct"], "T2", "chat", 90,
+           "国内 OpenAI 兼容；≤10B 模型 0 元永久免费（含 Qwen2.5-VL 视觉模型）。登记 Key 后启用。",
+           &["text", "vision"],
+           vec![
+               mm("Qwen/Qwen2.5-7B-Instruct", "text", 100),
+               mm("Qwen/Qwen3-8B", "text", 90),
+               mm("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "text", 80),
+               mm("Qwen/Qwen2.5-VL-7B-Instruct", "vision", 70),
+           ]),
     ]
 }
 
@@ -223,6 +351,8 @@ pub fn static_channels(static_urls: &[(String, String)], kind: &str, api_key: St
             priority: 0,
             enabled: true,
             note: "static-fallback (ZHIPU_CHANNELS binding)".into(),
+            caps: vec![],
+            models_meta: vec![],
             health: Health::default(),
             created_at: String::new(),
             updated_at: String::new(),

@@ -207,6 +207,31 @@ const server = createServer((req, res) => {
       return;
     }
 
+    // ---- TTS 语音合成（播音 / 双向通话） ----
+    if (req.url === "/audio/speech" && req.method === "POST") {
+      if (req.headers["authorization"] !== `Bearer ${VALID_KEY}`) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "1001", message: "auth failed (speech)" } }));
+        return;
+      }
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch {}
+      appendFileSync(LOG, JSON.stringify({
+        ts: new Date().toISOString(), op: "tts-received",
+        model: payload.model ?? null, voice: payload.voice ?? null,
+        inputChars: (payload.input ?? "").length,
+      }) + "\n");
+      // 最小合法 MP3（ID3 头 + 两帧静音），验证网关透传二进制音频
+      const mp3 = Buffer.from([
+        0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFB, 0x90, 0x64, 0x00, 0x00, 0x00, 0x00,
+      ]);
+      res.writeHead(200, { "Content-Type": "audio/mpeg" });
+      res.end(mp3);
+      return;
+    }
+
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: { code: "404", message: "not found (mock)" } }));
   });

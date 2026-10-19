@@ -1,5 +1,72 @@
 # CHANGES
 
+## v0.7.0（2026-10-20）—— 模型选择引擎 + 设备级隔离 + 通话/播音
+
+围绕用户三条核心诉求落地：**「模型要精细化管理、出错自动换模型」**、**「key 要绑定设备、
+别因升级丢失」**、**「回答可复制分享播音、能一键双向通话」**。
+
+### 模型选择引擎（后端 `src/lib.rs` / `src/channels.rs`）
+
+- **四级能力模型**：每个模型标注 `text / vision / stt / tts` 之一（旧账本按模型名
+  推导：`-vl`/`vision`→视觉、`glm-4v` 系列→视觉、audio 渠道→stt、其余→text）。
+  请求按能力选模型：`payload_has_image()` 检测 `image_url` parts → 走 vision 模型。
+- **模型级路由 `pick_model_attempts()`**：请求指定模型时，把所有**提供该模型**的渠道
+  排在最前（跨渠道按优先级）；任一个上游失败即换下一个渠道；主选全部失败再回退到
+  **同类其他模型**（实现模型级自动更换）。未指定模型则按优先级用全部同能力模型。
+- **模型级健康与冷却**：`ModelMeta.health`（继承 `Channel.Health` 的
+  `fail_count` / `cooldown_until_ms`）独立记账；429 时冷却
+  `COOLDOWN_MS × min(fail_count,5)`，`ensure_models_meta()` 把旧账本推导结果固化为
+  落点，首写健康即落地。冷却中的模型/渠道自动跳过。
+- **Key 复用（跨渠道）**：`borrow_key_if_absent()` 让暂缺 Key 的音频渠道借同
+  `provider`（或 `base_url`）聊天渠道的 Key——用户只在智谱主线登记一次即可（修复
+  「语音识别报错」）。音频/stt 渠道允许暂缺 Key 进入候选池，借到后再发请求。
+- **TTS 播音端点**：`POST /v1/audio/speech`（`{model,input,voice}`）→ 上游
+  `/audio/speech`，回退 `audio/mpeg`；供「播音按钮」与「双向通话」复用。
+- **无候选 503**：某能力无任何可用模型时明确回 `no_candidate_model`（中文能力说明），
+  不再静默 500。
+
+### 设备级 Key 隔离（前端 + 后端）
+
+- 浏览器生成设备序列号 `gw_device_id`（localStorage），按 provider 缓存一份本机
+  Key 到 `gw_device_keys`；所有 fetch 带 `x-device-keys` 头（Rust 侧
+  `apply_device_keys()` 仅内存并入、不写共享账本）。
+- 语义：A 设备不想用 B 登记的共享 Key——登记页新增「本设备 Key」卡片，按 provider
+  录入/编辑/清除；账本已登记 Key 的渠道优先级更高，设备 Key 只在账本为空时补位。
+- 配套修复「升级后 Key 全丢」：DO 改 `localDisk`（`.wd-storage/`，已 gitignore），
+  重启进程后渠道与掩码仍在（e2e 12.10 断言）。
+
+### 前端体验
+
+- **回答操作按钮组**：每条助手消息尾部固定「复制 / 分享（navigator.share 降级
+  clipboard）/ 🔊 播音（走 `/v1/audio/speech` → Audio 播放，再点停止）」。
+- **历史进本机缓存**：会话落 `gw_convos_v1`，欢迎页新增「最近会话（本机缓存）」chips
+  行（最多 5 个），点击即开。
+- **右上角双向通话**：📞 按钮唤出全屏通话浮层——按住说话（复用录音链路）→ STT 转写
+  → chat 回复 → TTS 自动播报 → 挂断结束（`openCall`/`endCall`）。
+- **消息长按菜单**：长按 500ms / 右键消息弹出「重发 / 复制」；`sendOrStop` 重构为
+  可注入 `text/attachments` 的 `sendWith`，重发走同一链路。
+- **输入法弹起布局**：`visualViewport` 监听驱动 `--app-h`（替代桌面/移动不一致的
+  `100dvh`），输入框 auto-grow 上限跟随视口高度。
+- **明暗主题**：🌙 切换 `data-theme`，偏好存 localStorage。
+- **模型管理升级**：渠道卡片内模型行——能力徽章（文本/视觉/STT/播音四色）、
+  模型级状态点（健康/冷却 Ns）、优先级、启用/禁用、单独探测；卡片顶部能力筛选
+  chips（全部/文本/视觉/STT/播音）。
+
+### 验证
+
+| 套件 | 结果 |
+| --- | --- |
+| `cargo test --release`（lib） | ✅ 7/7 |
+| `cargo check --target wasm32-unknown-unknown` | ✅ 0 警告 |
+| `bash scripts/test-e2e.sh`（mock + workerd，89 断言） | ✅ **89/89** |
+| 前端内嵌 JS 语法 + DOM/函数引用静态校验 | ✅ 通过 |
+
+e2e 新增断言：vision 路由（image_url→glm-4v-flash）、纯文本→text 模型、跨渠道 Key
+复用（音频渠道无 Key 借主线 Key）、TTS 返回 `audio/mpeg`、模型级 429 冷却窗口 +
+自动换模型、DO 持久化（重启不丢渠道/Key）。`mock-zhipu.mjs` 新增 `/audio/speech` 端点。
+
+---
+
 ## v0.6.0（2026-10-19）—— 输入区增强：语音长按 + 本地资源提交
 
 对接下一个模型之前，先把移动端输入体验补齐全（用户需求：「优化输入框加语音按钮

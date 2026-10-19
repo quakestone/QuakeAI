@@ -13,7 +13,11 @@ check() { # name, condition(0/1), detail
   if [ "$2" -eq 0 ]; then PASS=$((PASS+1)); echo "  [PASS] $1"; else FAIL=$((FAIL+1)); echo "  [FAIL] $1 -- $3"; fi
 }
 
-start_workerd() { # $1=capnp 文件（项目内相对路径）
+start_workerd() { # $1=capnp 文件（项目内相对路径） $2=keep（非空则保留 .wd-storage 不清）
+  # workerd.config.capnp 的 DO 用 localDisk（.wd-storage/）持久化；其余 capnp 为
+  # inMemory。默认清掉它保持"每段 fresh DO"的语义；持久化验证段（12.10）传 keep。
+  if [ -z "${2:-}" ]; then rm -rf "$ROOT/.wd-storage"; fi
+  mkdir -p "$ROOT/.wd-storage"
   (setsid "$WORKERD" serve "$1" > "$ROOT/workerd.log" 2>&1 &)
   for i in $(seq 1 30); do curl -sf http://127.0.0.1:8787/health >/dev/null 2>&1 && return 0; sleep 0.3; done
   return 1
@@ -67,8 +71,13 @@ echo "$SSE" | grep -q 'data: \[DONE\]'; check "SSE 结束帧 [DONE]" $? "no [DON
 echo "$SSE" | grep -q 'WASM 流式透传验证'; check "SSE 内容完整" $? "content mismatch"
 
 echo "== 6. 429 透传（降权信号） =="
+# 临时动态渠道：提供 glm-test-429（无同类回退）→ 429 原样透传，不自动换模型
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"tmp-429","provider":"zhipu","name":"tmp-429","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","models":["glm-test-429"],"kind":"chat","priority":300}' > /dev/null
 CODE=$(curl -s -o /tmp/err.json -w '%{http_code}' http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}')
 check "429 原样透传" $([ "$CODE" = "429" ] && echo 0 || echo 1) "got $CODE"
+grep -q '速率限制' /tmp/err.json; check "429 上游错误体透传" $? "$(cat /tmp/err.json)"
+curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/tmp-429 > /dev/null
 stop_workerd
 
 echo "== 7. 多通道：首包前失败(502) -> 自动换通道 =="
@@ -245,11 +254,23 @@ check "JWT 结构合规（alg/sign_type/api_key/1h TTL）" $([ "$JWT_OK" = "ok" 
 grep -q '"op":"jwt-verified"' "$ROOT/mock.log" 2>/dev/null; check "mock 验证到合规 JWT" $? "no jwt-verified in mock.log"
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/dyn-zhipu > /dev/null
 
+# 12.10 本地 DO 持久化（localDisk）：重启进程后渠道/Key 不丢
+# —— "后端一升级 key 全没了"的修复验证（in-memory DO 重启即失）
+stop_workerd
+start_workerd workerd.config.capnp keep; check "workerd(持久化验证) 已就绪" $? "persist worker not reachable"
+LISTP=$(curl -s http://127.0.0.1:8787/admin/api/channels)
+echo "$LISTP" | grep -q '"id":"dyn-b"'; check "重启后动态渠道仍在（DO 持久化）" $? "$LISTP"
+echo "$LISTP" | grep -q 'tes\*\*\*ocal'; check "重启后 Key 掩码仍在" $? "$LISTP"
+# 重启后仍可正常路由（渠道可用性不因重启丢失）
+RESP=$(curl -sD /tmp/h9.txt http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-4-flash","messages":[{"role":"user","content":"hi"}]}')
+echo "$RESP" | grep -q 'glm-4-flash'; check "重启后路由仍命中动态渠道" $? "$RESP"
+grep -qi 'x-gateway-channel: dyn-b' /tmp/h9.txt; check "重启后渠道 = dyn-b" $? "$(tr -d '\r' < /tmp/h9.txt | grep -i gateway)"
+
 echo "== 13. 下一个国内资源：硅基流动 + 429 冷却 =="
 # 先删 dyn-b，让 dyn-429 成为唯一 chat 动态渠道（429 需要透传而非切换）
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/dyn-b > /dev/null
-# 13.1 429 透传 + 冷却写入（唯一 chat 渠道 429 → last_error 透传，保留降权信号）
-RESP=$(curl -s -o /tmp/e429.json -w '%{http_code}' -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' -d '{"id":"dyn-429","provider":"zhipu","name":"dyn-429","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","models":["glm-4-flash"],"kind":"chat","priority":200}')
+# 13.1 429 透传 + 冷却写入（唯一 chat 渠道提供该模型 → 429 原样透传，无回退）
+RESP=$(curl -s -o /tmp/e429.json -w '%{http_code}' -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' -d '{"id":"dyn-429","provider":"zhipu","name":"dyn-429","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","models":["glm-test-429"],"kind":"chat","priority":200}')
 CODE=$(curl -s -o /tmp/err2.json -w '%{http_code}' http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}')
 check "动态渠道 429 原样透传" $([ "$CODE" = "429" ] && echo 0 || echo 1) "got $CODE"
 grep -q '速率限制' /tmp/err2.json; check "429 上游错误体透传" $? "$(cat /tmp/err2.json)"
@@ -277,6 +298,61 @@ RESP=$(curl -sD /tmp/h6.txt http://127.0.0.1:8787/v1/chat/completions -H 'Conten
 echo "$RESP" | grep -q 'glm-4-flash'; check "动态清空后回退静态默认通道" $? "$RESP"
 grep -qi 'x-gateway-channel: default' /tmp/h6.txt; check "静态回退通道=default" $? "$(tr -d '\r' < /tmp/h6.txt | grep -i gateway)"
 stop_workerd
+
+echo "== 14. 模型选择引擎（四级能力 / 模型级冷却 / TTS / 跨渠道 Key 复用）=="
+stop_workerd; sleep 0.3
+start_workerd workerd.config.capnp; check "workerd(模型引擎) 已就绪" $? "model-engine worker not reachable"
+
+echo "== 14.1 视觉路由：image_url 命中 vision 模型，纯文本命中 text 模型 =="
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-vision","provider":"zhipu","name":"视觉测试","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":200,"models_meta":[{"name":"glm-4v-flash","kind":"vision","priority":80},{"name":"glm-4-flash","kind":"text","priority":50}]}' > /dev/null
+# 带图片的请求：want_kind=vision → 应选 glm-4v-flash
+VIS=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":[{"type":"text","text":"图里是什么"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}]}')
+echo "$VIS" | grep -q 'glm-4v-flash'; check "image_url 请求路由到 vision 模型 glm-4v-flash" $? "$VIS"
+# 纯文本请求：want_kind=text → 应选 glm-4-flash
+TXT=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"你好"}]}')
+echo "$TXT" | grep -q 'glm-4-flash'; check "纯文本请求路由到 text 模型 glm-4-flash" $? "$TXT"
+
+echo "== 14.2 跨渠道 Key 复用：音频渠道无 Key，借同 provider 聊天渠道 Key =="
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-chat","provider":"zhipu","name":"智谱主线","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":100,"models_meta":[{"name":"glm-4-flash","kind":"text","priority":50}]}' > /dev/null
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-audio","provider":"zhipu","name":"智谱音频","base_url":"http://127.0.0.1:8788","api_key":"","kind":"audio","tier":"T2","priority":200,"models_meta":[{"name":"glm-4-voice","kind":"stt","priority":50}]}' > /dev/null
+head -c 512 /dev/urandom > /tmp/stt.wav
+RESP=$(curl -s -w '\n%{http_code}' http://127.0.0.1:8787/v1/audio/transcriptions -F 'file=@/tmp/stt.wav;type=audio/wav' -F 'model=glm-4-voice')
+CODE=$(echo "$RESP" | tail -1)
+check "音频渠道(无Key)转录返回 200（借主线Key）" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$RESP"
+echo "$RESP" | grep -q 'glm-4-voice'; check "转写命中 STT 模型 glm-4-voice" $? "$RESP"
+LAST_AUTH=$(grep '"authorization"' "$MOCK_LOG" | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorization"])')
+check "跨渠道借用生效：上游收到主线 Key" $(echo "$LAST_AUTH" | grep -q 'Bearer test-key-local' && echo 0 || echo 1) "$LAST_AUTH"
+
+echo "== 14.3 TTS 播音：/v1/audio/speech 返回 audio/mpeg =="
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-tts","provider":"zhipu","name":"智谱TTS","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":200,"models_meta":[{"name":"glm-4-voice","kind":"tts","priority":50}]}' > /dev/null
+CT=$(curl -s -o /tmp/tts.bin -w '%{http_code} %{content_type}' http://127.0.0.1:8787/v1/audio/speech -H 'Content-Type: application/json' -d '{"input":"你好世界，这是播音测试"}')
+CODE=$(echo "$CT" | cut -d' ' -f1); MT=$(echo "$CT" | cut -d' ' -f2)
+check "TTS 返回 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "$CT"
+check "TTS 内容类型 audio/mpeg" $([ "$MT" = "audio/mpeg" ] && echo 0 || echo 1) "$CT"
+grep -q '"op":"tts-received"' "$MOCK_LOG" 2>/dev/null; check "mock 收到 TTS 请求" $? "no tts-received in mock-received.log"
+
+echo "== 14.4 模型级冷却 + 自动换模型（隔离环境，仅 eng-cool 避免被其他文本模型回退）=="
+stop_workerd; sleep 0.3
+start_workerd workerd.config.capnp; check "workerd(冷却隔离) 已就绪" $? "cooldown isolation worker not reachable"
+# eng-cool 只提供 glm-test-429（无其他模型可回退）→ 触发 429 并写入冷却
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-cool","provider":"zhipu","name":"冷却测试A","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":200,"models_meta":[{"name":"glm-test-429","kind":"text","priority":90}]}' > /dev/null
+# 第一次：命中 glm-test-429 → 上游 429（无回退，原样透传）
+CODE=$(curl -s -o /tmp/c1.json -w '%{http_code}' http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}')
+check "指定模型 glm-test-429 触发上游 429（原样透传）" $([ "$CODE" = "429" ] && echo 0 || echo 1) "got $CODE"
+LISTX=$(curl -s http://127.0.0.1:8787/admin/api/channels)
+echo "$LISTX" | grep -q 'cooldown_until_ms":[0-9]'; check "429 后模型级冷却窗口已写入" $? "$LISTX"
+# 注册另一渠道的同类模型，再请求被冷却的 glm-test-429 → 引擎跳过冷却模型，自动换 glm-4.7-flash
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-other","provider":"zhipu","name":"冷却测试B","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":100,"models_meta":[{"name":"glm-4.7-flash","kind":"text","priority":50}]}' > /dev/null
+RESP=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}')
+echo "$RESP" | grep -q 'glm-4.7-flash'; check "冷却模型被跳过，自动换用另一模型 glm-4.7-flash" $? "$RESP"
+curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-cool > /dev/null
+curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-other > /dev/null
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

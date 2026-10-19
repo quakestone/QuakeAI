@@ -21,7 +21,7 @@ use crate::json_error;
 use crate::json_response;
 use crate::store::*;
 
-const VERSION: &str = "0.6.0";
+const VERSION: &str = "0.7.0";
 
 /// 资源账本不可用（Durable Object 绑定缺失/类未注册/storage 异常）。
 /// 以前这里直接 `?` 抛出，用户只看到裸的 500，完全不知道要绑 DO。
@@ -257,6 +257,12 @@ async fn api_create(mut req: Request, env: &Env) -> Result<Response> {
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
         .unwrap_or_default();
 
+    // 结构化模型清单（可选）：缺省时由 models + kind 推导（见 effective_models）
+    let models_meta: Vec<crate::channels::ModelMeta> = v
+        .get("models_meta")
+        .and_then(|m| serde_json::from_value(m.clone()).ok())
+        .unwrap_or_default();
+
     let ch = Channel {
         id: id.clone(),
         provider,
@@ -269,6 +275,12 @@ async fn api_create(mut req: Request, env: &Env) -> Result<Response> {
         priority: v.get("priority").and_then(|x| x.as_i64()).unwrap_or(50),
         enabled: v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
         note: v.get("note").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        caps: v
+            .get("caps")
+            .and_then(|m| m.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        models_meta,
         health: Health::default(),
         created_at: now.clone(),
         updated_at: now,
@@ -331,6 +343,12 @@ async fn api_update(mut req: Request, env: &Env, id: &str) -> Result<Response> {
     }
     if let Some(arr) = v.get("models").and_then(|x| x.as_array()) {
         ch.models = arr.iter().filter_map(|x| x.as_str().map(String::from)).collect();
+    }
+    // 结构化模型清单：显式传入则整体覆盖（管理页模型行的保存入口）
+    if let Some(mm) = v.get("models_meta") {
+        if let Ok(parsed) = serde_json::from_value::<Vec<crate::channels::ModelMeta>>(mm.clone()) {
+            ch.models_meta = parsed;
+        }
     }
     if let Some(s) = v.get("tier").and_then(|x| x.as_str()) {
         ch.tier = s.to_string();
@@ -608,12 +626,23 @@ pub async fn report_success(env: &Env, id: &str, provider: &str, scope: &str, mo
         Err(_) => return,
     };
     if let Some(pos) = list.iter().position(|c| c.id == id) {
-        list[pos].health.status = "healthy".into();
-        list[pos].health.latency_ms = Some(latency_ms);
-        list[pos].health.last_check = Some(now_iso());
-        list[pos].health.last_error = None;
-        if list[pos].health.cooldown_until_ms.is_some() {
-            list[pos].health.cooldown_until_ms = None;
+        let ch = &mut list[pos];
+        ch.health.status = "healthy".into();
+        ch.health.latency_ms = Some(latency_ms);
+        ch.health.last_check = Some(now_iso());
+        ch.health.last_error = None;
+        if ch.health.cooldown_until_ms.is_some() {
+            ch.health.cooldown_until_ms = None;
+        }
+        // 模型级：命中的模型恢复健康（失败计数清零、冷却解除）
+        ensure_models_meta(ch);
+        if let Some(m) = ch.models_meta.iter_mut().find(|m| m.name == model) {
+            m.health.status = "healthy".into();
+            m.health.latency_ms = Some(latency_ms);
+            m.health.last_check = Some(now_iso());
+            m.health.last_error = None;
+            m.health.fail_count = 0;
+            m.health.cooldown_until_ms = None;
         }
         let _ = save_all_channels(env, &list).await;
     }
@@ -634,18 +663,36 @@ pub async fn report_success(env: &Env, id: &str, provider: &str, scope: &str, mo
 }
 
 /// 429/限流降权：写入冷却窗口（60s），后续请求跳过该渠道。
+/// 同时写模型级健康：该模型连续失败计数 +1，429 时按失败次数加长冷却
+/// （60s × min(fail_count,5)）——模型级自动更换的感知基础。
 pub async fn report_degraded(env: &Env, id: &str, provider: &str, scope: &str, model: &str, attempts: &[String], status: u16) {
     let mut list = match load_all_channels(env).await {
         Ok(l) => l,
         Err(_) => return,
     };
     if let Some(pos) = list.iter().position(|c| c.id == id) {
-        list[pos].health.status = "degraded".into();
-        list[pos].health.last_check = Some(now_iso());
+        let ch = &mut list[pos];
+        ch.health.status = "degraded".into();
+        ch.health.last_check = Some(now_iso());
         let msg = format!("HTTP {status}");
-        list[pos].health.last_error = Some(msg);
+        ch.health.last_error = Some(msg.clone());
+        ch.health.fail_count += 1;
         if status == 429 {
-            list[pos].health.cooldown_until_ms = Some(now_ms() + crate::COOLDOWN_MS);
+            let times = ch.health.fail_count.min(5).max(1);
+            ch.health.cooldown_until_ms = Some(now_ms() + crate::COOLDOWN_MS * times as f64);
+        }
+        // 模型级：把推导结果固化为 models_meta（旧账本首次失败时落地），
+        // 之后只冷却这个模型，同渠道其他模型不受影响。
+        ensure_models_meta(ch);
+        if let Some(m) = ch.models_meta.iter_mut().find(|m| m.name == model) {
+            m.health.status = "degraded".into();
+            m.health.last_check = Some(now_iso());
+            m.health.last_error = Some(msg);
+            m.health.fail_count += 1;
+            if status == 429 {
+                let times = m.health.fail_count.min(5).max(1);
+                m.health.cooldown_until_ms = Some(now_ms() + crate::COOLDOWN_MS * times as f64);
+            }
         }
         let _ = save_all_channels(env, &list).await;
     }
@@ -663,4 +710,12 @@ pub async fn report_degraded(env: &Env, id: &str, provider: &str, scope: &str, m
         },
     )
     .await;
+}
+
+/// 旧账本（models_meta 为空）首次写健康前，把 effective_models 的推导结果
+/// 固化成 models_meta，让模型级状态有落点。
+fn ensure_models_meta(ch: &mut Channel) {
+    if ch.models_meta.is_empty() {
+        ch.models_meta = ch.effective_models();
+    }
 }
