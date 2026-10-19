@@ -2,16 +2,17 @@
 
 ## v0.5（2026-10-19）—— 智谱 JWT 自动鉴权
 
-真实 Key 联调发现：`/api/paas/v4/*` 端点对「Authorization: Bearer 原始 API Key」
-支持不稳定（实测返回 401「令牌已过期或验证不正确」），而 JWT 方式
-（官方 develop 文档的「JWT Token 鉴权」）一直受支持。本版让网关自动处理：
+背景：用户最初提供的智谱 Key 是控制台显示界面里的**掩码值**（`5bc8...4bRY`），
+直调 `/api/paas/v4/*` 返回 401「令牌已过期或验证不正确」。拿到完整两段式 Key
+后的真实联调证实：完整原始 Key 与 JWT 两种方式均可 200，JWT 是官方 develop
+文档推荐的鉴权方式（免手工管理、payload 自带过期时间）。本版让网关自动处理：
 
 - **自动换 JWT**：`provider=zhipu` 且 Key 为 `{id}.{secret}` 两段式时，
   上游请求头改为现场生成的短期 JWT——header `{"alg":"HS256","sign_type":"SIGN"}`、
   payload `{"api_key":id,"exp":now+1h,"timestamp":now}`（毫秒 epoch）、
   HMAC-SHA256(secret) 签名。其余 provider（硅基流动等）仍原样 Bearer。
 - **三条路径统一出口**：chat、audio、连通性探测全部走 `bearer_token()`
-  （探测也换 JWT，否则智谱渠道测试永远 401）。
+  （探测也走同一逻辑，智谱渠道测试行为与真实请求一致）。
 - **零依赖实现**：`src/zhipu_jwt.rs` 手写 SHA-256 + HMAC-SHA256 + base64url，
   不为百行算法拉入 ring/hmac 重型依赖；正确性由标准测试向量背书
   （`cargo test --lib` 5/5：FIPS 180-4 向量、RFC 4231 HMAC 向量、
@@ -28,7 +29,8 @@
 | `cargo check --target wasm32-unknown-unknown` | ✅ 0 警告 |
 | `bash scripts/test-e2e.sh`（mock + workerd） | ✅ **69/69** |
 | puppeteer 浏览器交互回归 | ✅ 17/17 |
-| 真实 Key 联调 | ✅ 硅基流动 200 通（直连 + 经网关）；智谱待完整 Key |
+| 真实 Key 联调 | ✅ 硅基流动 200 通（直连 + 经网关）；智谱 200 通（直连原始 Key / 直连 JWT / 经网关 JWT 三条路径均验证） |
+| 智谱真实端点经网关 e2e（13 断言） | ✅ 13/13：非流式回复、渠道命中、诊断头（version 0.5.0 / provider=zhipu）、Key 掩码 `9f1***qVph` 无明文、连通性探测上游 200、SSE 流式、测后渠道删除 |
 
 ---
 
