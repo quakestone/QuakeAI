@@ -916,6 +916,22 @@ ok = bool(ta) and 'placeholder' not in ta.group(0) \
 sys.exit(0 if ok else 1)
 PYX
 check "输入框无提示词 / 顶栏中间留白 / 发送即清空" $? "composer placeholder or clear-order wrong"
+
+# v0.19.15：实时流引擎
+grep -qF 'const SSE_SEP = /\r?\n\r?\n/;' "$UI"; check "SSE 分隔兼容 CRLF（\\r\\n\\r\\n）" $? "no CRLF separator"
+grep -qF 'function paintStream(final)' "$UI"; check "流式增量绘制（只动当前条 DOM）" $? "no paintStream"
+grep -qF 'function mdStream(src)' "$UI"; check "流式 markdown 分段缓存" $? "no mdStream"
+grep -qF 'requestAnimationFrame(streamFrame)' "$UI"; check "rAF 合并绘制（一帧只画一次）" $? "no rAF merge"
+grep -qF 'if (followBottom) stickBottom()' "$UI"; check "上翻阅读时不抢滚动条" $? "scroll steal"
+grep -qF 'id="to-bottom"' "$UI"; check "有「回到最新」按钮" $? "no to-bottom"
+python3 - <<'PYX'
+import sys
+s = open('src/admin_ui.html', encoding='utf-8').read()
+i = s.index('const reader = resp.body.getReader();')
+j = s.index('if (buf.trim()) handleSseBlock', i)
+sys.exit(0 if 'renderMessages()' not in s[i:j] else 1)
+PYX
+check "流循环里不再整列重绘" $? "renderMessages still in stream loop"
 echo "$UI" | grep -q 'id="mp-tabs"'; check "模型选择页有 4 标签栏" $? "no mp tabs"
 
 echo "$UI" | grep -q 'const MP_TABS = \["text", "skill", "audio", "mm"\]'; check "选择页共 4 个标签" $? "bad MP_TABS"

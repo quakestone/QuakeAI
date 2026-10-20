@@ -125,6 +125,10 @@
   .msg-meta { font-size: 11px; color: var(--dim); margin-top: 5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .msg.user .msg-meta { justify-content: flex-start; }
   .msg-meta .ch-badge { border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+  /* 徽章组：display:contents 让里面的 span 继续当 meta 的 flex item，布局与之前一致；
+     单独包一层是为了流式渲染能只换这一组，不动整条消息 */
+  .msg-meta .meta-badges { display: contents; }
+  .msg-meta .ttfb-badge { color: var(--dim); }
   .msg-meta .switch-badge { border: 1px solid var(--warn); color: var(--warn); border-radius: 4px; padding: 0 5px; cursor: help; }
   .msg-meta .act-btn { border: none; background: none; color: var(--dim); font-size: 11px; padding: 1px 6px; min-height: 0; border-radius: 5px; cursor: pointer; line-height: 1.7; white-space: nowrap; }
   .msg-meta .act-btn:hover { color: var(--fg); background: var(--panel2); }
@@ -240,7 +244,10 @@
   details.think > .think-body { padding: 0 12px 10px; font-size: 12.5px; color: var(--dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 
   /* 输入区 */
-  .composer-wrap { padding: 8px 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .composer-wrap { padding: 8px 14px calc(10px + env(safe-area-inset-bottom, 0px)); position: relative; }
+  /* 「回到最新」：用户上翻阅读时不抢滚动条，只在这里提示有新内容 */
+  #to-bottom { position: absolute; right: 16px; top: -40px; z-index: 6; padding: 5px 13px; font-size: 12px; line-height: 1.5; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--txt); box-shadow: 0 4px 14px var(--shadow); cursor: pointer; white-space: nowrap; }
+  #to-bottom:hover { border-color: var(--acc); color: var(--acc); }
   #composer { max-width: var(--chat-max); margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; background: var(--panel2); border: 1px solid var(--border); border-radius: 22px; padding: 8px 8px 8px 16px; }
   /* 输入区模型选择：与 + 号同款圆形图标按钮 */
   .composer-model { flex: none; width: 34px; height: 34px; border-radius: 50%; font-size: 17px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; margin-bottom: 2px; border: 1px solid var(--border); background: var(--panel); color: var(--dim); }
@@ -730,6 +737,7 @@
     </header>
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
     <div class="composer-wrap">
+      <button id="to-bottom" type="button" hidden onclick="jumpToBottom()" title="回到最新内容">↓ 回到最新</button>
       <div id="attach-bar" hidden></div>
       <div id="skill-chip" class="skill-chip" hidden>
         <span class="sk-ic">🧩</span>
@@ -1031,12 +1039,11 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 
 <!-- 消息长按 / 右键菜单：重发 / 复制 / 删除 -->
 <div id="msg-menu" hidden>
-  <button id="mm-copy" type="button" onclick="menuCopy()">复制</button>
+  <button id="mm-copy" type="button" class="mm-user" onclick="menuCopy()">复制</button>
   <button id="mm-edit" type="button" class="mm-user" onclick="menuEdit()">修改</button>
   <button id="mm-retry" type="button" class="mm-user" onclick="menuRetry()">重试</button>
   <button id="mm-emph" type="button" class="mm-user" onclick="menuEmphasis()">强调</button>
   <button id="mm-regen" type="button" class="mm-asst" onclick="menuRegen()">重新生成</button>
-  <button id="mm-share" type="button" class="mm-asst" onclick="menuShare()">分享</button>
   <button id="mm-del" type="button" onclick="menuDelete()">删除</button>
 </div>
 
@@ -1685,6 +1692,7 @@ function newConvo() {
     streaming = false; aborter = null; updateSendBtn();
   }
   currentId = null;
+  followBottom = true;
   clearSearch();
   convoPage = 1;              // 新会话排在最前，回第 1 页才能立刻看到自己那条
   renderConvos(); renderMessages(); updateChatTop();
@@ -1704,6 +1712,7 @@ function openConvo(id) {
   // 编辑态绑定在具体会话上：切走就撤下（静默，不清空别的会话的输入）
   if (editCtx && editCtx.convoId !== id) cancelEdit(true);
   currentId = id;
+  followBottom = true;   // 切会话回到最新，别继承上一个会话的"上翻中"
   // 跳到该会话所在页，否则从别的页点进来会看不到自己选中项
   const i = convos.findIndex(c => c.id === id);
   if (i >= 0) convoPage = Math.floor(i / CONVO_PAGE_SIZE) + 1;
@@ -1919,6 +1928,201 @@ function usableChatChannels() {
 // 真正的截断发生在发送那一刻。声明放在这里而不是编辑函数旁边：
 // renderMessages 会在初始化早期被调用，let 在它之后初始化会撞 TDZ。
 let editCtx = null;
+/// 滚动是否跟随到底。用户往上翻阅读时置 false，不抢滚动条。
+let followBottom = true;
+
+// ==================== 实时流渲染引擎 ====================
+// 旧实现：每收到一个网络 chunk 就 renderMessages() —— 整列 innerHTML 重建。
+// 代价是历史消息全部重新 md() 解析（长对话每帧几毫秒到几十毫秒）、
+// 音频/视频元素被销毁重建（正在播放的直接停）、文本选区被清空、滚动被抢。
+// 表现就是"不像流式"：一顿一顿地蹦，还伴随闪。
+//
+// 现在：内容只写当前这条的 .content / .think-body，其它节点一律不碰；
+// rAF 合并 + 打字机推进（一次来一大段也按帧吐，慢流时零延迟）。
+
+const SSE_SEP = /\r?\n\r?\n/;   // 兼容 \n\n 与 \r\n\r\n
+
+const STREAM = {
+  gen: 0, convoId: null, idx: -1, msg: null,
+  target: "", shown: 0,
+  raf: 0,
+  headKey: null, headHtml: "",
+};
+
+/// 流式 markdown：把内容按「已闭合的段落」切开，头部结果缓存复用，只重解析尾巴。
+/// 长回答（几千字）下，每帧成本从 O(全文) 降到 O(尾段)。
+function mdStream(src) {
+  const s = String(src ?? "");
+  if (s.length < 600) { STREAM.headKey = null; return md(s); }   // 短文本不值得分段
+  // 未闭合的代码围栏之后都算「不稳定区」，从围栏起点重解析
+  let stableEnd = s.length;
+  if ((s.split("```").length - 1) % 2 === 1) {
+    const f = s.lastIndexOf("```");
+    if (f > 0) stableEnd = f;
+  }
+  let cut = s.lastIndexOf("\n\n", stableEnd);
+  if (cut < 0) cut = 0;
+  // 尾段过大（整段没有空行）时向后切，保证每帧解析量有上限
+  if (s.length - cut > 1200) {
+    const c2 = s.lastIndexOf("\n", s.length - 1200);
+    if (c2 > cut) cut = c2;
+  }
+  const head = s.slice(0, cut);
+  const tail = s.slice(cut);
+  if (head !== STREAM.headKey) {
+    STREAM.headKey = head;
+    STREAM.headHtml = head ? md(head) : "";
+  }
+  return STREAM.headHtml + (tail ? md(tail) : "");
+}
+
+function streamBegin(convoId, idx, msg, gen) {
+  if (STREAM.raf) { cancelAnimationFrame(STREAM.raf); STREAM.raf = 0; }
+  STREAM.gen = gen;
+  STREAM.convoId = convoId;
+  STREAM.idx = idx;
+  STREAM.msg = msg;
+  STREAM.target = (msg && msg.content) || "";
+  STREAM.shown = 0;
+  STREAM.headKey = null; STREAM.headHtml = "";
+}
+
+/// 只登记目标文本，实际绘制交给 rAF —— 一帧内来十个 chunk 也只画一次
+function streamPush(msg, gen) {
+  if (!msg || (gen != null && gen !== STREAM.gen)) return;
+  STREAM.msg = msg;
+  STREAM.target = msg.content || "";
+  if (!STREAM.raf) STREAM.raf = requestAnimationFrame(streamFrame);
+}
+
+function streamFrame() {
+  STREAM.raf = 0;
+  const msg = STREAM.msg;
+  if (!msg) return;
+  const backlog = STREAM.target.length - STREAM.shown;
+  if (backlog <= 0) { STREAM.shown = STREAM.target.length; paintStream(false); return; }
+  // 积压越多吐得越快：正常流约 8 帧追平（≈130ms 延迟），巨量积压 6 帧内展开
+  const step = backlog > 1200 ? Math.ceil(backlog / 6)
+                              : Math.max(1, Math.min(40, Math.ceil(backlog / 8)));
+  STREAM.shown = Math.min(STREAM.target.length, STREAM.shown + step);
+  paintStream(false);
+  if (STREAM.shown < STREAM.target.length) STREAM.raf = requestAnimationFrame(streamFrame);
+}
+
+/// 把已显示的字符画到 DOM 上。只动 .content / .think-body / .meta-badges。
+function paintStream(final) {
+  const msg = STREAM.msg;
+  if (!msg) return;
+  const col = $("msg-col");
+  const el = col && col.querySelector(`.msg.assistant[data-idx="${STREAM.idx}"]`);
+  if (!el) return;   // 切了会话或列表被重绘：交给下一次 renderMessages
+  const shown = STREAM.target.slice(0, STREAM.shown);
+  const content = el.querySelector(".content");
+  if (content) {
+    const key = STREAM.shown + (final ? "f" : "s");
+    if (content.dataset.k !== key) {
+      content.innerHTML = (shown ? mdStream(shown) : "") + (final ? "" : '<span class="cursor"></span>');
+      content.dataset.k = key;
+    }
+  }
+  // 思考过程：流式追加，不重建 <details>（否则用户展开的状态每帧被收起）
+  if (msg.reasoning) {
+    let think = el.querySelector(".think");
+    if (!think) {
+      think = document.createElement("details");
+      think.className = "think";
+      think.open = true;
+      think.innerHTML = '<summary>思考过程</summary><div class="think-body"></div>';
+      const bodyEl = el.querySelector(".msg-body");
+      if (bodyEl) bodyEl.insertBefore(think, bodyEl.querySelector(".content"));
+    }
+    const tb = think.querySelector(".think-body");
+    if (tb && tb.textContent !== msg.reasoning) tb.textContent = msg.reasoning;
+  }
+  // 徽章（渠道 / 实际模型 / tokens / 首字耗时）只在变化时重写
+  const mb = el.querySelector(".meta-badges");
+  if (mb) {
+    const want = badgesHtml(msg);
+    if (mb.dataset.h !== want) { mb.innerHTML = want; mb.dataset.h = want; }
+  }
+  if (final) {
+    const meta = el.querySelector(".msg-meta");
+    if (meta && !meta.querySelector(".act-btn")) meta.insertAdjacentHTML("beforeend", actsHtml(msg));
+  }
+  if (followBottom) stickBottom();
+}
+
+/// 收尾：flush 剩余文字 + 补上操作按钮。gen 不匹配（已被新流接管）时什么都不做。
+function streamEnd(gen) {
+  if (gen != null && gen !== STREAM.gen) return;
+  if (STREAM.raf) { cancelAnimationFrame(STREAM.raf); STREAM.raf = 0; }
+  if (STREAM.msg) { STREAM.shown = STREAM.target.length; paintStream(true); }
+  STREAM.msg = null; STREAM.idx = -1; STREAM.convoId = null;
+  STREAM.target = ""; STREAM.shown = 0;
+  STREAM.headKey = null; STREAM.headHtml = "";
+}
+
+// ---- 滚动跟随：用户往上翻时不抢滚动条 ----
+function nearBottom(box) { return box.scrollHeight - box.scrollTop - box.clientHeight < 90; }
+function stickBottom() { const box = $("messages"); if (box) box.scrollTop = box.scrollHeight; }
+function jumpToBottom() { followBottom = true; stickBottom(); updateToBottom(); }
+function updateToBottom() {
+  const b = $("to-bottom");
+  if (b) b.hidden = followBottom;
+}
+$("messages").addEventListener("scroll", () => {
+  const box = $("messages");
+  followBottom = nearBottom(box);
+  updateToBottom();
+}, { passive: true });
+
+/// 单条消息的 HTML：渲染与流式增量 patch 共用同一份模板，避免两套走偏。
+function msgHtml(m, i) {
+  // 上下文边界：只做视觉分隔，不参与消息/请求
+  if (m.role === "divider") {
+    return `<div class="ctx-div" data-idx="${i}"><span>${esc(m.text || "上下文已重置")}</span></div>`;
+  }
+  if (m.role === "user") {
+    const chips = (m.attachments || []).map(a => {
+      if (a.dataUrl) return `<img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">`;
+      const src = attMediaUrl(a);
+      if (a.kind === "audio" && src) return `<div class="att-media"><div class="att-media-ic">🎵</div><audio class="att-audio" controls preload="metadata" src="${src}"></audio><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
+      if (a.kind === "video" && src) return `<div class="att-media"><video class="att-video" controls preload="metadata" playsinline${a.poster ? ` poster="${a.poster}"` : ""} src="${src}"></video><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
+      return `<span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>`;
+    }).join("");
+    const attRow = chips ? `<div class="att-row">${chips}</div>` : "";
+    // 用户头像：与助手「AI」实心渐变形成对照（描边 vs 填充）；「…」在气泡右上角。
+    // 只有附件的消息也带头像——它是「这轮是用户说的」的标识，不该只在有文字时出现。
+    return `<div class="msg user${m.emphasis ? " emph" : ""}" data-idx="${i}"><div class="avatar user-av" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#ic-user"/></svg></div><div class="msg-body">${attRow}${m.content ? `<div class="content">${esc(m.content)}</div>` : ""}<button class="more-btn" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button><div class="msg-meta">${fmtTime(m.ts)}${m.emphasis ? '<span class="emph-tag">重点</span>' : ""}</div></div></div>`;
+  }
+  if (m.error && !m.content) return `<div class="msg error" data-idx="${i}"><div class="avatar">⚠</div><div class="msg-body"><div class="content">${esc(m.error)}</div><div class="msg-meta">${fmtTime(m.ts)}<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button></div></div></div>`;
+  const think = m.reasoning ? `<details class="think"><summary>思考过程</summary><div class="think-body">${esc(m.reasoning)}</div></details>` : "";
+  const body = (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
+  const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
+  return `<div class="msg assistant" data-idx="${i}"><div class="avatar">AI</div><div class="msg-body">${think}<div class="content">${body}</div>${errLine}<div class="msg-meta"><span class="meta-badges">${badgesHtml(m)}</span>${fmtTime(m.ts)}${actsHtml(m)}</div></div></div>`;
+}
+
+/// 回答的徽章组（渠道 / 实际模型 / tokens / 自动切换 / 首字耗时）。
+/// 抽成函数是因为流式渲染要原地替换这一组，不能重建整条消息。
+function badgesHtml(m) {
+  return (m.channel ? `<span class="ch-badge">via ${esc(m.channel)}</span>` : "")
+    + (m.model ? `<span class="ch-badge mdl-badge" title="本条回答实际采用的模型名">模型 ${esc(m.model)}</span>` : "")
+    + (m.usage && m.usage.total_tokens != null ? `<span class="ch-badge" title="prompt ${m.usage.prompt_tokens || 0} · completion ${m.usage.completion_tokens || 0}">⛁ ${fmtTok(m.usage.total_tokens)}</span>` : "")
+    + (m.attempts && m.attempts.split(";").length > 1
+      ? `<span class="switch-badge" title="${esc(m.attempts)}">⤻ 已自动切换</span>` : "")
+    + (m.ttfb != null ? `<span class="ch-badge ttfb-badge" title="从发送到收到第一个字的时间">首字 ${(m.ttfb / 1000).toFixed(1)}s</span>` : "");
+}
+
+/// 回答的行内操作。复制/分享是高频动作，直接摆在 meta 行（v0.19.10 的形态）；
+/// 重新生成/删除留在「…」里。播音必须行内——它有播放中的状态反馈。
+function actsHtml(m) {
+  if (m.streaming) return "";
+  if (m.error && !m.content) return `<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button>`;
+  return `<button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button>`
+    + `<button class="act-btn" onclick="shareMsg(this)" title="分享本条回答">分享</button>`
+    + `<button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button>`
+    + `<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button>`;
+}
 
 function renderMessages() {
   const col = $("msg-col");
@@ -1949,38 +2153,7 @@ function renderMessages() {
       </div>`;
     return;
   }
-  col.innerHTML = c.msgs.map((m, i) => {
-    // 上下文边界：只做视觉分隔，不参与消息/请求
-    if (m.role === "divider") {
-      return `<div class="ctx-div" data-idx="${i}"><span>${esc(m.text || "上下文已重置")}</span></div>`;
-    }
-    if (m.role === "user") {
-      const chips = (m.attachments || []).map(a => {
-        if (a.dataUrl) return `<img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">`;
-        const src = attMediaUrl(a);
-        if (a.kind === "audio" && src) return `<div class="att-media"><div class="att-media-ic">🎵</div><audio class="att-audio" controls preload="metadata" src="${src}"></audio><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
-        if (a.kind === "video" && src) return `<div class="att-media"><video class="att-video" controls preload="metadata" playsinline${a.poster ? ` poster="${a.poster}"` : ""} src="${src}"></video><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
-        return `<span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>`;
-      }).join("");
-      const attRow = chips ? `<div class="att-row">${chips}</div>` : "";
-      // 用户头像：与助手「AI」实心渐变形成对照（描边 vs 填充）；「…」在气泡右上角。
-      // 只有附件的消息也带头像——它是「这轮是用户说的」的标识，不该只在有文字时出现。
-      return `<div class="msg user${m.emphasis ? " emph" : ""}" data-idx="${i}"><div class="avatar user-av" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#ic-user"/></svg></div><div class="msg-body">${attRow}${m.content ? `<div class="content">${esc(m.content)}</div>` : ""}<button class="more-btn" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button><div class="msg-meta">${fmtTime(m.ts)}${m.emphasis ? '<span class="emph-tag">重点</span>' : ""}</div></div></div>`;
-    }
-    if (m.error && !m.content) return `<div class="msg error" data-idx="${i}"><div class="avatar">⚠</div><div class="msg-body"><div class="content">${esc(m.error)}</div><div class="msg-meta">${fmtTime(m.ts)}<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button></div></div></div>`;
-    const think = m.reasoning ? `<details class="think"><summary>思考过程</summary><div class="think-body">${esc(m.reasoning)}</div></details>` : "";
-    const body = (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
-    const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
-    const badges = (m.channel ? `<span class="ch-badge">via ${esc(m.channel)}</span>` : "")
-      + (m.model ? `<span class="ch-badge mdl-badge" title="本条回答实际采用的模型名">模型 ${esc(m.model)}</span>` : "")
-      + (m.usage && m.usage.total_tokens != null ? `<span class="ch-badge" title="prompt ${m.usage.prompt_tokens || 0} · completion ${m.usage.completion_tokens || 0}">⛁ ${fmtTok(m.usage.total_tokens)}</span>` : "")
-      + (m.attempts && m.attempts.split(";").length > 1
-        ? `<span class="switch-badge" title="${esc(m.attempts)}">⤻ 已自动切换</span>` : "");
-    // 复制 / 分享 / 重新生成 / 删除 收进「…」；播音留在行内——它有播放中/停止的状态反馈，
-    // 放进菜单会在菜单关闭后丢掉「正在播」的可见性。
-    const acts = m.streaming ? "" : `<button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button><button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button>`;
-    return `<div class="msg assistant" data-idx="${i}"><div class="avatar">AI</div><div class="msg-body">${think}<div class="content">${body}</div>${errLine}<div class="msg-meta">${badges}${fmtTime(m.ts)}${acts}</div></div></div>`;
-  }).join("");
+  col.innerHTML = c.msgs.map((m, i) => msgHtml(m, i)).join("");
   // 编辑态校验：目标消息被删掉、换成助手消息、或切了会话 → 静默撤下「修改中」。
   // 否则下次发送会拿一个失效的 idx 去截断（虽然 truncateFrom 有越界保护，
   // 但用户会看到一条解释不通的提示条）。
@@ -1989,7 +2162,10 @@ function renderMessages() {
     const m = c && c.msgs[editCtx.idx];
     if (!c || c.id !== editCtx.convoId || !m || m.role !== "user") dropEditCtx();
   }
-  requestAnimationFrame(() => { const box = $("messages"); box.scrollTop = box.scrollHeight; });
+  // 整列重绘后回到正确位置：只在用户没有主动上翻时跟随到底，
+  // 否则会把人正在读的地方拽走。
+  if (followBottom) requestAnimationFrame(() => { stickBottom(); updateToBottom(); });
+  else updateToBottom();
 }
 /// 取消息正文纯文本（复制 / 分享 / 播音共用）
 function msgTextOf(el) {
@@ -2445,6 +2621,7 @@ async function sendWith(text, atts) {
   if (!c.title || c.title === "新对话") { c.title = (fullText || "[附件]").slice(0, 24); c.title_auto = true; }
   c.updated = Date.now();
   // 立即可见 + 立即落库（新会话此刻才真正创建，不等防抖）
+  followBottom = true;   // 自己刚发的话必须看得见
   renderConvos(); renderMessages(); updateChatTop();
   IDB.putConvo(c); IDB.putMsg(convoId, userIdx, c.msgs[userIdx]); IDB.putMsg(convoId, asstIdx, asst);
 
@@ -2474,6 +2651,7 @@ async function sendWith(text, atts) {
   const mmModel = pickMmModel(attHasMedia(atts));
   if (mmModel) body.model = mmModel;
 
+  const t0 = performance.now();   // 首字耗时基准
   try {
     const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
     const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: aborter.signal });
@@ -2493,16 +2671,28 @@ async function sendWith(text, atts) {
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
+    let firstPaint = false;
+    streamBegin(convoId, asstIdx, asst, myGen);
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) >= 0) {
-        handleSseBlock(buf.slice(0, idx), asst);
-        buf = buf.slice(idx + 2);
+      // 上游换行风格不统一：OpenAI/OpenRouter 用 \n\n，部分代理用 \r\n\r\n。
+      // 只认 \n\n 时 CRLF 流永远切不出块，整条回答会攒到流结束才一次性出现——
+      // 用户看到的就是"这不是流式"。
+      let m;
+      while ((m = SSE_SEP.exec(buf))) {
+        const block = buf.slice(0, m.index);
+        buf = buf.slice(m.index + m[0].length);
+        const before = asst.content.length;
+        handleSseBlock(block, asst);
+        // 首字耗时：从发出请求到第一个内容增量到达（客户端可感知的"开始响应"）
+        if (!firstPaint && asst.content.length > before) {
+          firstPaint = true;
+          asst.ttfb = Math.round(performance.now() - t0);
+        }
       }
-      renderMessages();
+      streamPush(asst, myGen);       // 只登记目标，绘制由 rAF 合并
       markMsgDirty(convoId, asstIdx); // 流式期间节流落库：刷新/崩溃不丢已生成部分
     }
     if (buf.trim()) handleSseBlock(buf, asst);
@@ -2519,7 +2709,8 @@ async function sendWith(text, atts) {
     IDB.putConvo(c);
     if (myGen === streamGen) {
       streaming = false; aborter = null; updateSendBtn();
-      renderMessages();
+      streamEnd(myGen);            // flush 剩余文字 + 补操作按钮（不重建整条）
+      if (asst.error) renderMessages();   // 错误行只能靠整条重绘
     }
     // 工作流事件：token 记账 / LLM 标题升级 / 记忆更新。异步、失败静默，不阻塞 UI。
     if (!asst.error) wfAfterAnswer(c, convoId, asst, fullText, atts);
@@ -3658,10 +3849,10 @@ async function chatStream(messages, model, handlers) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += dec.decode(value, { stream: true });
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) >= 0) {
-      const block = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
+    let m;
+    while ((m = SSE_SEP.exec(buf))) {
+      const block = buf.slice(0, m.index);
+      buf = buf.slice(m.index + m[0].length);
       const before = sink.content.length;
       feedSseBlock(block, sink);
       if (sink.content.length !== before) {
