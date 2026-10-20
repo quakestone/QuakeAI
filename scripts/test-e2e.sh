@@ -778,6 +778,75 @@ UI=$(curl -s http://127.0.0.1:8787/admin | grep -c 'usage-tables')
 curl -s http://127.0.0.1:8787/admin | grep -q '导出对账 CSV'; check "管理页含「导出对账 CSV」按钮" $? "no export button"
 curl -s http://127.0.0.1:8787/admin | grep -q 'api("/usage")'; check "管理页拉取 /admin/api/usage" $? "no usage fetch"
 
+# ==================== 21. v0.15.0：UI 体验刷版（积分体系 / 多媒体两块 / 精灵拟人 / 回退按钮）====================
+echo "== 21.1 后端诊断头：降权模型列表（前端按模型给负分要用）=="
+# 触发一次降权：eng-cool 的 glm-test-429 上游 429 → 该模型进 degraded 列表
+curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
+  -d '{"id":"eng-deg","provider":"zhipu","name":"降权测试","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":210,"models_meta":[{"name":"glm-test-429","kind":"text","priority":90}]}' > /dev/null
+DEG_HDR=$(curl -s -o /dev/null -D - http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}' | tr -d '\r')
+echo "$DEG_HDR" | grep -qi 'x-gateway-degraded'; check "响应头含 x-gateway-degraded（降权模型列表）" $? "$(echo "$DEG_HDR" | grep -i gateway)"
+echo "$DEG_HDR" | grep -qi 'x-gateway-degraded: glm-test-429'; check "降权列表精确到模型名（glm-test-429）" $? "$(echo "$DEG_HDR" | grep -i degraded)"
+# 成功链路不应误报降权
+OK_HDR=$(curl -s -o /dev/null -D - http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"x"}]}' | tr -d '\r')
+echo "$OK_HDR" | grep -qi 'x-gateway-model:'; check "响应头含 x-gateway-model（命中模型，积分用）" $? "$(echo "$OK_HDR" | grep -i model)"
+
+echo "== 21.2 前端积分体系：选择+1 / 使用+1 / 分享+10 / 降权−20，按积分倒序 =="
+# 行为测试（真跑一遍计分逻辑，不靠 grep）：曾出现 POINTS_RULE 写 select、
+# 调用传 sel 的错位——静态断言全过但积分永远记不上，必须有执行级验证。
+PT_OUT=$(node "$ROOT/scripts/test-points.mjs" 2>&1)
+PT_FAIL=$(echo "$PT_OUT" | sed -n 's/^结果: PASS=[0-9]* FAIL=\([0-9]*\)$/\1/p')
+PT_PASSN=$(echo "$PT_OUT" | sed -n 's/^结果: PASS=\([0-9]*\) FAIL=[0-9]*$/\1/p')
+[ "${PT_FAIL:-1}" = "0" ]; check "积分账本行为测试全通过（${PT_PASSN:-0} 项）" $? "$(echo "$PT_OUT" | grep FAIL | head -3)"
+UI=$(curl -s http://127.0.0.1:8787/admin)
+echo "$UI" | grep -q 'const Points = {'; check "积分账本模块已注入" $? "no Points module"
+echo "$UI" | grep -q 'POINTS_RULE = { sel: 1, use: 1, share: 10, degrade: -20 }'; check "积分规则（选择+1/使用+1/分享+10/降权−20）" $? "no rules"
+# 计分键与规则键必须一一对应（曾经 POINTS_RULE 写 select 而调用传 sel，
+# 导致 add() 直接 return、积分永远记不上——断言要能抓住这种"看起来接好了"）
+echo "$UI" | grep -q 'if (!(kind in POINTS_RULE)) return;'; check "积分 add 有规则校验（防键名不匹配静默失败）" $? "no guard"
+echo "$UI" | grep -q 'e.sel || 0) \* POINTS_RULE.sel'; check "积分重算用的规则键与计分键一致" $? "key mismatch"
+echo "$UI" | grep -q 'localStorage.setItem(POINTS_KEY'; check "积分持久化到 localStorage" $? "no persist"
+echo "$UI" | grep -q 'Points.add("sel", m || AUTO_KEY)'; check "选择模型 +1 已接入" $? "no sel hook"
+echo "$UI" | grep -q 'Points.add("use", hit)'; check "模型使用 +1 已接入" $? "no use hook"
+echo "$UI" | grep -q 'Points.add("share", msgModelOf(btn)'; check "分享 +10 已接入" $? "no share hook"
+echo "$UI" | grep -q 'Points.add("degrade", m)'; check "降权 −20 已接入" $? "no degrade hook"
+echo "$UI" | grep -q 'items.sort((a, b) => (b.score - a.score)'; check "模型选择器按积分倒序排序" $? "no sort"
+echo "$UI" | grep -q 'AUTO_KEY'; check "「自动」作为独立条目参与计分与排序" $? "no auto key"
+echo "$UI" | grep -q 'id="points-card"'; check "模型管理页含积分榜卡片" $? "no points card"
+echo "$UI" | grep -q 'function renderPoints()'; check "积分榜渲染函数已挂载" $? "no renderPoints"
+echo "$UI" | grep -q 'function resetPoints()'; check "积分可清空重置" $? "no resetPoints"
+echo "$UI" | grep -q 'x-gateway-degraded'; check "前端读降权诊断头" $? "no degraded header read"
+echo "$UI" | grep -q 'x-gateway-model'; check "前端读命中模型诊断头" $? "no model header read"
+
+echo "== 21.3 语音与多媒体设置拆两块（音频模型 / 图片视频模型）=="
+echo "$UI" | grep -q 'id="vg-stt-model"'; check "音频块含转写模型选择" $? "no stt select"
+echo "$UI" | grep -q 'id="vg-tts-model"'; check "音频块含播音模型选择" $? "no tts select"
+echo "$UI" | grep -q 'id="vg-vision-model"'; check "图片视频块含视觉模型选择" $? "no vision select"
+echo "$UI" | grep -q 'id="vg-video-model"'; check "图片视频块含视频模型选择" $? "no video select"
+echo "$UI" | grep -q 'class="vg-block"'; check "两块用 vg-block 容器分隔" $? "no vg-block"
+echo "$UI" | grep -q 'id="mg-stt-model"'; check "模型管理页含音频块内联选择" $? "no mg stt"
+echo "$UI" | grep -q 'id="mg-vision-model"'; check "模型管理页含图片视频块内联选择" $? "no mg vision"
+echo "$UI" | grep -q 'if (voiceCfg.ttsModel) payload.model = voiceCfg.ttsModel'; check "TTS 播音模型真正生效" $? "tts model not applied"
+echo "$UI" | grep -q 'if (voiceCfg.sttModel) fd.append("model", voiceCfg.sttModel)'; check "STT 转写模型真正生效" $? "stt model not applied"
+echo "$UI" | grep -q 'function pickMmModel(hasMedia)'; check "图片视频模型选择逻辑已接入请求" $? "no pickMmModel"
+
+echo "== 21.4 UI 改造：侧栏 / 顶栏 / 精灵拟人 / 回退按钮 =="
+echo "$UI" | grep -q 'id="btn-model"'; check "模型选择按钮在输入区（+ 号旁）" $? "no btn-model"
+echo "$UI" | grep -q 'id="btn-newchat"'; check "顶栏右上角为新建会话" $? "no newchat"
+echo "$UI" | grep -q 'class="dlg-back"'; check "对话框左上角有回退按钮" $? "no dlg-back"
+[ "$(echo "$UI" | grep -c 'class="dlg-back"')" -ge 6 ]; check "全部 6 个对话框都有回退按钮" $? "$(echo "$UI" | grep -c 'class="dlg-back"') 个"
+echo "$UI" | grep -q 'function bindEdgeSwipe()'; check "边缘滑动手势已绑定" $? "no swipe"
+echo "$UI" | grep -q 'topClosable()'; check "滑动手势覆盖所有子页/弹层" $? "no topClosable"
+echo "$UI" | grep -q 'orb-ripple\|orb-bars\|orb-breathe\|orb-think\|orb-speak\|@keyframes orb'; [ $? -ne 0 ]; check "精灵球动效已全部移除" $? "$(echo "$UI" | grep -o 'orb-ripple\|orb-bars\|@keyframes orb' | sort -u | tr '\n' ' ')"
+echo "$UI" | grep -q 'class="orb-eye l"'; check "AI 精灵有拟人五官（眼睛）" $? "no eye"
+echo "$UI" | grep -q 'class="orb-mouth"'; check "AI 精灵有拟人五官（嘴）" $? "no mouth"
+echo "$UI" | grep -q 'class="orb-cheek l"'; check "AI 精灵有腮红" $? "no cheek"
+echo "$UI" | grep -q 'onclick="openVoiceCfg()" aria-label="语音与多媒体设置"'; check "多媒体设置以小图标入驻模型管理页" $? "no mm icon"
+echo "$UI" | grep -q 'id="btn-call-model"'; check "通话页模型选择按钮保留" $? "no call model btn"
+echo "$UI" | grep -q 'function sniffAudioType(buf)'; check "TTS 播放修复：嗅探音频 MIME" $? "no sniff"
+echo "$UI" | grep -q 'function playViaWebAudio(buf, mime)'; check "TTS 播放修复：Web Audio 兜底路径" $? "no webaudio fallback"
+SHARE=$(curl -s http://127.0.0.1:8787/s)
+echo "$SHARE" | grep -q 'id="back-btn"'; check "分享落地页有回退按钮" $? "no share back btn"
+
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

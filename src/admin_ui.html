@@ -47,6 +47,8 @@
   /* 侧栏：桌面固定 / 移动端抽屉 */
   #sidebar { position: fixed; inset: 0 auto 0 0; width: var(--side-w); max-width: 84vw; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 40; transform: translateX(-100%); transition: transform .22s ease; }
   #sidebar.open { transform: none; }
+  #sidebar .sidebar-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+  #sidebar .sidebar-brand { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: .3px; }
   #scrim { position: fixed; inset: 0; background: #000a; z-index: 35; opacity: 0; pointer-events: none; transition: opacity .22s; }
   #scrim.show { opacity: 1; pointer-events: auto; }
   .new-chat { margin: 12px; width: calc(100% - 24px); padding: 10px; border-style: dashed; font-weight: 600; }
@@ -71,7 +73,6 @@
   .chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); }
   .chat-top { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--topbar); backdrop-filter: blur(8px); }
   #chat-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 38vw; }
-  .model-chip { border-radius: 999px; padding: 5px 14px; font-size: 13px; background: var(--panel2); max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
   /* 首页上的「模型管理」入口按钮：桌面带文字，移动端收缩为图标 */
   .entry-btn { border-radius: 999px; padding: 5px 14px; font-size: 13px; background: var(--panel2); font-weight: 600; flex: none; white-space: nowrap; }
   .entry-btn:hover { border-color: var(--acc); }
@@ -170,6 +171,10 @@
   /* 输入区 */
   .composer-wrap { padding: 8px 14px calc(10px + env(safe-area-inset-bottom, 0px)); }
   #composer { max-width: var(--chat-max); margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; background: var(--panel2); border: 1px solid var(--border); border-radius: 22px; padding: 8px 8px 8px 16px; }
+  /* 输入区模型选择：与 + 号同款圆形图标按钮 */
+  .composer-model { flex: none; width: 34px; height: 34px; border-radius: 50%; font-size: 17px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; margin-bottom: 2px; border: 1px solid var(--border); background: var(--panel); color: var(--dim); }
+  .composer-model:hover { background: var(--panel); color: var(--fg); }
+  .composer-model.active { color: var(--acc); border-color: var(--acc); }
   #composer:focus-within { border-color: var(--acc); }
   #input { background: transparent; border: none; resize: none; max-height: 40dvh; padding: 7px 0; line-height: 1.5; font-size: 16px; }
   #btn-send { flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: linear-gradient(135deg, var(--acc), #5a8bff); color: #fff; font-size: 17px; display: flex; align-items: center; justify-content: center; padding: 0; }
@@ -224,32 +229,45 @@
   .call-live:empty::before { content: "聆听中…"; color: var(--dim); }
   @keyframes live-blink { 50% { opacity: 0; } }
 
-  /* ---- 拟人化 AI 精灵球：四态（idle 呼吸 / listening 波纹 / thinking 脉冲 / speaking 声浪） ---- */
+  /* ---- 拟人化 AI 精灵：静态人脸（眼睛 / 眉毛 / 嘴巴 / 腮红），零动效 ----
+     早期版本用呼吸缩放、波纹、脉冲、声浪柱表达状态，但持续动画在通话时
+     抢注意力、也让人读不出「它在说什么」。现在改为**纯静态**：
+     状态只改变五官形状（用 CSS class 切换），不播放任何关键帧动画。 */
   .ai-orb { position: relative; width: 128px; height: 128px; flex: none; }
-  .orb-body { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 32% 28%, var(--acc2), var(--acc) 62%); box-shadow: 0 0 34px -6px var(--acc), inset 0 -8px 18px rgba(0,0,0,.18); animation: orb-breathe 3.4s ease-in-out infinite; }
-  /* 高光小点，让球更拟人 */
-  .orb-body::before { content: ""; position: absolute; left: 24%; top: 18%; width: 18%; height: 12%; border-radius: 50%; background: rgba(255,255,255,.75); filter: blur(2px); }
-  @keyframes orb-breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.055); } }
-  /* 聆听：双波纹外扩 */
-  .orb-ripple { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--acc2); opacity: 0; pointer-events: none; }
-  .ai-orb.listening .orb-ripple { animation: orb-ripple 1.7s ease-out infinite; }
-  .ai-orb.listening .orb-ripple.r2 { animation-delay: .85s; }
-  @keyframes orb-ripple { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.75); opacity: 0; } }
-  /* 思考：球体快速微颤 + 边缘提亮 */
-  .ai-orb.thinking .orb-body { animation: orb-think 1.1s ease-in-out infinite; box-shadow: 0 0 44px -2px var(--acc2), inset 0 -8px 18px rgba(0,0,0,.18); }
-  @keyframes orb-think { 0%,100% { transform: scale(.965); } 50% { transform: scale(1.035); } }
-  /* 播报：球内声浪柱 */
-  .orb-bars { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 7px; }
-  .orb-bars span { width: 6px; height: 34%; border-radius: 3px; background: rgba(255,255,255,.92); }
-  .ai-orb.speaking .orb-bars { display: flex; }
-  .ai-orb.speaking .orb-body { animation: orb-speak 1.4s ease-in-out infinite; }
-  .ai-orb.speaking .orb-bars span { animation: orb-bar .62s ease-in-out infinite; }
-  .ai-orb.speaking .orb-bars span:nth-child(1) { animation-delay: 0s; }
-  .ai-orb.speaking .orb-bars span:nth-child(2) { animation-delay: .16s; }
-  .ai-orb.speaking .orb-bars span:nth-child(3) { animation-delay: .32s; }
-  .ai-orb.speaking .orb-bars span:nth-child(4) { animation-delay: .48s; }
-  @keyframes orb-speak { 0%,100% { transform: scale(1.02); } 50% { transform: scale(1.07); } }
-  @keyframes orb-bar { 0%,100% { height: 26%; } 50% { height: 78%; } }
+  .orb-body { position: absolute; inset: 0; border-radius: 46% 46% 44% 44% / 42% 42% 52% 52%; background: linear-gradient(160deg, var(--acc2), var(--acc) 70%); box-shadow: 0 6px 22px -8px var(--acc), inset 0 -10px 20px rgba(0,0,0,.2); }
+  /* 头顶小呆毛 */
+  .orb-hair { position: absolute; left: 50%; top: -9px; width: 16px; height: 16px; margin-left: -8px; border-radius: 60% 60% 40% 40%; background: var(--acc2); transform: rotate(-14deg); }
+  /* 眼睛：默认圆点 */
+  .orb-eye { position: absolute; top: 46px; width: 12px; height: 14px; background: #fff; border-radius: 50%; }
+  .orb-eye.l { left: 34px; }
+  .orb-eye.r { right: 34px; }
+  .orb-pupil { position: absolute; top: 50px; width: 6px; height: 7px; background: #1b2233; border-radius: 50%; }
+  .orb-pupil.l { left: 37px; }
+  .orb-pupil.r { right: 37px; }
+  /* 眉毛 */
+  .orb-brow { position: absolute; top: 36px; width: 14px; height: 2.5px; background: rgba(20,26,40,.62); border-radius: 2px; }
+  .orb-brow.l { left: 33px; transform: rotate(-8deg); }
+  .orb-brow.r { right: 33px; transform: rotate(8deg); }
+  /* 嘴巴：默认微笑（一条弧） */
+  .orb-mouth { position: absolute; left: 50%; top: 74px; width: 26px; height: 13px; margin-left: -13px; border: 3px solid rgba(20,26,40,.68); border-top: none; border-radius: 0 0 15px 15px; }
+  /* 腮红 */
+  .orb-cheek { position: absolute; top: 70px; width: 13px; height: 7px; background: rgba(255,120,140,.4); border-radius: 50%; }
+  .orb-cheek.l { left: 26px; }
+  .orb-cheek.r { right: 26px; }
+
+  /* ---- 状态 = 静态五官变化（无任何 animation） ---- */
+  /* 聆听：眼睛睁大、嘴微张 */
+  .ai-orb.listening .orb-eye { height: 17px; }
+  .ai-orb.listening .orb-mouth { width: 14px; height: 14px; margin-left: -7px; border: 3px solid rgba(20,26,40,.68); border-radius: 50%; }
+  /* 思考：眼睛半闭（像眯眼想）、嘴抿平、眉毛一高一低 */
+  .ai-orb.thinking .orb-eye { height: 5px; top: 50px; border-radius: 3px; }
+  .ai-orb.thinking .orb-pupil { display: none; }
+  .ai-orb.thinking .orb-mouth { width: 20px; height: 0; margin-left: -10px; border-bottom: 3px solid rgba(20,26,40,.68); border-radius: 0; }
+  .ai-orb.thinking .orb-brow.l { transform: rotate(-16deg); }
+  .ai-orb.thinking .orb-brow.r { transform: rotate(6deg) translateY(3px); }
+  /* 播报：嘴张开成椭圆（静态张开，不做声浪柱动画） */
+  .ai-orb.speaking .orb-mouth { width: 20px; height: 22px; margin-left: -10px; top: 70px; border: 3px solid rgba(20,26,40,.68); border-radius: 50%; background: rgba(20,26,40,.18); }
+  .ai-orb.speaking .orb-eye { height: 11px; }
   .call-log { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 12px; background: var(--bg2); padding: 12px; font-size: 13px; margin: 10px 0; }
   .call-line { margin-bottom: 10px; line-height: 1.55; overflow-wrap: anywhere; }
   .call-line .who { display: inline-block; font-size: 10px; border-radius: 4px; padding: 0 5px; margin-right: 6px; vertical-align: 1px; }
@@ -369,6 +387,11 @@
   dialog[open] { animation: dlgIn .2s ease-out; }
   @keyframes dlgIn { from { transform: translateY(10px); opacity: .5; } }
   dialog h3 { margin-bottom: 12px; }
+  /* 所有对话框左上角的回退按钮（与页面左上角的 ← 一致） */
+  dialog { position: relative; }
+  .dlg-back { position: absolute; left: 10px; top: 10px; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg2); color: var(--txt); font-size: 15px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .dlg-back:hover { border-color: var(--acc); color: var(--acc); }
+  dialog h3 { padding-left: 38px; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .form-grid .full { grid-column: 1 / -1; }
   .form-grid label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 4px; }
@@ -387,6 +410,25 @@
   .vg-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .vg-status { font-size: 12px; color: var(--dim); line-height: 1.7; border-top: 1px dashed var(--border); padding-top: 10px; }
   .vg-status b { color: var(--txt); }
+  /* 语音与多媒体设置的两块（音频模型 / 图片视频模型） */
+  .vg-block { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg2); }
+  .vg-block-ttl { font-size: 13px; font-weight: 700; color: var(--fg); display: flex; align-items: center; gap: 6px; }
+  .vg-block-ttl::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .vg-block .vg-status { border-top: none; padding-top: 0; }
+  /* 模型管理页的音频 / 图片视频两块 */
+  .mm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .mm-grid { grid-template-columns: 1fr; } }
+  .mm-sec { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: var(--bg2); display: flex; flex-direction: column; gap: 10px; }
+  .mm-sec-ttl { font-size: 13px; font-weight: 700; color: var(--fg); }
+  /* 积分榜表格 */
+  .pts-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .pts-table th, .pts-table td { border-bottom: 1px solid var(--border); padding: 7px 8px; text-align: right; white-space: nowrap; }
+  .pts-table th:first-child, .pts-table td:first-child { text-align: left; }
+  .pts-table th { color: var(--dim); font-weight: 500; font-size: 12px; }
+  .pts-table td.name { font-weight: 600; }
+  .pts-score { font-weight: 700; color: var(--acc); }
+  .pts-neg { color: var(--bad); }
+  .pts-rank { color: var(--dim); width: 28px; }
 
   #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; z-index: 60; width: min(92vw, 420px); pointer-events: none; }
   /* toast 是纯通知：绝不拦截点击（#toast 容器 pointer-events:none，子元素继承）。
@@ -404,10 +446,6 @@
     .form-grid { grid-template-columns: 1fr; }
     .ch-grid { grid-template-columns: 1fr; }
     #chat-title { max-width: 22vw; font-size: 13px; }
-    .model-chip { max-width: 30vw; padding: 4px 10px; font-size: 12px; }
-    /* 移动端顶栏的 ⚙ 入口：与 ＋ / 🌙 一致的图标按钮尺寸（桌面整条隐藏） */
-    #btn-models-top { border: none; background: transparent; font-size: 18px; padding: 4px 8px; min-height: 36px; min-width: 36px; border-radius: 8px; flex: none; }
-    #btn-models-top:hover { background: var(--panel2); }
     dialog { width: 100%; max-width: none; margin: auto 0 0; border-radius: 18px 18px 0 0; padding: 14px 16px calc(16px + env(safe-area-inset-bottom, 0px)); }
     dialog::before { content: ""; display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--border); margin: 0 auto 10px; }
     dialog[open] { animation: sheetUp .24s ease-out; }
@@ -418,9 +456,12 @@
   }
   /* ================= 桌面端（>900px） ================= */
   @media (min-width: 901px) {
-    #sidebar { position: static; transform: none; }
-    /* 入口收敛：桌面侧栏常驻「＋ 新对话 / ⚙ 模型管理」，顶栏只留主题与模型选择 */
-    #btn-newchat, #btn-models-top { display: none; }
+    /* 侧栏提到 body 层后改为固定定位常驻，内容区整体右移让位 */
+    #sidebar { position: fixed; transform: none; border-right: 1px solid var(--border); }
+    #view-chat, #view-models { margin-left: var(--side-w); }
+    #view-chat { width: calc(100% - var(--side-w)); }
+    /* 入口收敛：桌面侧栏常驻，顶栏只留主题 + 新建会话 */
+    #btn-newchat { display: none; }
     #scrim { display: none; }
     #btn-menu { display: none; }
   }
@@ -429,34 +470,39 @@
 <body>
 
 <!-- ==================== 对话首页 ==================== -->
-<div id="view-chat" class="chat-shell">
-  <aside id="sidebar">
-    <button class="new-chat" onclick="newConvo()">＋ 新对话</button>
-    <div class="convo-search">
-      <input id="convo-search" type="search" placeholder="🔍 搜索会话（标题 / 内容）…" autocomplete="off">
-      <div id="convo-hit-n" class="convo-hit-n" hidden></div>
-    </div>
-    <div id="convo-list"></div>
-    <div class="sidebar-foot">
-      <button onclick="navigate('models')">⚙ 模型管理</button>
-      <button onclick="clearAllConvos()">🗑 清空全部会话</button>
-      <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">…</span></div>
-    </div>
-  </aside>
-  <div id="scrim" onclick="closeSidebar()"></div>
+<!-- ==================== 全局侧栏（所有子页共用） ==================== -->
+<aside id="sidebar">
+  <div class="sidebar-top">
+    <button class="icon-btn" onclick="closeSidebar()" aria-label="关闭侧栏" title="关闭侧栏（也可用左滑手势）">✕</button>
+    <span class="sidebar-brand">WASM 网关</span>
+  </div>
+  <button class="new-chat" onclick="newConvo()">＋ 新对话</button>
+  <div class="convo-search">
+    <input id="convo-search" type="search" placeholder="🔍 搜索会话（标题 / 内容）…" autocomplete="off">
+    <div id="convo-hit-n" class="convo-hit-n" hidden></div>
+  </div>
+  <div id="convo-list"></div>
+  <div class="sidebar-foot">
+    <button onclick="navigate('chat')">💬 对话首页</button>
+    <button onclick="navigate('models')">⚙ 模型管理</button>
+    <button onclick="openVoiceCfg()">🎛 语音与多媒体设置</button>
+    <button onclick="clearAllConvos()">🗑 清空全部会话</button>
+    <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">…</span></div>
+  </div>
+</aside>
+<div id="scrim" onclick="closeSidebar()"></div>
 
+<!-- ==================== 对话首页 ==================== -->
+<div id="view-chat" class="chat-shell">
   <main class="chat-main">
     <header class="chat-top">
-      <button class="icon-btn" id="btn-menu" onclick="openSidebar()" aria-label="菜单">☰</button>
+      <button class="icon-btn" id="btn-menu" onclick="openSidebar()" aria-label="菜单" title="侧栏（左缘右滑打开）">☰</button>
       <span id="chat-title">新对话</span>
       <div class="spacer"></div>
-      <!-- 移动端快捷入口（桌面侧栏常驻同功能，顶栏隐藏，见 CSS） -->
-      <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新对话" title="新对话">＋</button>
-      <button class="entry-btn" id="btn-models-top" onclick="navigate('models')" title="模型管理" aria-label="模型管理">⚙</button>
+      <!-- 顶栏只留「新建会话」+ 通话 + 主题；模型选择与模型/语音设置都下沉到输入区与侧栏 -->
+      <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新建会话" title="新建会话">＋</button>
       <button class="icon-btn" id="btn-call" onclick="openCall()" aria-label="语音通话" title="语音通话（按住说话，AI 语音回答）">📞</button>
-      <button class="icon-btn" id="btn-voice-cfg" onclick="openVoiceCfg()" aria-label="语音设置" title="语音设置（TTS/STT 策略与兜底）">🎛</button>
       <button class="icon-btn" id="btn-theme" onclick="toggleTheme()" aria-label="切换明暗主题" title="明暗切换">🌙</button>
-      <button class="model-chip" id="btn-model" onclick="openModelPicker()">…</button>
     </header>
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
     <div class="composer-wrap">
@@ -464,6 +510,7 @@
       <div id="composer">
         <button id="btn-attach" type="button" onclick="pickFiles()" aria-label="添加附件" title="照片 / 视频 / 文件">+</button>
         <button id="btn-voice" type="button" aria-label="长按发语音" title="长按发语音">🎙</button>
+        <button id="btn-model" class="composer-model" onclick="openModelPicker()" aria-label="选择模型" title="选择模型（按积分排序）">⋯</button>
         <textarea id="input" rows="1" placeholder="给 AI 发消息…（Enter 发送 / Shift+Enter 换行）"></textarea>
         <button id="btn-send" onclick="sendOrStop()" aria-label="发送">↑</button>
       </div>
@@ -481,6 +528,9 @@
     <div id="call-overlay" hidden>
       <div class="call-panel">
         <div class="call-top">
+          <div class="call-top-actions">
+            <button class="icon-btn" onclick="endCall()" aria-label="返回" title="返回（挂断并关闭通话页）">←</button>
+          </div>
           <div class="call-ttl">📞 语音通话</div>
           <div class="call-top-actions">
             <button class="call-model-btn" id="btn-call-model" onclick="openCallModelPicker()" title="切换通话模型">自动 ▾</button>
@@ -490,10 +540,18 @@
         </div>
         <div class="call-stage">
           <div class="ai-orb" id="ai-orb">
-            <div class="orb-ripple"></div>
-            <div class="orb-ripple r2"></div>
-            <div class="orb-body"></div>
-            <div class="orb-bars"><span></span><span></span><span></span><span></span></div>
+            <div class="orb-body">
+              <div class="orb-hair"></div>
+              <div class="orb-brow l"></div>
+              <div class="orb-brow r"></div>
+              <div class="orb-eye l"></div>
+              <div class="orb-eye r"></div>
+              <div class="orb-pupil l"></div>
+              <div class="orb-pupil r"></div>
+              <div class="orb-cheek l"></div>
+              <div class="orb-cheek r"></div>
+              <div class="orb-mouth"></div>
+            </div>
           </div>
           <div class="call-status" id="call-status">按住下方按钮说话，松开发送</div>
           <div class="call-live" id="call-live" hidden></div>
@@ -509,12 +567,14 @@
 <!-- ==================== 模型管理（二级子页） ==================== -->
 <div id="view-models" hidden>
   <header class="mgmt-top">
-    <button class="icon-btn" onclick="navigate('chat')" aria-label="返回对话">←</button>
+    <button class="icon-btn" onclick="navigate('chat')" aria-label="返回上一页" title="返回上一页">←</button>
+    <button class="icon-btn" onclick="openSidebar()" aria-label="侧栏" title="侧栏（左缘右滑打开）">☰</button>
     <div>
       <div class="ttl">模型管理</div>
       <div class="sub">资源管理 · 智能路由 · 国内优先</div>
     </div>
     <div class="spacer"></div>
+    <button class="icon-btn" onclick="openVoiceCfg()" aria-label="语音与多媒体设置" title="语音与多媒体设置（音频模型 / 图片视频模型）">🎛</button>
     <span class="badge" id="store-badge">store: -</span>
     <button onclick="loadAll()">刷新</button>
   </header>
@@ -574,6 +634,53 @@
       <div class="hint">Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。路由规则：priority 大者优先，冷却中的模型/渠道自动跳过；模型出错自动更换同能力模型。</div>
     </div>
 
+    <div class="card" id="points-card">
+      <h2>模型积分榜 <span class="muted" id="points-note">个人使用数据（本机）</span></h2>
+      <div class="hint" style="margin-bottom:10px">
+        积分规则：<b>每次模型选择 +1</b> · <b>模型每使用一次 +1</b> · <b>每分享一次 +10</b> · <b>每次模型降权 −20</b>。
+        模型选择器按积分<b>倒序</b>排列（分高的排前面），「自动」条目同样计分参与排序。
+        数据存在本浏览器 localStorage（个人偏好，不写入共享账本）。
+      </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <button onclick="renderPoints()">刷新积分榜</button>
+        <div class="spacer"></div>
+        <button onclick="resetPoints()">清空积分</button>
+      </div>
+      <div id="points-table"><div class="empty">加载中…</div></div>
+    </div>
+
+    <div class="card" id="mm-card">
+      <h2>语音与多媒体模型 <span class="muted">音频 / 图片视频 两块独立配置</span></h2>
+      <div class="hint" style="margin-bottom:10px">
+        <b>音频块</b>：转写（STT）与播音（TTS）各选一个模型，留空则网关按能力自动选路。
+        <b>图片视频块</b>：视觉与视频各选一个模型，逻辑与音频块一致 —— 留空即自动，
+        选中则带图片/视频的消息固定走该模型。点右上角 🎛 可打开完整设置。
+      </div>
+      <div class="mm-grid">
+        <div class="mm-sec">
+          <div class="mm-sec-ttl">🎧 音频模型</div>
+          <div class="vg-row"><label>转写 STT</label><select id="mg-stt-model"><option value="">自动</option></select></div>
+          <div class="vg-row"><label>播音 TTS</label><select id="mg-tts-model"><option value="">自动</option></select></div>
+        </div>
+        <div class="mm-sec">
+          <div class="mm-sec-ttl">🖼 图片视频模型</div>
+          <div class="vg-row"><label>视觉</label><select id="mg-vision-model"><option value="">自动</option></select></div>
+          <div class="vg-row"><label>视频</label><select id="mg-video-model"><option value="">跟随视觉</option></select></div>
+          <div class="vg-row"><label>范围</label>
+            <select id="mg-mm-scope">
+              <option value="attach">仅带附件的消息</option>
+              <option value="always">所有消息</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="toolbar" style="margin-top:10px">
+        <button class="primary" onclick="saveMgmtMm()">保存多媒体设置</button>
+        <div class="spacer"></div>
+        <span class="muted" id="mg-mm-hint"></span>
+      </div>
+    </div>
+
     <div class="card" id="usage-card">
       <h2>用量与成本 <span class="muted" id="usage-note">网关自身逐请求记账</span></h2>
       <div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
@@ -631,6 +738,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 
 <!-- 分享面板（微信 / 复制链接 / 二维码 / 系统分享） -->
 <dialog id="share-dlg">
+  <button class="dlg-back" onclick="shareDlg.close()" aria-label="返回" title="返回">←</button>
   <h3>分享这条回答</h3>
   <p class="dlg-sub">内容压缩后放进链接本身（服务端零存储、阅后即焚式分享）。微信里：点右上角 ⋮ → 发送给朋友；或复制链接粘贴到聊天。</p>
   <input id="share-url" readonly onclick="this.select()" title="点击全选">
@@ -647,6 +755,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 </dialog>
 
 <!-- ==================== 对话框 ==================== --><dialog id="channel-dlg">
+  <button class="dlg-back" onclick="channelDlg.close()" aria-label="返回" title="返回">←</button>
   <h3 id="drawer-title">登记新资源</h3>
   <div class="form-grid">
     <div><label>Provider *</label><input id="f-provider" placeholder="zhipu / siliconflow / moonshot …"></div>
@@ -674,6 +783,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 </dialog>
 
 <dialog id="key-dlg">
+  <button class="dlg-back" onclick="keyDlg.close()" aria-label="返回" title="返回">←</button>
   <h3>轮换 API Key</h3>
   <p class="muted" style="font-size:13px;margin-bottom:10px">当前：<span class="mono" id="key-current"></span></p>
   <input id="key-new" placeholder="粘贴新 Key（留空保存 = 不改变）" autocomplete="off">
@@ -684,6 +794,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 </dialog>
 
 <dialog id="model-dlg">
+  <button class="dlg-back" onclick="modelDlg.close()" aria-label="返回" title="返回">←</button>
   <h3>选择模型</h3>
   <input id="model-custom" placeholder="自定义模型名（回车确认）…" style="margin-bottom:10px">
   <div id="model-list"></div>
@@ -691,9 +802,19 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 </dialog>
 
 <dialog id="voice-dlg">
-  <h3>🎛 语音设置</h3>
-  <p class="dlg-sub">TTS / STT 均为三层策略：网关 → 自定义端点 → 浏览器兜底，任一层失败自动降级</p>
-  <div class="vg">
+  <button class="dlg-back" onclick="voiceDlg.close()" aria-label="返回" title="返回">←</button>
+  <h3>🎛 语音与多媒体设置</h3>
+  <p class="dlg-sub">两块独立配置：<b>音频模型</b>（转写 / 播音）与<b>图片视频模型</b>（看图看片），选中的模型会真正用于对应请求</p>
+
+  <!-- ============ 第一块：音频模型 ============ -->
+  <div class="vg-block">
+    <div class="vg-block-ttl">🎧 音频模型</div>
+    <div class="vg-row"><label>转写模型 STT</label>
+      <select id="vg-stt-model"><option value="">自动（按能力自动选路）</option></select>
+    </div>
+    <div class="vg-row"><label>播音模型 TTS</label>
+      <select id="vg-tts-model"><option value="">自动（按能力自动选路）</option></select>
+    </div>
     <div class="vg-row"><label>TTS 模式</label>
       <select id="vg-tts-mode">
         <option value="auto">自动（网关优先，浏览器兜底）</option>
@@ -724,8 +845,27 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
         <option value="browser">仅浏览器语音识别</option>
       </select>
     </div>
-    <div class="vg-row vg-status" id="vg-status"></div>
   </div>
+
+  <!-- ============ 第二块：图片视频模型（逻辑与音频块一致） ============ -->
+  <div class="vg-block">
+    <div class="vg-block-ttl">🖼 图片视频模型</div>
+    <div class="vg-row"><label>视觉模型</label>
+      <select id="vg-vision-model"><option value="">自动（按能力自动选路）</option></select>
+    </div>
+    <div class="vg-row"><label>视频模型</label>
+      <select id="vg-video-model"><option value="">跟随视觉模型</option></select>
+    </div>
+    <div class="vg-row"><label>适用范围</label>
+      <select id="vg-mm-scope">
+        <option value="attach">仅当消息里带图片/视频附件时使用</option>
+        <option value="always">所有消息都用（会覆盖聊天页选中的模型）</option>
+      </select>
+    </div>
+    <div class="vg-row vg-status" id="vg-mm-status"></div>
+  </div>
+
+  <div class="vg-row vg-status" id="vg-status"></div>
   <div class="dlg-actions">
     <button class="primary" id="vg-save">保存</button>
     <button onclick="voiceDlg.close()">关闭</button>
@@ -733,6 +873,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 </dialog>
 
 <dialog id="diag-dlg">
+  <button class="dlg-back" onclick="diagDlg.close()" aria-label="返回" title="返回">←</button>
   <h3>部署自检</h3>
   <pre id="diag-body" class="mono" style="background:#0d1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;white-space:pre-wrap">加载中…</pre>
   <div class="dlg-actions"><button onclick="diagDlg.close()">关闭</button></div>
@@ -823,8 +964,60 @@ function applyRoute() {
 }
 
 // ================= 侧栏 =================
+// 所有子页面（模型管理 / 分享页 / 各类对话框）共用这一套侧栏开合：
+// · 遮罩点击关闭
+// · 从左边缘右滑打开、侧栏上左滑关闭（触摸手势）
+// · Esc 关闭
 function openSidebar() { $("sidebar").classList.add("open"); $("scrim").classList.add("show"); document.body.classList.add("nav-open"); }
 function closeSidebar() { $("sidebar").classList.remove("open"); $("scrim").classList.remove("show"); document.body.classList.remove("nav-open"); }
+function toggleSidebar() { $("sidebar").classList.contains("open") ? closeSidebar() : openSidebar(); }
+
+/// 边缘滑动手势：从屏幕左缘 24px 内右滑 → 打开侧栏；侧栏上左滑 → 关闭。
+/// 用 pointer 事件统一处理鼠标拖拽与触摸滑动（移动端主流做法）。
+/// 统一规则：**所有子页/弹层都能左滑关闭**——侧栏、对话框、通话页通用。
+(function bindEdgeSwipe() {
+  let startX = 0, startY = 0, tracking = false, fromSidebar = false;
+  const EDGE = 24, SLIDE = 56;
+  // 当前最上层的可关闭层（对话框 > 通话页 > 侧栏）
+  function topClosable() {
+    const dlgs = Array.from(document.querySelectorAll("dialog[open]"));
+    if (dlgs.length) return { kind: "dialog", el: dlgs[dlgs.length - 1] };
+    const ov = $("call-overlay");
+    if (ov && !ov.hidden) return { kind: "call", el: ov };
+    return null;
+  }
+  document.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const sb = $("sidebar");
+    const inSidebar = !!(e.target && e.target.closest && e.target.closest("#sidebar"));
+    // 打开态：只在侧栏本体上起手才可能触发关闭
+    if (sb.classList.contains("open")) {
+      if (!inSidebar) { tracking = false; return; }
+      fromSidebar = true;
+    } else {
+      // 关闭态：只能从左边缘起手
+      if (e.clientX > EDGE) { tracking = false; return; }
+      fromSidebar = false;
+    }
+    startX = e.clientX; startY = e.clientY; tracking = true;
+  }, { passive: true });
+  document.addEventListener("pointerup", (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if (Math.abs(dy) > Math.abs(dx)) return; // 纵向为主 → 不是滑动手势
+    if (fromSidebar && dx < -SLIDE) { closeSidebar(); return; }
+    if (fromSidebar || dx <= SLIDE) return;
+    // 右滑：先关最上层的弹层（若它在屏幕左侧区域被扫过），否则开侧栏
+    const top = topClosable();
+    if (top) {
+      if (top.kind === "dialog") { try { top.el.close(); } catch {} }
+      else endCall();
+      return;
+    }
+    openSidebar();
+  }, { passive: true });
+})();
 
 // ================= 会话存储（IndexedDB） =================
 // v0.9.0：从 localStorage 迁移到 IndexedDB。localStorage 的三个硬伤：
@@ -957,6 +1150,101 @@ let currentId = null;       // null = 新对话（还没落库的空白态）
 let curModel = localStorage.getItem("gw_model") || "";
 let streaming = false, aborter = null;
 let streamGen = 0;          // 流代号：新会话/新发送抢占时，旧流的 finally 只落库不碰 UI
+
+// ================= 模型积分账本（个人使用数据系统） =================
+// 用户规则：
+//   每次模型选择 +1 · 每次模型降权 -20 · 模型每使用一次 +1 · 每分享一次 +10
+// 积分决定模型选择器的排序（倒序：分高的排前面），「自动」也作为一个
+// 独立条目参与同样的计分与排序（自动模式被选中同样 +1，被实际使用也 +1）。
+//
+// 存储位置：localStorage（浏览器级「个人使用数据」）。选 localStorage 而不
+// 落 Durable Object 是刻意的——共享账本（DO）是多人的，而积分是**个人**
+// 使用偏好，写进共享账本会把 A 的偏好混进 B 的排序里。
+//
+// 数据结构：
+//   { v: 1, models: { "<key>": { sel, use, share, degrade, score } } }
+// key 用**模型名**（与 x-gateway-model 响应头同源），「自动」固定用 AUTO_KEY。
+// 用模型名而非「渠道::模型」：选择、命中、降权三处拿到的都是模型名，
+// 统一成一种 key 才能让「选了它 → 用了它 → 降权它」记在同一条目上。
+// 同名模型跨渠道共用一条积分——对「个人偏好排序」这个用途来说反而更直观。
+const POINTS_KEY = "gw_model_points_v1";
+const AUTO_KEY = "__auto__";
+// 计分键与条目字段一一对应：sel 选择 / use 使用 / share 分享 / degrade 降权
+const POINTS_RULE = { sel: 1, use: 1, share: 10, degrade: -20 };
+
+const Points = {
+  data: { v: 1, models: {} },
+  load() {
+    try {
+      const raw = localStorage.getItem(POINTS_KEY);
+      if (raw) {
+        const j = JSON.parse(raw);
+        if (j && j.models) this.data = { v: 1, models: j.models };
+      }
+    } catch { /* 损坏则重置为空账本 */ }
+    return this.data;
+  },
+  save() {
+    try { localStorage.setItem(POINTS_KEY, JSON.stringify(this.data)); } catch { /* 配额满忽略 */ }
+  },
+  /// 取（并初始化）某条目的计数。key 传 null/空 = 自动条目。
+  entry(key) {
+    const k = key || AUTO_KEY;
+    if (!this.data.models[k]) this.data.models[k] = { sel: 0, use: 0, share: 0, degrade: 0, score: 0 };
+    return this.data.models[k];
+  },
+  /// 记一次事件并重算积分。
+  /// kind: sel 选择 | use 使用 | share 分享 | degrade 降权
+  add(kind, key, n = 1) {
+    if (!(kind in POINTS_RULE)) return;
+    const e = this.entry(key);
+    e[kind] = (e[kind] || 0) + n;
+    this.recalc(key);
+    this.save();
+  },
+  /// 积分 = 选择×1 + 使用×1 + 分享×10 + 降权×(−20)
+  recalc(key) {
+    const k = key || AUTO_KEY;
+    const e = this.entry(k);
+    e.score =
+      (e.sel || 0) * POINTS_RULE.sel +
+      (e.use || 0) * POINTS_RULE.use +
+      (e.share || 0) * POINTS_RULE.share +
+      (e.degrade || 0) * POINTS_RULE.degrade;
+    return e.score;
+  },
+  score(key) { return this.entry(key).score || 0; },
+  /// 全部条目（按积分倒序）。并列时按名称排，保证顺序稳定可预期。
+  list() {
+    return Object.keys(this.data.models)
+      .map(k => ({ key: k, ...this.data.models[k] }))
+      .sort((a, b) => (b.score - a.score) || String(a.key).localeCompare(String(b.key)));
+  },
+  reset() { this.data = { v: 1, models: {} }; this.save(); },
+};
+Points.load();
+
+/// 从响应头结算积分：
+///   · 使用 +1 —— 命中模型（x-gateway-model）；若是「自动」模式，自动条目也 +1
+///   · 降权 −20 —— 本次被降权的模型（x-gateway-degraded，逗号分隔的模型名）
+/// 前端只在这里结算「使用/降权」，「选择/分享」分别由 pickModel / shareMsg 结算。
+function applyRoutePoints(resp, requestedModel) {
+  try {
+    const hit = decodeHeader(resp.headers.get("x-gateway-model"));
+    if (hit) {
+      Points.add("use", hit);
+      // 自动模式下，实际命中的是网关选的模型，但「自动」这个选项本身也被
+      // 使用了一次 —— 同样计 +1，排序时自动条目才不会永远垫底。
+      if (!requestedModel) Points.add("use", AUTO_KEY);
+    }
+    const deg = decodeHeader(resp.headers.get("x-gateway-degraded"));
+    if (deg) {
+      for (const m of deg.split(",").map(s => s.trim()).filter(Boolean)) {
+        Points.add("degrade", m);
+      }
+    }
+  } catch (e) { /* 积分记账失败不能影响主流程 */ }
+}
 
 function curConvo() { return convos.find(c => c.id === currentId) || null; }
 /// 新对话：若旧流还在跑，先干净收尾（否则发送键还是旧流的「停止键」，
@@ -1228,6 +1516,14 @@ function msgTextOf(el) {
   const msg = el.closest(".msg");
   return (msg ? msg.querySelector(".content") : null)?.innerText || "";
 }
+/// 取该条回答实际命中的模型名（分享 +10 归给它；老消息没记则回落到当前选择）
+function msgModelOf(el) {
+  const box = el.closest(".msg");
+  const idx = box ? parseInt(box.dataset.idx, 10) : NaN;
+  const c = curConvo();
+  const m = (c && !isNaN(idx)) ? c.msgs[idx] : null;
+  return (m && m.model) || curModel || "";
+}
 function copyMsg(btn) {
   const text = msgTextOf(btn);
   navigator.clipboard.writeText(text).then(() => toast("已复制", "ok")).catch(() => toast("复制失败", "err"));
@@ -1283,6 +1579,8 @@ async function buildShareUrl(text) {
 async function shareMsg(btn) {
   const text = msgTextOf(btn);
   if (!text.trim()) { toast("没有可分享的内容", "err"); return; }
+  // 每次分享 +10 —— 归给这条回答实际命中的模型
+  Points.add("share", msgModelOf(btn) || AUTO_KEY);
   let url = null;
   try { url = await buildShareUrl(text); } catch { /* 压缩不可用：降级走纯文本 */ }
   if (url && navigator.share) {
@@ -1344,7 +1642,10 @@ function stopSpeak() { ttsStopAll(); }
 /// 请求 TTS 合成，返回音频 Blob（播音按钮与语音通话共用）
 async function ttsBlob(text) {
   const h = gwHeaders({ "Content-Type": "application/json" });
-  const resp = await fetch("/v1/audio/speech", { method: "POST", headers: h, body: JSON.stringify({ input: text.slice(0, 2000) }) });
+  const payload = { input: text.slice(0, 2000) };
+  // 语音与多媒体设置里选的播音模型（留空 = 网关按 tts 能力自动选路）
+  if (voiceCfg.ttsModel) payload.model = voiceCfg.ttsModel;
+  const resp = await fetch("/v1/audio/speech", { method: "POST", headers: h, body: JSON.stringify(payload) });
   if (!resp.ok) {
     const j = await resp.json().catch(() => ({}));
     throw new Error(j.error?.message || ("HTTP " + resp.status));
@@ -1472,7 +1773,13 @@ async function menuDelete() {
 function updateChatTop() {
   const c = curConvo();
   $("chat-title").textContent = c ? (c.title || "新对话") : "新对话";
-  $("btn-model").textContent = (curModel || "自动 · 选择模型") + " ▾";
+  // 模型选择已是输入区圆形图标按钮：文字用 title 承载，选中时高亮
+  const mb = $("btn-model");
+  if (mb) {
+    mb.textContent = "⋯";
+    mb.title = curModel ? ("当前模型：" + curModel) : "选择模型（自动 · 按积分排序）";
+    mb.classList.toggle("active", !!curModel);
+  }
 }
 function updateSendBtn() {
   const b = $("btn-send");
@@ -1568,12 +1875,19 @@ async function sendWith(text, atts) {
     .map(m => ({ role: m.role, content: buildApiContent(m) }));
   const body = { messages: history, stream: true };
   if (curModel) body.model = curModel;
+  // 图片视频块生效：带图片/视频附件（或历史上曾带过）时用选定的视觉/视频模型。
+  //  scope=attach（默认）只在真有附件时覆盖；scope=always 一律覆盖。
+  const mmModel = pickMmModel(attHasMedia(atts) || historyHasMedia(history));
+  if (mmModel) body.model = mmModel;
 
   try {
     const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
     const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: aborter.signal });
     asst.channel = decodeHeader(resp.headers.get("x-gateway-channel"));
     asst.attempts = decodeHeader(resp.headers.get("x-gateway-attempts"));
+    asst.model = decodeHeader(resp.headers.get("x-gateway-model"));
+    // 积分记账：使用 +1（命中的模型；自动模式下「自动」条目也 +1）、降权 −20
+    applyRoutePoints(resp, curModel);
     if (!resp.ok) {
       const j = await resp.json().catch(() => ({}));
       throw new Error(j.error?.message || ("HTTP " + resp.status));
@@ -1679,6 +1993,29 @@ function buildApiContent(m) {
   if (text) parts.push({ type: "text", text });
   for (const im of images) parts.push({ type: "image_url", image_url: { url: im.dataUrl } });
   return parts;
+}
+
+// ================= 图片视频模型（语音与多媒体设置 · 第二块） =================
+// 逻辑与音频块一致：选一个模型 → 该类请求就用它；留空 = 网关按能力自动选路。
+// 视频与图片常常由同一个视觉模型承接，所以「视频模型」默认跟随「视觉模型」。
+function pickMmModel(hasMedia) {
+  const scope = voiceCfg.mmScope || "attach";
+  if (scope === "attach" && !hasMedia) return "";
+  const hasVideo = !!voiceCfg.videoModel;
+  // 视频模型优先（更专精）；未设视频模型时用视觉模型
+  return hasVideo ? voiceCfg.videoModel : (voiceCfg.visionModel || "");
+}
+/// 本条消息是否带图片/视频附件
+function attHasMedia(atts) {
+  return (atts || []).some(a => a.kind === "image" || a.kind === "video");
+}
+/// 整段历史里是否出现过图片/视频（多模态上下文里只要有一张图就该走视觉模型）
+function historyHasMedia(history) {
+  return (history || []).some(m => {
+    const c = m && m.content;
+    if (Array.isArray(c)) return c.some(p => p && (p.type === "image_url" || p.type === "video_url"));
+    return false;
+  });
 }
 
 // ================= 语音（🎙 长按说话 → 转写 → 发送） =================
@@ -1836,6 +2173,8 @@ async function transcribeBlob(blob, name) {
   const nm = (wav.type || "").includes("wav") ? "audio.wav" : name;
   const fd = new FormData();
   fd.append("file", wav, nm);
+  // 语音与多媒体设置里选的转写模型（留空 = 网关按 stt 能力自动选路）
+  if (voiceCfg.sttModel) fd.append("model", voiceCfg.sttModel);
   const h = gwHeaders();
   const r = await fetch("/v1/audio/transcriptions", { method: "POST", headers: h, body: fd });
   const j = await r.json().catch(() => ({}));
@@ -1858,7 +2197,12 @@ async function transcribeBlob(blob, name) {
 const VoiceCfg = {
   KEY: "gw_voice_cfg",
   // callMode：通话交流模式——duplex 同时问答（播报中可抢话打断）/ half 一问一答（等 AI 说完）
-  def: { ttsMode: "auto", sttMode: "auto", callMode: "duplex", ttsVoice: "", ttsRate: 1.05, customTts: { url: "", key: "", model: "", voice: "" } },
+  // 音频块：sttModel / ttsModel；图片视频块：visionModel / videoModel / mmScope
+  def: {
+    ttsMode: "auto", sttMode: "auto", callMode: "duplex", ttsVoice: "", ttsRate: 1.05,
+    sttModel: "", ttsModel: "", visionModel: "", videoModel: "", mmScope: "attach",
+    customTts: { url: "", key: "", model: "", voice: "" },
+  },
   load() { try { return { ...this.def, ...(JSON.parse(localStorage.getItem(this.KEY) || "{}")) }; } catch { return { ...this.def }; } },
   save(c) { try { localStorage.setItem(this.KEY, JSON.stringify(c)); } catch {} },
 };
@@ -2046,6 +2390,12 @@ function openVoiceCfg() {
   $("vg-custom-voice").value = (c.customTts && c.customTts.voice) || "";
   $("vg-rate").value = c.ttsRate;
   $("vg-rate-v").textContent = Number(c.ttsRate).toFixed(2);
+  // 两块的能力下拉：音频（stt/tts）与图片视频（vision/video）
+  fillCapSelect("vg-stt-model", "stt", c.sttModel, "自动（按能力自动选路）");
+  fillCapSelect("vg-tts-model", "tts", c.ttsModel, "自动（按能力自动选路）");
+  fillCapSelect("vg-vision-model", "vision", c.visionModel, "自动（按能力自动选路）");
+  fillCapSelect("vg-video-model", "vision", c.videoModel, "跟随视觉模型");
+  $("vg-mm-scope").value = c.mmScope || "attach";
   refreshVoiceVoices();
   refreshVoiceStatus();
   voiceDlg.showModal();
@@ -2077,14 +2427,35 @@ function refreshVoiceStatus() {
   if (voiceCfg.sttMode !== "gateway") stt.push(BrowserStt.supported() ? "浏览器实时识别（零上传）" : "浏览器识别不可用");
   st.innerHTML = `<b>TTS 链</b>：${tts.join(" → ")}<br><b>STT 链</b>：${stt.join(" → ")}<br>` +
     `提示：自定义端点填 OpenAI 兼容的 /v1/audio/speech，客户自有 TTS 资源直接替换即可。`;
+
+  // 第二块：图片视频模型状态
+  const ms = $("vg-mm-status");
+  if (ms) {
+    const v = voiceCfg.visionModel || "（自动）";
+    const vd = voiceCfg.videoModel || "（跟随视觉模型）";
+    const scope = (voiceCfg.mmScope || "attach") === "attach"
+      ? "仅带图片/视频附件的消息用它"
+      : "所有消息都用它（覆盖聊天页所选模型）";
+    const caps = modelsByCap("vision").map(m => m.name);
+    ms.innerHTML = `<b>视觉模型</b>：${esc(v)}<br><b>视频模型</b>：${esc(vd)}<br><b>范围</b>：${esc(scope)}<br>` +
+      `<b>已登记视觉模型</b>：${caps.length ? esc(caps.join("、")) : "（暂无——去模型管理登记带 vision 能力的模型）"}`;
+  }
 }
 $("vg-rate").addEventListener("input", (e) => { $("vg-rate-v").textContent = Number(e.target.value).toFixed(2); });
 $("vg-save").addEventListener("click", () => {
   voiceCfg = {
+    ...voiceCfg,
     ttsMode: $("vg-tts-mode").value,
     sttMode: $("vg-stt-mode").value,
     ttsVoice: $("vg-browser-voice").value,
     ttsRate: Number($("vg-rate").value) || 1.05,
+    // 音频块
+    sttModel: $("vg-stt-model").value,
+    ttsModel: $("vg-tts-model").value,
+    // 图片视频块
+    visionModel: $("vg-vision-model").value,
+    videoModel: $("vg-video-model").value,
+    mmScope: $("vg-mm-scope").value,
     customTts: {
       url: $("vg-custom-url").value.trim(),
       key: $("vg-custom-key").value.trim(),
@@ -2095,7 +2466,7 @@ $("vg-save").addEventListener("click", () => {
   VoiceCfg.save(voiceCfg);
   BrowserTts.ready = false; // 音色/模式变化后下次重新加载与优选
   refreshVoiceStatus();
-  toast("语音设置已保存", "ok");
+  toast("语音与多媒体设置已保存", "ok");
   voiceDlg.close();
 });
 
@@ -2184,12 +2555,16 @@ const VoiceInput = {
 /// 在首个用户手势里同步调用：恢复 AudioContext、播 0.1s 静音再 pause
 /// （换取 iOS sticky media activation）、发空 utterance 唤醒语音引擎。
 let mediaUnlocked = false;
+let mediaCtx = null;   // 复用手势里创建的 AudioContext（Web Audio 播放要用）
 function unlockMedia() {
   if (mediaUnlocked) return;
   mediaUnlocked = true;
   try {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) { const ctx = new AC(); if (ctx.state === "suspended") ctx.resume().catch(() => {}); }
+    if (AC) {
+      mediaCtx = new AC();
+      if (mediaCtx.state === "suspended") mediaCtx.resume().catch(() => {});
+    }
   } catch {}
   try {
     const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=");
@@ -2280,8 +2655,11 @@ function toggleCallMode() {
 }
 function openCallModelPicker() {
   renderModelList(callModel, (m) => {
+    const changed = callModel !== m;
     callModel = m;
     try { localStorage.setItem("gw_call_model", m); } catch {}
+    // 通话页选模型同样是「一次模型选择」→ +1（与聊天页共用同一账本）
+    if (changed) Points.add("sel", m || AUTO_KEY);
     refreshCallModelBtn();
     modelDlg.close();
     if (callOpen) $("call-status").textContent = "已切换模型：" + (m || "自动") + "，按住按钮继续说话";
@@ -2526,14 +2904,79 @@ async function pumpTts() {
     flushTtsWaiters(); // 队列真正播空：唤醒 callAskStreaming 的 drain 等待
   }
 }
-function playCallBlob(blob) {
+/// 播放一个音频 Blob（通话播报 / 播音按钮共用）。
+///
+/// 两个真实踩过的坑，都在这里兜住：
+/// ① **MIME 不对 → 浏览器直接拒收**。上游 TTS 常回 `application/octet-stream`
+///    （或网关透传时丢了 content-type），此时 `new Audio(blobURL)` 的
+///    `onerror` 会立刻触发，表现为「模型不能播放」——但音频数据其实是好的。
+///    对策：先嗅探字节头（RIFF/WAVE → wav、OggS → ogg、ID3/0xFF → mp3、
+///    fLaC → flac），据此重建一个带正确 type 的 Blob。
+/// ② **自动播放策略拦截**。`a.play()` 在 iOS/微信里若不在用户手势栈内会
+///    抛 NotAllowedError。对策：先试 `<audio>`，被拒则改走 Web Audio
+///    （AudioContext 已在手势里 resume 过，不受自动播放限制）。
+function sniffAudioType(buf) {
+  const b = new Uint8Array(buf);
+  if (b.length < 4) return "";
+  const s = (i) => String.fromCharCode(b[i], b[i + 1], b[i + 2], b[i + 3]);
+  if (s(0) === "RIFF" && s(8) === "WAVE") return "audio/wav";
+  if (s(0) === "OggS") return "audio/ogg";
+  if (s(0) === "fLaC") return "audio/flac";
+  if (s(0) === "ID3" || (b[0] === 0xff && (b[1] & 0xe0) === 0xe0)) return "audio/mpeg";
+  return "";
+}
+/// 用 Web Audio 播放（自动播放策略下的兜底路径）。
+async function playViaWebAudio(buf, mime) {
+  if (!mediaCtx) throw new Error("无 AudioContext");
+  if (mediaCtx.state === "suspended") await mediaCtx.resume();
+  const ab = buf.slice(0);
+  const audioBuf = await new Promise((res, rej) => {
+    // decodeAudioData 有两种签名：回调式（老）与 Promise 式（新）
+    const p = mediaCtx.decodeAudioData(ab, res, rej);
+    if (p && typeof p.then === "function") p.then(res, rej);
+  });
+  const src = mediaCtx.createBufferSource();
+  src.buffer = audioBuf;
+  src.connect(mediaCtx.destination);
   return new Promise((resolve, reject) => {
-    const a = new Audio(URL.createObjectURL(blob));
+    src.onended = () => resolve();
+    src.onerror = (e) => reject(new Error("Web Audio 播放失败"));
+    try { src.start(); } catch (e) { reject(e); }
+  });
+}
+function playCallBlob(blob) {
+  return new Promise(async (resolve, reject) => {
+    if (!blob || !blob.size) { reject(new Error("音频为空")); return; }
+    let buf;
+    try { buf = await blob.arrayBuffer(); } catch (e) { reject(e); return; }
+    // ① 嗅探真实类型，修正 MIME
+    const sniffed = sniffAudioType(buf);
+    let type = (blob.type || "").split(";")[0].trim();
+    if (!type || type === "application/octet-stream" || type === "binary/octet-stream") {
+      type = sniffed || "audio/wav";
+    }
+    const fixed = sniffed && sniffed !== type ? new Blob([buf], { type: sniffed }) : blob;
+    const url = URL.createObjectURL(fixed);
+    const a = new Audio(url);
     ttsCur = a; ttsCurResolve = resolve;
-    const done = (err) => { if (ttsCur === a) { ttsCur = null; ttsCurResolve = null; } err ? reject(err) : resolve(); };
+    const cleanup = () => { try { URL.revokeObjectURL(url); } catch {} };
+    const done = (err) => {
+      if (ttsCur === a) { ttsCur = null; ttsCurResolve = null; }
+      cleanup();
+      err ? reject(err) : resolve();
+    };
     a.onended = () => done(null);
     a.onerror = () => done(new Error("播放失败"));
-    a.play().catch((e) => done(e));
+    // ② 先试 <audio>；被自动播放策略拒绝 → 改走 Web Audio
+    a.play().catch(async (e) => {
+      const notAllowed = e && (e.name === "NotAllowedError" || e.name === "AbortError");
+      if (notAllowed) {
+        try { await playViaWebAudio(buf, type); done(null); }
+        catch (e2) { done(new Error("播放失败：" + (e2 && e2.message ? e2.message : e.name || e))); }
+      } else {
+        done(new Error("播放失败：" + (e && e.name ? e.name : e)));
+      }
+    });
   });
 }
 /// TTS 上游报错的人类可读补充（旧版 glm-4-voice 打到合成端点的经典 1214）
@@ -2569,6 +3012,7 @@ async function chatStream(messages, model, handlers) {
   const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
   chatAbort = new AbortController(); // endCall 会 abort 它：挂断不必等上游把话说完
   const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: chatAbort.signal });
+  applyRoutePoints(resp, model); // 积分：使用 +1 / 降权 −20（与聊天页同一套账本）
   if (!resp.ok) {
     const j = await resp.json().catch(() => ({}));
     throw new Error(j.error?.message || ("HTTP " + resp.status));
@@ -2627,18 +3071,37 @@ function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
   const usable = usableChatChannels();
-  let html = `<div class="model-opt ${sel ? "" : "sel"}" onclick="modelPickCb('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div></div>`;
+  // 候选条目：自动 + 各渠道的模型。按**积分倒序**排（分高在前），
+  // 「自动」同样参与计分与排序——自动被选中/被使用都会累计积分。
+  const items = [{ key: AUTO_KEY, name: "", auto: true }];
   for (const c of usable) {
-    for (const m of (c.models || [])) {
-      html += `<div class="model-opt ${sel === m ? "sel" : ""}" onclick="modelPickCb('${esc(m)}')"><div><b>${esc(m)}</b></div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)}</span></div>`;
+    // 用 effModels 而非 c.models：渠道可能只登记了 models_meta（管理页精细配置），
+    // 此时 c.models 为空，直接读它会让这类模型在选择器里整个消失。
+    for (const m of effModels(c)) {
+      if (m.enabled === false) continue;
+      if (items.some(x => !x.auto && x.name === m.name)) continue; // 同名只列一次
+      items.push({ key: m.name, name: m.name, auto: false, ch: c });
     }
   }
+  items.forEach(it => { it.score = Points.score(it.key); });
+  items.sort((a, b) => (b.score - a.score) || (a.auto === b.auto ? 0 : a.auto ? -1 : 1) || String(a.name).localeCompare(String(b.name)));
+  const autoSel = sel ? "" : "sel";
+  let html = items.map(it => {
+    if (it.auto) {
+      return `<div class="model-opt ${autoSel}" onclick="modelPickCb('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div><span class="p">积分 ${it.score}</span></div>`;
+    }
+    const c = it.ch;
+    return `<div class="model-opt ${sel === it.name ? "sel" : ""}" onclick="modelPickCb('${esc(it.name)}')"><div><b>${esc(it.name)}</b></div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
+  }).join("");
   if (!usable.length) html += `<div class="empty">还没有可用渠道 —— 去「模型管理」登记资源并启用</div>`;
   $("model-list").innerHTML = html;
 }
 function pickModel(m) {
+  const changed = curModel !== m;
   curModel = m;
   try { localStorage.setItem("gw_model", m); } catch {}
+  // 每次模型选择 +1（自动条目同样计分）。只有真正换了模型才算「一次选择」。
+  if (changed) Points.add("sel", m || AUTO_KEY);
   updateChatTop();
   modelDlg.close();
 }
@@ -2659,6 +3122,8 @@ async function loadAll() {
     renderChannels();
     renderDeviceKeys();
     renderPresets(($("preset-search").value || "").trim());
+    renderPoints();       // 模型积分榜（个人使用数据）
+    renderMgmtMm();       // 音频 / 图片视频 两块的多媒体设置
     if (data.version) $("side-version").textContent = "v" + data.version;
   } catch (e) {
     $("store-badge").textContent = "store: error";
@@ -2811,6 +3276,37 @@ function effModels(c) {
     alt_kind: "", enabled: true, priority: 50, health: null,
   }));
 }
+/// 按能力（kind / alt_kind）列出可用模型，供「语音与多媒体设置」的下拉框使用。
+/// 与后端路由口径一致：主能力或次要能力命中即算该能力可用。
+function modelsByCap(cap) {
+  const out = [];
+  for (const c of CHANNELS) {
+    if (!c.enabled) continue;
+    for (const m of effModels(c)) {
+      if (m.enabled === false) continue;
+      if (m.kind !== cap && m.alt_kind !== cap) continue;
+      out.push({ name: m.name, ch: c, kind: m.kind, alt_kind: m.alt_kind || "" });
+    }
+  }
+  // 同名只保留一条（多渠道提供同一个模型名），并按积分倒序
+  const seen = new Set();
+  return out.filter(x => (seen.has(x.name) ? false : (seen.add(x.name), true)))
+    .sort((a, b) => (Points.score(b.name) - Points.score(a.name)) || a.name.localeCompare(b.name));
+}
+/// 填充能力下拉框：keep = 已保存的模型名（不在候选里也保留，避免配置被静默清空）
+function fillCapSelect(selId, cap, keep, emptyLabel) {
+  const sel = $(selId);
+  if (!sel) return;
+  const opts = modelsByCap(cap);
+  let html = `<option value="">${esc(emptyLabel)}</option>`;
+  for (const o of opts) {
+    html += `<option value="${esc(o.name)}" ${o.name === keep ? "selected" : ""}>${esc(o.name)} · ${esc(o.ch.name)} · 积分 ${Points.score(o.name)}</option>`;
+  }
+  if (keep && !opts.some(o => o.name === keep)) {
+    html += `<option value="${esc(keep)}" selected>${esc(keep)}（当前配置，尚未登记）</option>`;
+  }
+  sel.innerHTML = html;
+}
 /// 模型级状态：未启用 / 冷却中 Ns / 降权 / 健康 / 故障 / 未知
 function modelHealth(m) {
   if (!m) return { dot: "off", label: "未知" };
@@ -2948,6 +3444,69 @@ async function loadUsage() {
   } catch (e) {
     el.innerHTML = `<div class="empty">用量加载失败：${esc(e.message)}</div>`;
   }
+}
+
+/// 模型积分榜：把本地积分账本渲染成表格（倒序 = 选择器里的排序）。
+/// 数据源纯 localStorage，页面刷新后仍在；「清空」后重新从 0 起算。
+function renderPoints() {
+  const el = $("points-table");
+  if (!el) return;
+  const rows = Points.list();
+  if (!rows.length) {
+    el.innerHTML = `<div class="empty">还没有积分记录 —— 选几次模型、用几次、分享几次就会出现在这里</div>`;
+    return;
+  }
+  const nameOf = k => (k === AUTO_KEY ? "自动（网关自动选路）" : k);
+  el.innerHTML = `<table class="pts-table">
+    <thead><tr>
+      <th class="pts-rank">#</th><th>模型</th><th class="pts-score">积分</th>
+      <th title="每次模型选择 +1">选择</th><th title="每使用一次 +1">使用</th>
+      <th title="每次分享 +10">分享</th><th title="每次降权 −20">降权</th>
+    </tr></thead>
+    <tbody>${rows.map((r, i) => `<tr>
+      <td class="pts-rank">${i + 1}</td>
+      <td class="name">${esc(nameOf(r.key))}</td>
+      <td class="pts-score ${r.score < 0 ? "pts-neg" : ""}">${r.score}</td>
+      <td>${r.sel || 0}</td><td>${r.use || 0}</td><td>${r.share || 0}</td><td>${r.degrade || 0}</td>
+    </tr>`).join("")}</tbody></table>`;
+  const note = $("points-note");
+  if (note) note.textContent = `个人使用数据（本机）· 共 ${rows.length} 个条目`;
+}
+function resetPoints() {
+  if (!confirm("清空本机所有模型的积分记录？此操作不可撤销。")) return;
+  Points.reset();
+  renderPoints();
+  toast("积分已清空", "ok");
+}
+
+/// 模型管理页的「音频 / 图片视频」两块：把语音与多媒体设置里的选择
+/// 以内联下拉形式呈现（逻辑与设置对话框完全一致），改完直接保存生效。
+function renderMgmtMm() {
+  const c = voiceCfg;
+  fillCapSelect("mg-stt-model", "stt", c.sttModel, "自动");
+  fillCapSelect("mg-tts-model", "tts", c.ttsModel, "自动");
+  fillCapSelect("mg-vision-model", "vision", c.visionModel, "自动");
+  fillCapSelect("mg-video-model", "vision", c.videoModel, "跟随视觉");
+  const sc = $("mg-mm-scope");
+  if (sc) sc.value = c.mmScope || "attach";
+  const hint = $("mg-mm-hint");
+  if (hint) {
+    const cnt = modelsByCap("vision").length;
+    hint.textContent = cnt ? `已登记 ${cnt} 个视觉模型` : "尚未登记视觉模型（模型管理里给模型加 vision 能力）";
+  }
+}
+function saveMgmtMm() {
+  voiceCfg = {
+    ...voiceCfg,
+    sttModel: $("mg-stt-model").value,
+    ttsModel: $("mg-tts-model").value,
+    visionModel: $("mg-vision-model").value,
+    videoModel: $("mg-video-model").value,
+    mmScope: $("mg-mm-scope").value,
+  };
+  VoiceCfg.save(voiceCfg);
+  refreshVoiceStatus();
+  toast("多媒体设置已保存", "ok");
 }
 
 function fmtInt(n) {

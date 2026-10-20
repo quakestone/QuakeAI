@@ -21,3 +21,6 @@ node_modules/
 
 # 本地 DO 持久化存储（workerd localDisk；渠道/Key 只在本机，绝不出现在仓库里）
 .wd-storage/
+
+# 浏览器验证工具缓存
+.playwright-cli/

@@ -1,5 +1,45 @@
 # CHANGES
 
+## v0.15.0（2026-10-21）—— UI 体验刷版 + 模型积分体系
+
+用户指令（两轮）：「先不推了 你把UI体验刷一版：1.所有子页面即mock页都统一左侧边栏滑动关闭 同时页面或组建左上角加个回退的按钮 2.首页模型设置的按钮去掉 3.模型选择按钮放到输入法就像+号那样 把右上角的模型选择按钮去掉 右上角槽位给新建会话使用 4.音频模型设置页面分成两块 一块是音频模型选择 一块是图片视频模型选择 逻辑与音频一样 5.拨打页面模型还是不能播放 未播放 AI的logo拟人且不能动效」+「模型管理是大模块 每次模型选择+1 每次模型降权-20 模型每使用一次+1每分享一次+10 建立各大模型的个人使用数据系统 选择模型时以积分多少倒序排列 自动模型也以此为例」+「还有 首页的多媒体模型设置按钮去掉 改成小图标 入驻模型管理页面」。
+
+### 模型积分体系
+
+- **规则**：选择 +1 / 使用 +1 / 分享 +10 / 降权 −20；`score = sel×1 + use×1 + share×10 + degrade×(−20)`。四个计分点全部接入真实链路：选择（`pickModel` + 通话页 `openCallModelPicker` 回调）、使用（`applyRoutePoints` 读响应头 `x-gateway-model`）、分享（`shareMsg` → 按消息索引取该条回答**实际命中**的模型，老消息回落当前模型）、降权（读响应头 `x-gateway-degraded`）。
+- **「自动」同样计分**：以 `AUTO_KEY = "__auto__"` 建独立条目，选自动 +1、自动模式下实际命中模型 +1 时自动条目也 +1，并参与同一排序（用户明确要求「自动模型也以此为例」）。
+- **排序落地**：模型选择器 `items.sort((a,b) => b.score - a.score || …)`；能力下拉（`modelsByCap`）同口径。每项显示「积分 N」，同名模型跨渠道只列一次。
+- **存储刻意用 localStorage 而非 DO**（`gw_model_points_v1`）：DO 是多人共享的资源账本，而积分是**个人**偏好，混进去会污染他人排序。
+- **管理页「模型积分榜」**：规则说明 + 刷新/清空 + 明细表（各模型 sel/use/share/degrade/score）。
+
+### 新诊断头 `x-gateway-degraded`
+
+- **必要性**：原 `x-gateway-attempts` 只给渠道名（`ch-a=HTTP429`），而降权是**模型级**的 —— 前端要按模型给负分，必须知道具体哪些模型被降权。
+- **实现**：`ChannelOutcome` 两个失败变体各加 `Vec<String>`；`try_model_attempts` 在 `note_failure` 两处（连接失败、非 2xx）后记入模型名；`diag_headers` / `final_error_response` / `all_channels_failed` 注入逗号分隔头。贯通 chat / audio / tts 三链路与两条失败路径。
+
+### UI 七项改造
+
+1. **统一滑动关闭 + 回退按钮**：`bindEdgeSwipe()` 抽出 `topClosable()` 做分层——对话框 > 通话页 > 侧栏，右滑先关最上层弹层，否则开侧栏。左上角回退按钮 `.dlg-back` 覆盖 6 个 dialog，另加通话页 `.call-top` 的 ←（调 `endCall()`）、模型管理页 `.mgmt-top` 的 ←、分享落地页的 ←。
+2. **首页模型设置按钮去掉**，多媒体设置改为 🎛 小图标**入驻模型管理页**（页头），并在模型管理页内联音频/图片视频两块。
+3. **模型选择按钮移到输入区**（`+` 号旁的 `⋯`），右上角槽位改为新建会话 `＋`。
+4. **语音设置拆两块**：`🎧 音频模型（stt/tts）` 与 `🖼 图片视频模型（vision/video + 作用范围）`，能力下拉按 `kind`/`alt_kind` 枚举并**按积分倒序**，且保留「尚未登记」的已存配置。**选择真正生效**：`voiceCfg.ttsModel` → `/v1/audio/speech` body.model；`voiceCfg.sttModel` → FormData `model`；`pickMmModel(hasMedia)` + `mmScope`（attach/always）→ 聊天请求 `body.model`。
+5. **通话页 TTS 播放修复（两坑）**：① 上游 WAV 常回 `application/octet-stream`，浏览器拒解码 → `sniffAudioType(buf)` 按字节头（RIFF/WAVE、OggS、fLaC、ID3/0xFF）修正 Blob MIME；② iOS/微信自动播放策略拦截 `new Audio().play()` → 捕获 NotAllowedError 后改走 Web Audio（`playViaWebAudio`，复用手势里 resume 过的 `mediaCtx`）。
+6. **AI 精灵拟人化且零动效**：删除全部 `@keyframes orb-*`（breathe/ripple/think/speak/bar）与 `.orb-ripple`/`.orb-bars` 结构，改为静态五官（`.orb-hair`/`.orb-brow`/`.orb-eye`/`.orb-pupil`/`.orb-mouth`/`.orb-cheek`），状态仅通过 class 改变五官形状。
+
+### 过程中修掉的三个真实缺陷（静态断言全绿，只有真实浏览器执行才暴露）
+
+1. **积分永远记不上**：`POINTS_RULE` 键误写成 `select`，而调用传 `"sel"` → `add()` 的规则校验直接 return，积分恒为空。修复后补`scripts/test-points.mjs` **执行级测试**（抽出 Points 模块真跑一遍，12 项断言）并挂进 e2e 防回归。
+2. **模型选择器列不出只配 `models_meta` 的渠道模型**：`renderModelList` 读 `c.models`，而只在管理页登记了 `models_meta` 的渠道该字段为空 → 模型整个消失。改读 `effModels(c)`。
+3. **本地验证读到旧产物**：`admin_ui.html` 经 `include_str!` 编译进 wasm，改完 HTML 只跑 `build.sh` 时 Cargo 缓存不失效（`Finished in 0.05s`），workerd 又仍持有旧模块 —— 需 `touch src/lib.rs` + 重启 workerd 才能验到新代码。
+
+### 验证
+
+- 单测 **22/22**（`cargo test --lib`）。
+- e2e **287/287**（新增 §21 共 42 项：后端诊断头、积分体系含执行级测试、语音多媒体两块、UI 七项改造）。
+- 积分执行级测试 **12/12**。
+- 浏览器真实交互回归：积分四计分点写入 localStorage、积分倒序生效、语音两块保存后重开仍在且 `pickMmModel` 能进请求、精灵 `animationName: none` 且五官齐全、6 个 `.dlg-back` 均能关闭对应弹层、侧栏右滑开/左滑关、通话页上右滑优先关通话页而非开侧栏 —— 全部通过，无 pageerror。
+
+
 ## v0.14.0（2026-10-21）—— DeepSeek 渠道对接 + 用量成本账本（逐请求记账 / 聚合 / 对账 CSV 导出）
 
 用户指令：「这个是DeepSeek的 你也对接下」+ 上传 DeepSeek 官方 `usage_data_*.zip`，随后纠偏「我给你是空白的文件 你也在做」。

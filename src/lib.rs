@@ -430,6 +430,7 @@ fn diag_headers(
     channel: &Channel,
     model: &str,
     attempts: &[String],
+    degraded: &[String],
     content_type: &str,
     stream: bool,
 ) -> Result<web_sys::Headers> {
@@ -438,6 +439,10 @@ fn diag_headers(
     let attempt_str = attempts.join(";");
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
+    // 被降权（首包前失败并已记入账本）的模型名列表，逗号分隔。
+    // attempts 里只有渠道名，而降权是**模型级**的（同一渠道换个模型可能就好），
+    // 客户端要按模型给负分就必须知道具体哪些模型被降权了。
+    let degraded_str = header_safe(&degraded.join(","));
     for (k, v) in [
         ("x-gateway-version", env!("CARGO_PKG_VERSION").to_string()),
         ("x-gateway-channel", ch_name.clone()),
@@ -445,6 +450,7 @@ fn diag_headers(
         ("x-gateway-base-url", channel.base_url.clone()),
         ("x-gateway-model", model.to_string()),
         ("x-gateway-attempts", ch_attempts.clone()),
+        ("x-gateway-degraded", degraded_str),
         ("x-zhipu-gateway", "wasm".to_string()),
         ("x-zhipu-channel", ch_name),
         ("x-zhipu-base-url", channel.base_url.clone()),
@@ -473,7 +479,12 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
 }
 
 /// 最终失败：透传最后一个上游错误（状态码+错误体），降权信号不灭。
-fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> Result<Response> {
+fn final_error_response(
+    status: u16,
+    err_body: String,
+    attempts: &[String],
+    degraded: &[String],
+) -> Result<Response> {
     let hdrs = worker::Headers::new();
     hdrs.set("Content-Type", "application/json")?;
     hdrs.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
@@ -481,13 +492,14 @@ fn final_error_response(status: u16, err_body: String, attempts: &[String]) -> R
     let attempts_safe = header_safe(&attempts.join(";"));
     hdrs.set("x-gateway-attempts", &attempts_safe)?;
     hdrs.set("x-zhipu-attempts", &attempts_safe)?;
+    hdrs.set("x-gateway-degraded", &header_safe(&degraded.join(",")))?;
     Ok(Response::from_bytes(err_body.into_bytes())?
         .with_status(status)
         .with_headers(hdrs))
 }
 
-fn all_channels_failed(attempts: &[String]) -> Result<Response> {
-    json_response(
+fn all_channels_failed(attempts: &[String], degraded: &[String]) -> Result<Response> {
+    let mut resp = json_response(
         502,
         serde_json::json!({
             "error": {
@@ -497,7 +509,10 @@ fn all_channels_failed(attempts: &[String]) -> Result<Response> {
                 "attempts": attempts,
             }
         }),
-    )
+    )?;
+    resp.headers_mut()
+        .set("x-gateway-degraded", &header_safe(&degraded.join(",")))?;
+    Ok(resp)
 }
 
 // ---------------------------------------------------------------------------
@@ -509,9 +524,9 @@ enum ChannelOutcome {
     /// 成功锁定（已吐字），直接回客户端
     Locked(Response),
     /// 全部失败：最后一个上游 HTTP 错误（透传）
-    UpstreamError(u16, String, Vec<String>),
+    UpstreamError(u16, String, Vec<String>, Vec<String>),
     /// 全部连接级失败（拿不到 HTTP 响应）
-    AllConnFailed(Vec<String>),
+    AllConnFailed(Vec<String>, Vec<String>),
 }
 
 /// 一个待尝试的（渠道 × 模型）候选。模型是路由一等公民：
@@ -700,6 +715,9 @@ async fn try_model_attempts(
     scope: &str,
 ) -> Result<ChannelOutcome> {
     let mut attempts: Vec<String> = Vec::new();
+    // 被降权的模型名（记入账本的那些）。客户端据此按**模型**给负分——
+    // attempts 里只有渠道名，而降权是模型级的。
+    let mut degraded: Vec<String> = Vec::new();
     let mut last_error: Option<(u16, String)> = None;
     let t0 = admin::now_ms();
 
@@ -723,6 +741,7 @@ async fn try_model_attempts(
                 attempts.push(format!("{}=conn-failed", ch.name));
                 worker::console_error!("channel {} conn failed: {e:?}", ch.name);
                 note_failure(env, ch, 0, scope, &att.model, &attempts).await;
+                degraded.push(att.model.clone());
                 continue;
             }
         };
@@ -739,12 +758,13 @@ async fn try_model_attempts(
                 Err(_) => String::new(),
             };
             note_failure(env, ch, status, scope, &att.model, &attempts).await;
+            degraded.push(att.model.clone());
             last_error = Some((status, err_text));
             continue;
         }
 
         let content_type = content_type_of(&web_resp);
-        let out_headers = diag_headers(ch, &att.model, &attempts, &content_type, stream)?;
+        let out_headers = diag_headers(ch, &att.model, &attempts, &degraded, &content_type, stream)?;
 
         // ---- 用量成本采集（不干扰透传）----
         // web_sys::Response::clone() 是 tee：克隆体独立可读，原体照常做流重放。
@@ -820,9 +840,9 @@ async fn try_model_attempts(
     }
 
     if let Some((status, err_body)) = last_error {
-        Ok(ChannelOutcome::UpstreamError(status, err_body, attempts))
+        Ok(ChannelOutcome::UpstreamError(status, err_body, attempts, degraded))
     } else {
-        Ok(ChannelOutcome::AllConnFailed(attempts))
+        Ok(ChannelOutcome::AllConnFailed(attempts, degraded))
     }
 }
 
@@ -1052,10 +1072,12 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
 
     match outcome {
         ChannelOutcome::Locked(resp) => Ok(resp),
-        ChannelOutcome::UpstreamError(status, err_body, attempts) => {
-            final_error_response(status, err_body, &attempts)
+        ChannelOutcome::UpstreamError(status, err_body, attempts, degraded) => {
+            final_error_response(status, err_body, &attempts, &degraded)
         }
-        ChannelOutcome::AllConnFailed(attempts) => all_channels_failed(&attempts),
+        ChannelOutcome::AllConnFailed(attempts, degraded) => {
+            all_channels_failed(&attempts, &degraded)
+        }
     }
 }
 
@@ -1238,10 +1260,12 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
 
     match outcome {
         ChannelOutcome::Locked(resp) => Ok(resp),
-        ChannelOutcome::UpstreamError(status, err_body, attempts) => {
-            final_error_response(status, err_body, &attempts)
+        ChannelOutcome::UpstreamError(status, err_body, attempts, degraded) => {
+            final_error_response(status, err_body, &attempts, &degraded)
         }
-        ChannelOutcome::AllConnFailed(attempts) => all_channels_failed(&attempts),
+        ChannelOutcome::AllConnFailed(attempts, degraded) => {
+            all_channels_failed(&attempts, &degraded)
+        }
     }
 }
 
@@ -1342,10 +1366,12 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
 
     match outcome {
         ChannelOutcome::Locked(resp) => Ok(resp),
-        ChannelOutcome::UpstreamError(status, err_body, attempts) => {
-            final_error_response(status, err_body, &attempts)
+        ChannelOutcome::UpstreamError(status, err_body, attempts, degraded) => {
+            final_error_response(status, err_body, &attempts, &degraded)
         }
-        ChannelOutcome::AllConnFailed(attempts) => all_channels_failed(&attempts),
+        ChannelOutcome::AllConnFailed(attempts, degraded) => {
+            all_channels_failed(&attempts, &degraded)
+        }
     }
 }
 

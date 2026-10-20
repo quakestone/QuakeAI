@@ -65,11 +65,15 @@ h1 { font-size: 19px; line-height: 1.45; margin-bottom: 8px; word-break: break-a
 .qr-box img { width: min(240px, 68vw); height: auto; border-radius: 10px; background: #fff; padding: 8px; }
 .qr-box p { font-size: 12px; color: #6b7280; margin-top: 6px; }
 .theme-btn { position: fixed; top: 10px; right: 12px; border: none; background: #0001; border-radius: 8px; padding: 6px 9px; font-size: 14px; cursor: pointer; }
+/* 左上角回退：分享页是独立落地页，回退=关闭本页/回到来源 */
+.back-btn { position: fixed; top: 10px; left: 12px; border: none; background: #0001; border-radius: 8px; padding: 6px 11px; font-size: 14px; cursor: pointer; color: inherit; }
+.back-btn:hover { background: #0002; }
 #err { max-width: 520px; margin: 60px auto; text-align: center; line-height: 1.8; }
 #err .big { font-size: 40px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
+<button class="back-btn" id="back-btn" title="返回（关闭本页）" aria-label="返回">←</button>
 <button class="theme-btn" id="theme-btn" title="切换主题">🌓</button>
 <div class="wrap" id="wrap" hidden>
   <div class="card">
@@ -205,6 +209,12 @@ var QRLIB=(()=>{var or=(L,T)=>()=>(T||L((T={exports:{}}).exports,T),T.exports);v
   });
   // 主题：auto（跟随系统）→ light → dark 循环，data-theme 显式覆盖
   var root = document.documentElement;
+  // 回退：无历史记录时退回首页；分享页多为新开标签，history.back 可能无效
+  $("back-btn").addEventListener("click", function () {
+    if (window.opener) { try { window.opener.focus(); window.close(); return; } catch (e) {} }
+    if (history.length > 1) { history.back(); return; }
+    location.href = "/";
+  });
   $("theme-btn").addEventListener("click", function () {
     var cur = localStorage.getItem("s_theme") || "auto";
     var next = cur === "auto" ? "light" : cur === "light" ? "dark" : "auto";
