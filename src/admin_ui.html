@@ -1737,6 +1737,7 @@ function renderMessages() {
     const body = (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
     const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
     const badges = (m.channel ? `<span class="ch-badge">via ${esc(m.channel)}</span>` : "")
+      + (m.model ? `<span class="ch-badge mdl-badge" title="本条回答实际采用的模型名">模型 ${esc(m.model)}</span>` : "")
       + (m.attempts && m.attempts.split(";").length > 1
         ? `<span class="switch-badge" title="${esc(m.attempts)}">⤻ 已自动切换</span>` : "");
     const acts = m.streaming ? "" : `<button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button><button class="act-btn" onclick="shareMsg(this)" title="分享本条回答">分享</button><button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button>`;
@@ -2121,7 +2122,7 @@ async function sendWith(text, atts) {
   const body = { messages: history, stream: true };
   if (curModel) body.model = curModel;
   // 图片视频块生效：仅当**本轮**确实带图片/视频附件时，才用选定的视觉/视频模型覆盖
-  // 用户选择；历史上曾带过附件的请求不再覆盖，否则会永久抢走纯文本模型选择。
+  // 用户选择；「always」作用范围也只在自动模式（未显式选模型）下才允许无附件覆盖。
   const mmModel = pickMmModel(attHasMedia(atts));
   if (mmModel) body.model = mmModel;
 
@@ -2131,9 +2132,10 @@ async function sendWith(text, atts) {
     asst.channel = decodeHeader(resp.headers.get("x-gateway-channel"));
     asst.attempts = decodeHeader(resp.headers.get("x-gateway-attempts"));
     asst.model = decodeHeader(resp.headers.get("x-gateway-model"));
-    // 所选模型不可用、网关已回退自动选路：明确告知，不再静默走第一项
-    if (resp.headers.get("x-gateway-model-unavailable")) {
-      toast("所选模型不可用，已改用网关自动选路", "warn");
+    // 所选模型未生效：不在可用渠道，或其渠道全部失败后回退 —— 明确告知实际采用的模型
+    const unavail = decodeHeader(resp.headers.get("x-gateway-model-unavailable"));
+    if (unavail) {
+      toast(unavail === "1" ? "所选模型不可用，已改用网关自动选路" : `所选模型不可用，已改用 ${unavail}`, "warn");
     }
     // 积分记账：使用 +1（命中的模型；自动模式下「自动」条目也 +1）、降权 −20
     applyRoutePoints(resp, curModel);
@@ -2252,7 +2254,10 @@ function buildApiContent(m) {
 // 视频与图片常常由同一个视觉模型承接，所以「视频模型」默认跟随「视觉模型」。
 function pickMmModel(hasMedia) {
   const scope = voiceCfg.mmScope || "attach";
-  if (scope === "attach" && !hasMedia) return "";
+  // 本轮带附件：无论哪种作用范围都走多模态模型。
+  // 本轮无附件：仅「always」作用范围才可能覆盖，且收敛为**仅自动模式**——用户显式
+  // 选过模型时以选择为准（否则 always 会永久抢走纯文本的模型选择）。
+  if (!hasMedia && (scope !== "always" || curModel)) return "";
   const hasVideo = !!voiceCfg.videoModel;
   // 视频模型优先（更专精）；未设视频模型时用视觉模型
   return hasVideo ? voiceCfg.videoModel : (voiceCfg.visionModel || "");

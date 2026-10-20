@@ -1090,7 +1090,23 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     };
     match outcome {
         ChannelOutcome::Locked(mut resp) => {
-            mark_unavailable(&mut resp);
+            // 显式选择的模型在池中、但其所有渠道尝试都失败，最终由别的模型应答时，
+            // 同样视为「所选模型未生效」。与池中没有该模型的 note 合并到同一个头，
+            // 值改为实际采用的模型名（空则回落 "1"），前端据此精准提示。
+            // 自动模式（未显式选模型）不触发——回退本就是自动选路的正常语义。
+            let used = resp
+                .headers()
+                .get("x-gateway-model")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let fell_back = !model_missing
+                && !used.is_empty()
+                && Some(used.as_str()) != requested.as_deref();
+            if model_unavailable || fell_back {
+                let v = if used.is_empty() { "1".to_string() } else { used };
+                let _ = resp.headers_mut().set("x-gateway-model-unavailable", &v);
+            }
             Ok(resp)
         }
         ChannelOutcome::UpstreamError(status, err_body, attempts, degraded) => {
