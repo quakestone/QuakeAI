@@ -1101,6 +1101,18 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <button class="dlg-back" onclick="diagDlg.close()" aria-label="返回" title="返回">←</button>
   <h3>部署自检</h3>
   <pre id="diag-body" class="mono" style="background:#0d1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;white-space:pre-wrap">加载中…</pre>
+
+  <h3 style="margin-top:18px">模型自检</h3>
+  <p class="muted" style="font-size:12px;margin:0 0 8px">
+    单轮、空历史、显式指定模型——用来分清「模型不能用」和「模型在照抄历史」。
+    结果里的 <b>上游自报模型</b> 才是真正回答你的那个。
+  </p>
+  <div style="display:flex;gap:8px">
+    <input id="selftest-model" placeholder="cohere/north-mini-code:free" style="flex:1" />
+    <button onclick="selftestModel()">自检</button>
+  </div>
+  <pre id="selftest-body" class="mono" style="background:#0d1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;white-space:pre-wrap;margin-top:8px"></pre>
+
   <div class="dlg-actions"><button onclick="diagDlg.close()">关闭</button></div>
 </dialog>
 
@@ -4602,6 +4614,38 @@ async function showDiag() {
     $("diag-body").textContent = JSON.stringify(j, null, 2);
   } catch (e) {
     $("diag-body").textContent = "自检失败：" + e.message;
+  }
+}
+
+// 模型自检：单轮空历史探测「能不能用 + 到底谁在回答」。
+// 客户端聊天会把整段历史带上，小模型容易照抄上一条的自我描述（表现为
+// "换什么模型都回答同一个名字"）；这里用空历史问一次，并读回上游自报的 model。
+async function selftestModel() {
+  const model = $("selftest-model").value.trim();
+  if (!model) { toast("先填模型名", "warn"); return; }
+  $("selftest-body").textContent = "探测中…（每个模型最多试 5 个渠道）";
+  try {
+    const j = await api("/models/test", "POST", { model });
+    const lines = [`结论：${j.verdict}`];
+    if (j.hint) lines.push(`提示：${j.hint}`);
+    for (const r of j.results || []) {
+      const head = `· ${r.name || r.channel}（${r.provider}）→ ${r.status}`;
+      const bits = [];
+      if (r.http_status) bits.push(`HTTP ${r.http_status}`);
+      if (r.latency_ms != null) bits.push(`${r.latency_ms}ms`);
+      if (r.served_model) bits.push(`上游自报 ${r.served_model}${r.served_matches ? " ✓" : " ✗ 不一致"}`);
+      if (r.note) bits.push(r.note);
+      if (r.error) bits.push(r.error);
+      lines.push(head + (bits.length ? "  " + bits.join(" · ") : ""));
+      if (r.reply) lines.push(`    回答：${r.reply}`);
+      if (r.raw) lines.push(`    原文：${r.raw}`);
+    }
+    $("selftest-body").textContent = lines.join("\n");
+    const ok = j.verdict === "ok";
+    toast(ok ? "自检通过：上游确认用的是所选模型" : `自检结论：${j.verdict}`, ok ? "ok" : "warn");
+  } catch (e) {
+    $("selftest-body").textContent = "自检失败：" + e.message;
+    toast("自检失败：" + e.message, "err");
   }
 }
 

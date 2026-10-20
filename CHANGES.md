@@ -1,6 +1,42 @@
 # CHANGES
 
-## v0.19.7（本版）—— 修「选了 openrouter 没生效」+ 修「徽章撒谎」（两个真根因）
+## v0.19.8（本版）—— 按模型自检：分清「模型不能用」和「模型在照抄历史」
+
+> 用户实测：选非 GLM 模型，回答却自称 ChatGLM，换多个模型都一样，怀疑"这么多模型不能用"。
+> 排查结论：网关**不缓存、不改历史、不借 Key**，只把请求体的 `model` 换成候选模型名
+> （`lib.rs` 的 `make_body` 闭包），`messages` 原样转发。所以"回答都变成 GLM"不是路由把
+> 请求换掉了，而是两件事混在一起看不清。
+
+### 1. 现象拆解（为什么"换什么模型都回答 ChatGLM"）
+
+- **证据一**：截图中第 2、3 条回答**逐字相同**，但渠道分别是「智谱 GLM 主线」和
+  「OpenRouter（海外兜底）」——两个独立模型不可能生成逐字相同的文本。
+- **证据二**：网关只替换 `model` 字段，完整 `messages` 历史原样上送。历史里已经有
+  两条 assistant 回答"我的模型名称是 ChatGLM"。
+- 结论：**小模型照抄了历史里上一条的自我描述**。`cohere/north-mini-code:free` 是代码向
+  小模型，在聊天场景最容易复读上下文；模型自称的身份本来也不可靠（LLM 普遍会乱认）。
+- 真正能回答"到底谁在服务"的，是上游响应体里的 `model` 字段——v0.19.7 已开始读回它。
+
+### 2. 新增 `POST /admin/api/models/test`：单轮隔离自检
+
+- 入参 `{ "model": "cohere/north-mini-code:free", "channel": "可选，限定单渠道" }`。
+- **空历史单轮**、`temperature: 0`、`stream: false`，问"你是什么模型，不要引用历史"——
+  从设计上排除历史污染，测出来的才是这个模型本身。
+- 返回每个候选渠道的结果：`enabled` / `has_key` / `http_status` / `latency_ms` /
+  **`served_model`（上游自报，权威）** / `served_matches`（是否与你所选一致）/ 回答片段 / 错误原文。
+- 禁用渠道与缺 Key 渠道**也会列出来**并标注 `skipped-disabled` / `skipped-no-key`——
+  这两条正是"选了不生效"的高频原因，比一个笼统的失败有用得多。
+- 汇总 `verdict`：`ok`（上游确认用的是所选模型）/ `substituted`（上游换家）/
+  `channel-not-ready`（渠道未启用或缺 Key）/ `failed` / `no-channel`（无渠道登记此模型）。
+- 模型名入参同样走 `percent_decode`，`%2F`、`%3A` 形态也能自检。
+
+### 3. 管理面板新增「模型自检」入口
+
+- 「部署自检」弹窗内新增输入框 + 自检按钮，结果以人读格式展示：
+  `· OpenRouter（海外兜底）→ ok  HTTP 200 · 980ms · 上游自报 X ✓`，并附回答片段。
+- 无需开新会话、无需看 OpenRouter 后台，就能判断某个模型到底能不能用、用上了没有。
+
+## v0.19.7 —— 修「选了 openrouter 没生效」+ 修「徽章撒谎」（两个真根因）
 
 > 用户截图实证：TG 里选了模型，徽章显示 `模型 cohere/north-mini-code:free`（via OpenRouter），
 > 但真正服务的却不是这个；同时「只要 openrouter 的都错，国内模型一切正常」。

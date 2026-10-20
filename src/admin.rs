@@ -127,6 +127,8 @@ async fn handle_admin_inner(req: Request, env: &Env, sub: &str) -> Result<Respon
         (Method::Get, "/usage") => api_usage(env).await,
         (Method::Get, "/usage/export") => api_usage_export(env).await,
         (Method::Get, "/diag") => api_diag(env).await,
+        // 按模型自检：单轮空历史探测「能不能用 + 到底谁回答」
+        (Method::Post, "/models/test") => api_test_model(req, env).await,
         // skill 子系统：与模型独立的表达线（标题 + 提示词正文）
         (Method::Get, "/skills") => api_list_skills(env).await,
         (Method::Post, "/skills") => api_create_skill(req, env).await,
@@ -961,6 +963,232 @@ async fn probe_channel(ch: &Channel) -> (u16, u64, String) {
         body_snippet(&resp).await
     };
     (status, (now_ms() - t0) as u64, note)
+}
+
+/// 按**模型**做一次隔离自检：单轮、空历史、显式指定模型。
+///
+/// 为什么需要它：客户端会把整段对话历史原样带上来，小模型极易照抄上一条
+/// assistant 的自我描述——表现就是「换什么模型都回答同一个名字」。这个接口
+/// 用**空历史单轮**问一次，并读回上游自报的 `model` 字段，把两件事分开测：
+///   1. 这个模型到底能不能用（渠道是否启用、Key 是否登记、上游返回什么）；
+///   2. 真正回答的是不是它（上游自报 vs 请求的模型名）。
+///
+/// POST /admin/api/models/test  {"model":"cohere/north-mini-code:free","channel":"可选，限定单个渠道"}
+async fn api_test_model(mut req: Request, env: &Env) -> Result<Response> {
+    let body = req.text().await.unwrap_or_default();
+    let v: serde_json::Value = if body.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => return json_error(400, "bad_json", &format!("请求体不是合法 JSON：{e}")),
+        }
+    };
+    // 客户端可能把模型名百分号编码后传进来（openrouter 名字带 / 与 : 最易被编码）
+    let requested = crate::percent_decode(v.get("model").and_then(|x| x.as_str()).unwrap_or(""))
+        .trim()
+        .to_string();
+    if requested.is_empty() {
+        return json_error(400, "missing_model", "需要 model 字段");
+    }
+    let only_channel = v
+        .get("channel")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let list = match load_all_channels(env).await {
+        Ok(l) => l,
+        Err(e) => return store_unavailable(&e),
+    };
+    // 候选：登记了该模型的渠道。**禁用的也收进来**——正好用来回答
+    // 「是不是渠道没启用 / 没登记 Key」，这恰恰是最常见的"模型用不了"原因。
+    let cands: Vec<Channel> = list
+        .into_iter()
+        .filter(|c| c.kind != "audio")
+        .filter(|c| only_channel.as_deref().map(|id| c.id == id).unwrap_or(true))
+        .filter(|c| {
+            c.effective_models()
+                .iter()
+                .any(|m| crate::model_name_eq(&m.name, &requested))
+        })
+        .collect();
+
+    if cands.is_empty() {
+        return json_response(
+            200,
+            serde_json::json!({
+                "model": requested,
+                "verdict": "no-channel",
+                "results": [],
+                "hint": "没有任何渠道登记这个模型。核对拼写（含 / 与 : 后缀），或先在该渠道的模型列表里加上它。",
+            }),
+        );
+    }
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    // 每个模型最多探测 5 个渠道，避免自检把额度打光
+    for ch in cands.iter().take(5) {
+        let has_key = !ch.api_key.is_empty();
+        if !ch.enabled {
+            results.push(serde_json::json!({
+                "channel": ch.id, "name": ch.name, "provider": ch.provider,
+                "enabled": false, "has_key": has_key,
+                "status": "skipped-disabled",
+                "note": "渠道未启用——这是「选了不生效」最常见的原因",
+            }));
+            continue;
+        }
+        if !has_key {
+            results.push(serde_json::json!({
+                "channel": ch.id, "name": ch.name, "provider": ch.provider,
+                "enabled": true, "has_key": false,
+                "status": "skipped-no-key",
+                "note": "渠道已启用但未登记 Key",
+            }));
+            continue;
+        }
+
+        // 单轮、空历史、低温度：避免模型照抄历史里的自我描述
+        let payload = serde_json::json!({
+            "model": requested,
+            "messages": [{
+                "role": "user",
+                "content": "只回答一行：你是什么模型？不要引用任何历史对话，不要解释。",
+            }],
+            "max_tokens": 64,
+            "temperature": 0,
+            "stream": false,
+        });
+        let url = ch.url("/chat/completions");
+        let t0 = now_ms();
+        let init = web_sys::RequestInit::new();
+        init.set_method("POST");
+        init.set_body(&JsValue::from_str(&payload.to_string()));
+        let web_req = match web_sys::Request::new_with_str_and_init(&url, &init) {
+            Ok(r) => r,
+            Err(e) => {
+                results.push(serde_json::json!({
+                    "channel": ch.id, "name": ch.name, "provider": ch.provider,
+                    "enabled": true, "has_key": true, "status": "build-failed",
+                    "error": format!("{e:?}"),
+                }));
+                continue;
+            }
+        };
+        let _ = web_req.headers().set("Content-Type", "application/json");
+        let _ = web_req
+            .headers()
+            .set("Authorization", &format!("Bearer {}", crate::bearer_token(ch)));
+        let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
+        let resp = match wasm_bindgen_futures::JsFuture::from(global.fetch_with_request(&web_req)).await
+        {
+            Ok(r) => match r.dyn_into::<web_sys::Response>() {
+                Ok(r) => r,
+                Err(_) => {
+                    results.push(serde_json::json!({
+                        "channel": ch.id, "name": ch.name, "provider": ch.provider,
+                        "enabled": true, "has_key": true, "status": "cast-failed",
+                    }));
+                    continue;
+                }
+            },
+            Err(e) => {
+                results.push(serde_json::json!({
+                    "channel": ch.id, "name": ch.name, "provider": ch.provider,
+                    "enabled": true, "has_key": true, "status": "network-error",
+                    "error": format!("{e:?}"),
+                }));
+                continue;
+            }
+        };
+        let status = resp.status();
+        let latency = (now_ms() - t0) as u64;
+        let text = match resp.text() {
+            Ok(p) => wasm_bindgen_futures::JsFuture::from(p)
+                .await
+                .ok()
+                .and_then(|x| x.as_string())
+                .unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+        let jv: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+        // 上游自报的模型名才是「到底谁在回答」的权威答案
+        let served = jv
+            .get("model")
+            .and_then(|m| m.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let reply = jv
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(120)
+            .collect::<String>();
+        let err = jv
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_string();
+        let matches = served
+            .as_deref()
+            .map(|s| crate::model_name_eq(s, &requested))
+            .unwrap_or(false);
+
+        results.push(serde_json::json!({
+            "channel": ch.id, "name": ch.name, "provider": ch.provider,
+            "enabled": true, "has_key": true,
+            "status": if (200..300).contains(&status) { "ok" } else { "http-error" },
+            "http_status": status,
+            "latency_ms": latency,
+            "served_model": served,
+            "served_matches": matches,
+            "reply": reply,
+            "error": if err.is_empty() { None } else { Some(err) },
+            "raw": if (200..300).contains(&status) { None } else { Some(text.chars().take(300).collect::<String>()) },
+        }));
+    }
+
+    // 汇总结论：能用的里面，有没有真的用了你选的模型
+    let any_ok = results
+        .iter()
+        .any(|r| r.get("status").and_then(|s| s.as_str()) == Some("ok"));
+    let any_substituted = results.iter().any(|r| {
+        r.get("status").and_then(|s| s.as_str()) == Some("ok")
+            && r.get("served_matches").and_then(|b| b.as_bool()) == Some(false)
+    });
+    let all_skipped = results
+        .iter()
+        .all(|r| {
+            r.get("status")
+                .and_then(|s| s.as_str())
+                .map(|s| s.starts_with("skipped-"))
+                .unwrap_or(false)
+        });
+    let verdict = if any_ok && !any_substituted {
+        "ok"
+    } else if any_ok {
+        "substituted"
+    } else if all_skipped {
+        "channel-not-ready"
+    } else {
+        "failed"
+    };
+
+    json_response(
+        200,
+        serde_json::json!({
+            "model": requested,
+            "verdict": verdict,
+            "results": results,
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------
