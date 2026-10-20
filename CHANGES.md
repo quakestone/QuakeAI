@@ -1,5 +1,32 @@
 # CHANGES
 
+## v0.19.6（本版）—— 模型选择状态机（ModelSelFSM）+ 修 openrouter 选了不生效
+
+### 1. 根因：openrouter「选了却没应用上」
+- 不是序列化错乱（静态链路对 `/`、`:`、`-`、`.` 等保留字符是健壮的：`pick_model_attempts` 对显式所选模型走精确字符串匹配 `m.name == rm`，`header_safe` 百分号编码非 ASCII 但保留 `/` `:`，`decodeHeader` 用 `decodeURIComponent` 还原）。
+- 真正原因：海外种子渠道（openrouter / groq / nvidia）默认 `enabled=false` 且需配置 Key，且 openrouter 模型被打 `kind=vision` 标签（不在纯文本对话选择页里）——于是选中的 openrouter 模型在能力过滤 / 渠道启用判定后**静默回落**到自动选路，用户看到「选了但没用上」。其它国内渠道默认启用，所以正常。
+- 症状（经用户确认）：**选了却没应用上**，而非显示错乱或持久化错乱。
+
+### 2. 引擎内核新增 ModelSelFSM（engine/src/lib.rs → src/engine_wasm.bin）
+- 用显式有限状态机取代散落的 `model_unavailable` / `fell_back` 布尔标志，把「选了 / 生效 / 回落切换 / 全部失败」做成确定性五态：`Auto(0) / Explicit(1) / Honored(2) / Substituted(3) / Locked(4)`。
+- 宿主（前端）只喂两样：用户所选模型名、实际采用的模型名；FSM 由 `(所选, 实际)` 推导唯一终态（调用顺序无关，最后一次 `set_applied` 落定），并附人类可读 `label`（如「已采用所选」「所选未生效·改用他模」）。
+- 纯字符串 / 数值，Wasm 内不驻留任何对话文本，状态结构体仅几十字节。
+- ABI：`modelsel_new/drop/select/set_applied/state/requested_ptr/requested_len/applied_ptr/applied_len`（句柄全局注册表 `SEL_REG` + 独立暂存缓冲 `SEL_SCRATCH`，越界返回 -1）。
+- 单测 5 条覆盖 Auto / Honored / Substituted / Locked / 状态码往返；Rust 侧 `cargo test` 16/16 通过。
+
+### 3. 前端集成（src/admin_ui.html）
+- `sendWith` 响应回来后，把响应头里的实际采用模型 `x-gateway-model` 解码，连同当前所选 `curModel` 喂给 FSM：`await wfReportModelSel(resp, curModel, asst.model || "")`。
+- 取代原来含糊的 `x-gateway-model-unavailable` toast，改为**精准透明提示**：
+  - 状态 3（Substituted）：`所选「X」未生效，实际用「Y」`，若所选名含 `/` 或 `:`（海外渠道）追加「（海外渠道需启用并配置 Key）」。
+  - 状态 4（Locked）：`所选「X」全部候选失败，请检查渠道 / Key`。
+  - 状态 0（自动）/ 2（已采用所选）：正常，不弹提示。
+- 内核未就绪时退化为原 toast，保证提示不丢。
+
+### 4. 说明
+- `src/engine_wasm.bin` 已重编（153840 字节，含 9 个 `modelsel_*` 导出）；Node 端用真实 wasm 跑通 9/9 用例（含 `google/gemma-4-31b-it:free` 往返）。
+- 部署产物 `build/index_bg.wasm` 随 worker-build 重编（经 `include_bytes!` 嵌入新内核）。
+- 注意：海外渠道默认关闭 + 需 Key 是配置 / 用户动作项；本版把「选了没生效」做成**可见、可诊断**，而非默认开启——保持默认安全（不自动启用需 Key 的海外渠道）。
+
 ## v0.19.5（本版）—— 会话记忆升级为 WASM 状态机（MemoryFSM）
 
 ### 1. 引擎内核新增 MemoryFSM 模块（engine/src/lib.rs → src/engine_wasm.bin，+2KB）

@@ -2164,11 +2164,9 @@ async function sendWith(text, atts) {
     asst.channel = decodeHeader(resp.headers.get("x-gateway-channel"));
     asst.attempts = decodeHeader(resp.headers.get("x-gateway-attempts"));
     asst.model = decodeHeader(resp.headers.get("x-gateway-model"));
-    // 所选模型未生效：不在可用渠道，或其渠道全部失败后回退 —— 明确告知实际采用的模型
-    const unavail = decodeHeader(resp.headers.get("x-gateway-model-unavailable"));
-    if (unavail) {
-      toast(unavail === "1" ? "所选模型不可用，已改用网关自动选路" : `所选模型不可用，已改用 ${unavail}`, "warn");
-    }
+    // 模型选择状态机：把「所选 vs 实际采用」做成显式状态，精准提示「你选了 X、实际用 Y、原因 Z」。
+    // 取代原来含糊的 x-gateway-model-unavailable toast。
+    await wfReportModelSel(resp, curModel, asst.model || "");
     // 积分记账：使用 +1（命中的模型；自动模式下「自动」条目也 +1）、降权 −20
     applyRoutePoints(resp, curModel);
     if (!resp.ok) {
@@ -4710,6 +4708,50 @@ function wfStr(ex, s) {
 function wfErr(ex) {
   const buf = new Uint8Array(ex.memory.buffer, ex.last_error_ptr(), ex.last_error_len());
   return new TextDecoder().decode(buf);
+}
+// 模型选择状态机：从线性内存读回 requested/applied 字符串（各自的暂存缓冲，与主引擎不冲突）。
+function readSelStr(ex, h, ptrFn, lenFn) {
+  const p = ptrFn(h), l = lenFn(h);
+  if (!p || l <= 0) return "";
+  return new TextDecoder().decode(new Uint8Array(ex.memory.buffer, p, l));
+}
+// 喂入（所选, 实际采用），取回 { state, requested, applied }。state: 0 自动 / 2 生效 / 3 未生效改他用 / 4 全失败。
+function wfModelSel(ex, requested, applied) {
+  if (!ex || !ex.modelsel_new) return null;
+  const h = ex.modelsel_new();
+  try {
+    const [p1, l1] = wfStr(ex, requested || "");
+    ex.modelsel_select(h, p1, l1);
+    const [p2, l2] = wfStr(ex, applied || "");
+    ex.modelsel_set_applied(h, p2, l2);
+    const state = ex.modelsel_state(h);
+    return {
+      state,
+      requested: readSelStr(ex, h, ex.modelsel_requested_ptr, ex.modelsel_requested_len),
+      applied: readSelStr(ex, h, ex.modelsel_applied_ptr, ex.modelsel_applied_len),
+    };
+  } finally {
+    ex.modelsel_drop(h);
+  }
+}
+// 响应回来后调用：所选模型没被采用时，精准透明地告知用户，并针对海外渠道给配置提示。
+async function wfReportModelSel(resp, requested, applied) {
+  const ex = await WF.ensure();
+  const unavail = decodeHeader(resp.headers.get("x-gateway-model-unavailable"));
+  // 内核未就绪：退化为原 toast，保证提示不丢
+  if (!ex || !ex.modelsel_new) {
+    if (unavail) toast(unavail === "1" ? "所选模型不可用，已改用网关自动选路" : `所选模型不可用，已改用 ${unavail}`, "warn");
+    return;
+  }
+  const sel = wfModelSel(ex, requested, applied);
+  if (!sel) return;
+  if (sel.state === 3) { // 所选未生效，实际由别的模型应答（池中切换 / 回落自动选路）
+    const hint = /[\/:]/.test(sel.requested || "") ? "（海外渠道需启用并配置 Key）" : "";
+    toast(sel.requested ? `所选「${sel.requested}」未生效，实际用「${sel.applied}」${hint}` : `已改用「${sel.applied}」${hint}`, "warn");
+  } else if (sel.state === 4) { // 所选模型全部候选失败，最终无任何模型应答
+    toast(`所选「${sel.requested}」全部候选失败，请检查渠道 / Key`, "err");
+  }
+  // state 0（自动）/ 2（已采用所选）：正常，不弹提示
 }
 // 驱动单条 run 直到终态：engine_ready 取就绪步 → 插件执行 → engine_complete/fail 回报。
 async function wfDrive(ex, handle, eventJson, plugin) {

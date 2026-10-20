@@ -531,6 +531,87 @@ impl MemoryStateMachine {
     pub fn msg_count(&self) -> u32 { self.msg_count }
 }
 
+// ===== 模型选择状态机（ModelSelFSM） =====
+// 取代原来散落在网关/前端的 `model_unavailable` / `fell_back` 布尔标志，把「选了 /
+// 生效 / 回落切换 / 全部失败」做成显式状态。宿主（前端）只喂两样：用户所选模型名、
+// 实际采用的模型名；FSM 算出唯一状态，前端据此精准提示「你选了 X，实际用 Y，原因 Z」。
+// 纯字符串/数值，Wasm 内不驻留任何对话文本，状态结构体仅几十字节。
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelState {
+    Auto = 0,        // 未显式选模型（网关按能力自动选路）
+    Explicit = 1,    // 用户显式选了模型，待响应确认是否生效
+    Honored = 2,     // 所选模型确实被采用
+    Substituted = 3, // 所选未生效，实际由别的模型应答（池中切换 / 回落自动选路）
+    Locked = 4,      // 所选模型全部候选失败，最终无任何模型应答
+}
+
+impl SelState {
+    #[allow(dead_code)]
+    fn from_code(c: i32) -> SelState {
+        match c {
+            1 => SelState::Explicit,
+            2 => SelState::Honored,
+            3 => SelState::Substituted,
+            4 => SelState::Locked,
+            _ => SelState::Auto,
+        }
+    }
+    fn code(self) -> i32 { self as i32 }
+    /// 人类可读状态说明（前端 toast / badge 用）。
+    fn label(self) -> &'static str {
+        match self {
+            SelState::Auto => "自动选路",
+            SelState::Explicit => "已选择·待确认",
+            SelState::Honored => "已采用所选",
+            SelState::Substituted => "所选未生效·改用他模",
+            SelState::Locked => "所选全部失败",
+        }
+    }
+}
+
+pub struct ModelSelFSM {
+    state: SelState,
+    requested: String,
+    applied: String,
+}
+
+impl ModelSelFSM {
+    pub fn new() -> Self {
+        ModelSelFSM { state: SelState::Auto, requested: String::new(), applied: String::new() }
+    }
+
+    /// 喂入用户所选模型（空串 = 自动选路）。
+    pub fn select(&mut self, requested: &str) {
+        self.requested = requested.to_string();
+        self.state = if self.requested.is_empty() { SelState::Auto } else { SelState::Explicit };
+    }
+
+    /// 喂入实际采用的模型名（空串 = 最终没有任何模型应答）。
+    pub fn set_applied(&mut self, applied: &str) {
+        self.applied = applied.to_string();
+        self.commit();
+    }
+
+    /// 由 (所选, 实际) 推导确定性终态——调用顺序无关，最后一次 set_applied 落定。
+    fn commit(&mut self) {
+        self.state = if self.requested.is_empty() {
+            SelState::Auto
+        } else if self.applied.is_empty() {
+            SelState::Locked
+        } else if self.applied == self.requested {
+            SelState::Honored
+        } else {
+            SelState::Substituted
+        };
+    }
+
+    pub fn state(&self) -> SelState { self.state }
+    pub fn requested(&self) -> &str { &self.requested }
+    pub fn applied(&self) -> &str { &self.applied }
+    pub fn label(&self) -> &'static str { self.state.label() }
+}
+
 // ---- FSM 的 WASM ABI（仅 wasm32；宿主 cargo test 走下方单测） ----
 #[cfg(target_arch = "wasm32")]
 mod fsm_abi {
@@ -608,6 +689,96 @@ mod fsm_abi {
                 fsm.note_summary(summary_tokens, new_pointer);
             }
         }
+    }
+}
+
+// ===== 模型选择 FSM 的 WASM ABI =====
+#[cfg(target_arch = "wasm32")]
+mod modelsel_abi {
+    use super::*;
+    use std::sync::Mutex;
+
+    static SEL_REG: Mutex<Vec<Option<ModelSelFSM>>> = Mutex::new(Vec::new());
+    static SEL_SCRATCH: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+    /// 入参读取：从线性内存绝对地址取字节（调用方保证有效）。
+    unsafe fn read_input(ptr: i32, len: i32) -> &'static [u8] {
+        std::slice::from_raw_parts(ptr as *const u8, len.max(0) as usize)
+    }
+    /// 把字符串拷入暂存缓冲，返回其线性内存指针（JS 紧随读取）。
+    fn scratch_copy(s: &str) -> i32 {
+        let mut buf = SEL_SCRATCH.lock().unwrap();
+        buf.clear();
+        buf.extend_from_slice(s.as_bytes());
+        buf.as_ptr() as i32
+    }
+
+    #[no_mangle]
+    pub extern "C" fn modelsel_new() -> i32 {
+        let mut reg = SEL_REG.lock().unwrap();
+        reg.push(Some(ModelSelFSM::new()));
+        (reg.len() as i32) - 1
+    }
+
+    #[no_mangle]
+    pub extern "C" fn modelsel_drop(h: i32) {
+        let mut reg = SEL_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            *slot = None;
+        }
+    }
+
+    /// 喂入用户所选模型（空串 = 自动选路）。
+    #[no_mangle]
+    pub extern "C" fn modelsel_select(h: i32, ptr: i32, len: i32) {
+        let req = unsafe { read_input(ptr, len) };
+        let req = String::from_utf8_lossy(req).to_string();
+        let mut reg = SEL_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            if let Some(f) = slot.as_mut() {
+                f.select(&req);
+            }
+        }
+    }
+
+    /// 喂入实际采用的模型名（空串 = 最终无模型应答）。
+    #[no_mangle]
+    pub extern "C" fn modelsel_set_applied(h: i32, ptr: i32, len: i32) {
+        let ap = unsafe { read_input(ptr, len) };
+        let ap = String::from_utf8_lossy(ap).to_string();
+        let mut reg = SEL_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            if let Some(f) = slot.as_mut() {
+                f.set_applied(&ap);
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn modelsel_state(h: i32) -> i32 {
+        let reg = SEL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|s| s.as_ref()).map(|f| f.state().code()).unwrap_or(-1)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn modelsel_requested_ptr(h: i32) -> i32 {
+        let s = SEL_REG.lock().unwrap()
+            .get(h as usize).and_then(|x| x.as_ref()).map(|f| f.requested().to_string()).unwrap_or_default();
+        scratch_copy(&s)
+    }
+    #[no_mangle]
+    pub extern "C" fn modelsel_requested_len(h: i32) -> i32 {
+        SEL_REG.lock().unwrap().get(h as usize).and_then(|x| x.as_ref()).map(|f| f.requested().len() as i32).unwrap_or(0)
+    }
+    #[no_mangle]
+    pub extern "C" fn modelsel_applied_ptr(h: i32) -> i32 {
+        let s = SEL_REG.lock().unwrap()
+            .get(h as usize).and_then(|x| x.as_ref()).map(|f| f.applied().to_string()).unwrap_or_default();
+        scratch_copy(&s)
+    }
+    #[no_mangle]
+    pub extern "C" fn modelsel_applied_len(h: i32) -> i32 {
+        SEL_REG.lock().unwrap().get(h as usize).and_then(|x| x.as_ref()).map(|f| f.applied().len() as i32).unwrap_or(0)
     }
 }
 
@@ -961,5 +1132,57 @@ mod fsm_tests {
         // 继续追加：窗口不应低于已折叠边界
         g.transition(5, 2);
         assert_eq!(g.window_keep_from(), 10); // max(10, 12-4=8)
+    }
+
+    #[test]
+    fn sel_auto_when_no_explicit_choice() {
+        let mut f = ModelSelFSM::new();
+        f.select(""); // 自动选路
+        f.set_applied("deepseek-flash"); // 网关选了某个模型
+        assert_eq!(f.state(), SelState::Auto);
+        assert_eq!(f.requested(), "");
+        assert_eq!(f.applied(), "deepseek-flash");
+    }
+
+    #[test]
+    fn sel_honored_when_applied_equals_requested() {
+        let mut f = ModelSelFSM::new();
+        f.select("openrouter/free");
+        f.set_applied("openrouter/free"); // 所选确实被采用
+        assert_eq!(f.state(), SelState::Honored);
+        assert_eq!(f.label(), "已采用所选");
+    }
+
+    #[test]
+    fn sel_substituted_when_different_model_applied() {
+        let mut f = ModelSelFSM::new();
+        f.select("openrouter/free");
+        // 所选在池中但首包前失败 → 模型级切换；或所选不在池中 → 回落自动选路。
+        // 二者最终都表现成「实际用别的模型」，FSM 统一归为 Substituted。
+        f.set_applied("deepseek-flash");
+        assert_eq!(f.state(), SelState::Substituted);
+        assert_eq!(f.requested(), "openrouter/free");
+        assert_eq!(f.applied(), "deepseek-flash");
+    }
+
+    #[test]
+    fn sel_locked_when_nothing_answered() {
+        let mut f = ModelSelFSM::new();
+        f.select("openrouter/free");
+        f.set_applied(""); // 全部候选失败，无模型应答
+        assert_eq!(f.state(), SelState::Locked);
+    }
+
+    #[test]
+    fn sel_state_code_roundtrip() {
+        for (code, st) in [
+            (0, SelState::Auto),
+            (1, SelState::Explicit),
+            (2, SelState::Honored),
+            (3, SelState::Substituted),
+            (4, SelState::Locked),
+        ] {
+            assert_eq!(SelState::from_code(code), st);
+        }
     }
 }
