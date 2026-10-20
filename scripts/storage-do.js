@@ -56,6 +56,26 @@ export class ResourceStore extends DurableObject {
       await st.put("events", list);
       return Response.json({ ok: true });
     }
+    // 用量成本账本：每请求一条（源 × 模型 × token × 延迟 × 成本）
+    if (req.method === "GET" && path === "/usage") {
+      const list = (await st.get("usage")) || [];
+      return Response.json({ usage: list });
+    }
+    if (req.method === "POST" && path === "/usage") {
+      const rec = await req.json();
+      const list = ((await st.get("usage")) || []).slice();
+      list.push(rec);
+      // 环形账本：按天保留（保留天数由调用方传入 ?keep_days=，缺省 30 天）
+      const keep = Number(new URL(req.url).searchParams.get("keep_days") || 30);
+      const cap = Math.max(1, Math.min(400, keep)) * 400; // 每天最多 400 条
+      if (list.length > cap) list.splice(0, list.length - cap);
+      await st.put("usage", list);
+      return Response.json({ ok: true, size: list.length });
+    }
+    if (req.method === "DELETE" && path === "/usage") {
+      await st.delete("usage");
+      return Response.json({ ok: true });
+    }
     return new Response("unsupported store path", { status: 404 });
   }
 }

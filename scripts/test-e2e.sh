@@ -190,7 +190,7 @@ check "health/channels/Cargo.toml 三处版本一致" $([ "$HV" = "$CV" ] && [ "
 
 # 12.2 一键载入默认（国内 3 + 海外 3，均为 disabled 待登记）
 SEED=$(curl -s -X POST http://127.0.0.1:8787/admin/api/seed)
-echo "$SEED" | grep -q '"added":6'; check "seed 载入 6 个默认渠道（国内 3 + 海外 3）" $? "$SEED"
+echo "$SEED" | grep -q '"added":7'; check "seed 载入 7 个默认渠道（国内 3 + DeepSeek + 海外 3）" $? "$SEED"
 echo "$SEED" | grep -q 'seed-zhipu-chat'; check "seed 含智谱主线" $? "$SEED"
 echo "$SEED" | grep -q 'seed-siliconflow-chat'; check "seed 含硅基流动" $? "$SEED"
 echo "$SEED" | grep -q 'seed-openrouter-chat'; check "seed 含海外 OpenRouter" $? "$SEED"
@@ -644,10 +644,10 @@ rm -f "$ROOT/.origin-extract.mjs" "$ROOT/.origin-fns.mjs" "$ROOT/.origin-test.mj
 echo "== 19. v0.13.0：海外视觉全量对接（免费视觉模型补列 / video_url 甄别 / 兜底路由）=="
 stop_workerd
 start_workerd workerd.config.capnp; check "workerd(海外融合) 已就绪" $? "worker not reachable"
-# 19.1 seed 现在载入 6 条（国内 3 + 海外 3），全部 disabled 待登记
+# 19.1 seed 现在载入 7 条（国内 3 + DeepSeek + 海外 3），全部 disabled 待登记
 SEED=$(curl -s -X POST http://127.0.0.1:8787/admin/api/seed)
-echo "$SEED" | grep -q '"added":6'; check "seed 载入 6 条（国内 3 + 海外 3）" $? "$SEED"
-for id in seed-zhipu-chat seed-siliconflow-chat seed-zhipu-audio seed-openrouter-chat seed-groq-chat seed-nvidia-chat; do
+echo "$SEED" | grep -q '"added":7'; check "seed 载入 7 条（国内 3 + DeepSeek + 海外 3）" $? "$SEED"
+for id in seed-zhipu-chat seed-siliconflow-chat seed-zhipu-audio seed-deepseek-chat seed-openrouter-chat seed-groq-chat seed-nvidia-chat; do
   echo "$SEED" | grep -q "$id"; check "seed 含 $id" $? "$SEED"
 done
 # 海外种子全部 disabled（需登记 Key 才参与路由）
@@ -685,6 +685,66 @@ echo "$CH" | python3 -c 'import json,sys; c=json.load(sys.stdin); mm={m["name"]:
 # 19.5 视觉甄别增强：video_url 同样走 vision 路由（多模态 omni 模型）
 VVIS=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"data:video/mp4;base64,AAAA"}}]}]}')
 echo "$VVIS" | grep -q 'gemma-4-31b-it:free\|openrouter/free'; check "video_url 也路由到海外视觉模型（omni 兜底）" $? "$VVIS"
+
+echo "== 20. v0.14.0：DeepSeek 渠道对接 + 用量成本账本（记账 / 聚合 / 对账 CSV 导出）=="
+
+# 20.1 DeepSeek 种子落库：模型、单价档案、视觉能力标在 deepseek-flash
+DS=$(curl -s http://127.0.0.1:8787/admin/api/channels | python3 -c 'import json,sys; chs=json.load(sys.stdin)["channels"]; print(json.dumps([c for c in chs if c["id"]=="seed-deepseek-chat"][0]))')
+echo "$DS" | grep -q 'api.deepseek.com/v1'; check "DeepSeek 种子 base_url 指向官方端点" $? "$DS"
+echo "$DS" | grep -q 'deepseek-flash'; check "DeepSeek 种子含在售模型 deepseek-flash" $? "$DS"
+echo "$DS" | grep -q 'deepseek-v4-pro'; check "DeepSeek 种子含旗舰 deepseek-v4-pro" $? "$DS"
+# 已下线的 deepseek-v4-flash-vision-exp 不该再出现
+echo "$DS" | grep -qF 'deepseek-v4-flash-vision-exp'; [ $? -ne 0 ]; check "已下线模型 deepseek-v4-flash-vision-exp 已移除" $? "$DS"
+# 单价档案：Flash 命中 0.02 / 未命中 1 / 输出 2（CNY 每百万 token）
+echo "$DS" | python3 -c 'import json,sys; c=json.load(sys.stdin); m={x["name"]:x for x in c["models_meta"]}.get("deepseek-flash") or {}; ok=m.get("price_in_hit")==0.02 and m.get("price_in_miss")==1.0 and m.get("price_out")==2.0 and m.get("currency")=="CNY"; sys.exit(0 if ok else 1)'; check "DeepSeek Flash 单价档案 0.02/1/2 CNY" $? "$DS"
+# 视觉能力必须落在 deepseek-flash（原生支持 image 输入），pro 为纯文本
+echo "$DS" | python3 -c 'import json,sys; c=json.load(sys.stdin); k={x["name"]:x["kind"] for x in c["models_meta"]}; ok=k.get("deepseek-flash")=="vision" and k.get("deepseek-v4-pro")=="text"; sys.exit(0 if ok else 1)'; check "DeepSeek 视觉落在 deepseek-flash、pro 为 text" $? "$DS"
+# 渠道默认 disabled + priority 70（低于国内 80~100、高于海外 40/35/30）
+echo "$DS" | python3 -c 'import json,sys; c=json.load(sys.stdin); ok=(c["enabled"] is False) and c["priority"]==70; sys.exit(0 if ok else 1)'; check "DeepSeek 种子默认 disabled、priority 70" $? "$DS"
+echo "$SEED" | python3 -c 'import json,sys; pr={c["id"]:c["priority"] for c in json.load(sys.stdin)["channels"]}; ok=pr["seed-deepseek-chat"]<pr["seed-siliconflow-chat"] and pr["seed-deepseek-chat"]>pr["seed-openrouter-chat"]; sys.exit(0 if ok else 1)'; check "DeepSeek 优先级夹在国内(80/90)与海外(40)之间" $? ""
+
+# 20.2 用量记账：转发一次后 usage 落 DO（tee 旁路采集，不影响流式重放）
+curl -s -X PUT http://127.0.0.1:8787/admin/api/channels/seed-deepseek-chat -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"api_key":"test-key-local","base_url":"http://127.0.0.1:8788"}' > /dev/null
+# 非流式：mock 返回 usage{7,9,16}
+curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"hi"}]}' > /dev/null
+# 流式：SSE 末帧 usage 同样要被解析（tee 旁路读到的是完整流）
+curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"stream":true,"messages":[{"role":"user","content":"hi"}]}' > /dev/null
+sleep 1
+RAW=$(curl -s http://127.0.0.1:8787/admin/api/usage)
+echo "$RAW" | grep -q '"total_tokens"'; check "/admin/api/usage 返回聚合结果" $? "$RAW"
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["records"]>=2 else 1)'; check "非流式+流式各记 1 条用量（共≥2）" $? "$RAW"
+# token 解析正确：prompt 7 / completion 9 / total 16 / cache_hit 2
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d["totals"]; ok=t["prompt_tokens"]>=14 and t["completion_tokens"]>=18 and t["total_tokens"]>=32 and t["cache_hit_tokens"]>=2; sys.exit(0 if ok else 1)'; check "token 解析正确（prompt/completion/total/cache_hit 累加）" $? "$RAW"
+# 按源分组含 deepseek，按 源×模型 分组含 deepseek|deepseek-flash
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=any(o["key"]=="deepseek" for o in d["by_provider"]) and any(o["key"].startswith("deepseek|") for o in d["by_model"]); sys.exit(0 if ok else 1)'; check "聚合含按源 deepseek 与 源×模型 分组" $? "$RAW"
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=len(d["by_day"])>=1 and all(len(o["key"])==10 for o in d["by_day"]); sys.exit(0 if ok else 1)'; check "按自然日分组（YYYY-MM-DD）" $? "$RAW"
+
+# 20.3 成本折算：mock 单次 7/9/16 token、Flash 价 0.02/1/2 CNY 每百万
+#     → 7*0.02 + 7*1 + 9*2 = 25.14 / 1e6 = 0.00002514（cache_hit 2 从未命中里扣除则略低）
+echo "$RAW" | python3 -c 'import json,sys; c=json.load(sys.stdin)["totals"]["cost"]; sys.exit(0 if c>0 else 1)'; check "成本已按单价档案折算（>0）" $? "$RAW"
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d["totals"]; ok=t["priced_requests"]>=2 and t["currency"]=="CNY"; sys.exit(0 if ok else 1)'; check "已计价请求数与币种 CNY 正确" $? "$RAW"
+
+# 20.4 对账 CSV 导出：列名严格对齐 DeepSeek 官方 cost-*.csv，且带 UTF-8 BOM
+CSV=$(curl -s -D /tmp/us_hdr http://127.0.0.1:8787/admin/api/usage/export)
+grep -qi 'text/csv' /tmp/us_hdr; check "导出 Content-Type 为 text/csv" $? "$(cat /tmp/us_hdr)"
+grep -qi 'attachment; filename="gateway-usage-export.csv"' /tmp/us_hdr; check "导出为附件下载" $? "$(cat /tmp/us_hdr)"
+printf 'ï»¿' > /tmp/us_bom
+curl -s http://127.0.0.1:8787/admin/api/usage/export > /tmp/us_body
+head -c 3 /tmp/us_body | od -An -tx1 | grep -q 'ef bb bf'; check "导出带 UTF-8 BOM（Excel 不乱码）" $? "no BOM"
+HDR=$(sed 's/^\xef\xbb\xbf//' /tmp/us_body | head -1)
+[ "$HDR" = "user_id,start_time_iso,end_time_iso,model,name,wallet_type,cost,currency" ]; check "CSV 列名对齐官方 cost-*.csv schema" $? "$HDR"
+grep -q ',deepseek-' /tmp/us_body; check "CSV 含 deepseek 数据行" $? "$(cat /tmp/us_body)"
+grep -q '^gateway,' /tmp/us_body; check "CSV 数据行以 gateway 标识（本方网关账本）" $? "$(cat /tmp/us_body)"
+
+# 20.5 管理页用量面板已挂载
+UI=$(curl -s http://127.0.0.1:8787/admin | grep -c 'usage-tables')
+[ "$UI" -ge 1 ]; check "管理页含用量面板容器" $? "no usage panel"
+curl -s http://127.0.0.1:8787/admin | grep -q '导出对账 CSV'; check "管理页含「导出对账 CSV」按钮" $? "no export button"
+curl -s http://127.0.0.1:8787/admin | grep -q 'api("/usage")'; check "管理页拉取 /admin/api/usage" $? "no usage fetch"
+
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

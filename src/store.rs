@@ -110,3 +110,33 @@ pub async fn load_events(env: &Env) -> Vec<RouteEvent> {
         }
     }
 }
+
+/// 追加一条用量成本记录（每请求一条）。失败只记日志，不影响主链路。
+pub async fn push_usage(env: &Env, rec: &UsageRecord) {
+    let body = match serde_json::to_string(rec) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+    if let Err(e) = store_rpc(env, Method::Post, "/usage", Some(&body)).await {
+        worker::console_error!("push_usage failed: {e:?}");
+    }
+}
+
+/// 读取用量成本账本（失败返回空列表）。
+pub async fn load_usage(env: &Env) -> Vec<UsageRecord> {
+    match store_rpc(env, Method::Get, "/usage", None).await {
+        Ok(resp) => {
+            let mut resp = resp;
+            resp.text()
+                .await
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|v| serde_json::from_value::<Vec<UsageRecord>>(v.get("usage")?.clone()).ok())
+                .unwrap_or_default()
+        }
+        Err(e) => {
+            worker::console_error!("load_usage failed: {e:?}");
+            Vec::new()
+        }
+    }
+}

@@ -735,6 +735,12 @@ async fn try_model_attempts(
         let content_type = content_type_of(&web_resp);
         let out_headers = diag_headers(ch, &att.model, &attempts, &content_type, stream)?;
 
+        // ---- 用量成本采集（不干扰透传）----
+        // web_sys::Response::clone() 是 tee：克隆体独立可读，原体照常做流重放。
+        // 我们只在克隆体上解析 usage（流式时 usage 在最后一个 data 块，非流式在顶层），
+        // 解析失败（上游不回 usage）则只记请求数与延迟、不计成本。
+        let usage_probe = web_sys::Response::clone(&web_resp).ok();
+
         // 读首帧，失败（连接中断/空流）才算"首包前失败"，换候选
         let body_stream = match web_resp.body() {
             Some(s) => s,
@@ -762,6 +768,36 @@ async fn try_model_attempts(
                     admin::report_success(env, &ch.id, &ch.provider, scope, &att.model, &attempts, latency)
                         .await;
                 }
+                // 用量成本落账（旁路读 usage，不阻塞客户端响应）
+                if let Some(probe) = usage_probe {
+                    let ch2 = ch.clone();
+                    let model2 = att.model.clone();
+                    let env2 = env.clone();
+                    let t0b = t0;
+                    let scope2 = scope.to_string();
+                    // 单价档案在闭包外解析好（避免借用跨 'static 边界）
+                    let meta = ch2
+                        .effective_models()
+                        .into_iter()
+                        .find(|m| m.name == model2)
+                        .unwrap_or_else(|| ModelMeta {
+                            name: model2.clone(),
+                            kind: "text".into(),
+                            enabled: true,
+                            priority: 0,
+                            health: Default::default(),
+                            price_in_hit: 0.0,
+                            price_in_miss: 0.0,
+                            price_out: 0.0,
+                            currency: String::new(),
+                        });
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let tokens = read_usage_tokens(probe).await;
+                        let latency = (admin::now_ms() - t0b) as u64;
+                        let rec = build_usage_record(&scope2, &ch2, &model2, &meta, tokens, latency, "ok");
+                        store::push_usage(&env2, &rec).await;
+                    });
+                }
                 return Ok(ChannelOutcome::Locked(resp));
             }
             Err(_) => {
@@ -775,6 +811,138 @@ async fn try_model_attempts(
         Ok(ChannelOutcome::UpstreamError(status, err_body, attempts))
     } else {
         Ok(ChannelOutcome::AllConnFailed(attempts))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 用量成本：token 采集 + 成本折算
+// ---------------------------------------------------------------------------
+
+/// 从上游响应体（JSON 或 SSE 文本）里提取 token 用量。
+///
+/// 上游 usage 字段形态（OpenAI 兼容 + DeepSeek 扩展）：
+/// ```json
+/// "usage": {
+///   "prompt_tokens": 100,
+///   "prompt_cache_hit_tokens": 30,   // DeepSeek 专有：缓存命中的输入
+///   "completion_tokens": 50,
+///   "total_tokens": 150
+/// }
+/// ```
+/// 流式时 usage 出现在最后一个 `data:` 块里；非流式在响应体顶层。
+/// 解析不出来（上游不回 usage）时返回 None —— 此时只记请求数与延迟，不计成本。
+fn parse_usage_tokens(text: &str) -> Option<UsageTokens> {
+    let key = "\"usage\"";
+    let idx = text.rfind(key)?;
+    let rest = &text[idx + key.len()..];
+    let open = rest.find('{')?;
+    // 手工截取配平的 JSON 对象（usage 内部不含嵌套花括号，但保险起见做深度计数）
+    let bytes = rest.as_bytes();
+    let mut depth = 0i32;
+    let mut end = None;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    let obj: serde_json::Value = serde_json::from_str(&rest[open..=end]).ok()?;
+    let g = |k: &str| obj.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let prompt = g("prompt_tokens");
+    let completion = g("completion_tokens");
+    let total = g("total_tokens");
+    if prompt == 0 && completion == 0 && total == 0 {
+        return None;
+    }
+    Some(UsageTokens {
+        prompt_tokens: prompt,
+        prompt_cache_hit_tokens: g("prompt_cache_hit_tokens"),
+        completion_tokens: completion,
+        total_tokens: if total > 0 { total } else { prompt + completion },
+    })
+}
+
+/// token 用量三元组（+ DeepSeek 的缓存命中输入）。
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UsageTokens {
+    pub prompt_tokens: u64,
+    pub prompt_cache_hit_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// 按模型的单价档案折算成本。
+///
+/// DeepSeek 式两段输入计费：`prompt_cache_hit_tokens` 走命中价，其余输入走未命中价。
+/// 单价单位为「每百万 token」。未配单价档案（免费模型）→ 成本 0、币种空。
+fn compute_cost(meta: &ModelMeta, u: &UsageTokens) -> (f64, String) {
+    if !meta.priced() {
+        return (0.0, String::new());
+    }
+    let hit = u.prompt_cache_hit_tokens.min(u.prompt_tokens);
+    let miss = u.prompt_tokens.saturating_sub(hit);
+    let cost_in = (hit as f64 * meta.price_in_hit + miss as f64 * meta.price_in_miss) / 1_000_000.0;
+    let cost_out = (u.completion_tokens as f64 * meta.price_out) / 1_000_000.0;
+    ((cost_in + cost_out), meta.currency().to_string())
+}
+
+/// 从 tee 克隆体读完整 body 并解析 usage。
+///
+/// 上游不回 usage 时返回 None —— 此时只记请求数/延迟，不计成本（成本记 0）。
+/// 读取失败（连接中断等）同样返回 None，不影响主链路。
+async fn read_usage_tokens(probe: web_sys::Response) -> Option<UsageTokens> {
+    let resp = probe;
+    let promise = web_sys::Response::text(&resp).ok()?;
+    let text = wasm_bindgen_futures::JsFuture::from(promise)
+        .await
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default();
+    parse_usage_tokens(&text)
+}
+
+/// 组装一条用量记录（成本已折算）。
+#[allow(clippy::too_many_arguments)]
+fn build_usage_record(
+    scope: &str,
+    ch: &Channel,
+    model: &str,
+    meta: &ModelMeta,
+    tokens: Option<UsageTokens>,
+    latency_ms: u64,
+    status: &str,
+) -> crate::channels::UsageRecord {
+    let ts = crate::admin::now_iso();
+    let (cost, currency) = match tokens {
+        Some(u) => compute_cost(meta, &u),
+        None => (0.0, String::new()),
+    };
+    let t = tokens.unwrap_or_default();
+    crate::channels::UsageRecord {
+        ts: ts.clone(),
+        day: crate::channels::UsageRecord::day_of(&ts),
+        scope: scope.to_string(),
+        provider: ch.provider.clone(),
+        channel_id: ch.id.clone(),
+        channel_name: ch.name.clone(),
+        model: model.to_string(),
+        prompt_tokens: t.prompt_tokens,
+        prompt_cache_hit_tokens: t.prompt_cache_hit_tokens,
+        completion_tokens: t.completion_tokens,
+        total_tokens: t.total_tokens,
+        latency_ms,
+        status: status.to_string(),
+        cost,
+        currency,
+        estimated: cost > 0.0,
     }
 }
 
@@ -1210,8 +1378,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{header_safe, payload_has_image, resolve_stt_model, resolve_tts_model};
-    use crate::channels::default_overseas_channels;
+    use super::{
+        compute_cost, header_safe, parse_usage_tokens, payload_has_image, resolve_stt_model,
+        resolve_tts_model, UsageTokens,
+    };
+    use crate::channels::{default_deepseek_channels, default_overseas_channels, ModelMeta};
 
     /// 版本号单一事实源：admin.rs 的 VERSION 与 /health 的字面量都必须来自
     /// Cargo.toml（编译期注入）。曾经 admin.rs 常量停在 0.7.2 没跟着升级，
@@ -1220,7 +1391,7 @@ mod tests {
     #[test]
     fn version_single_source_of_truth() {
         assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(crate::admin::VERSION, "0.13.0");
+        assert_eq!(crate::admin::VERSION, "0.14.0");
     }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
@@ -1373,5 +1544,107 @@ mod tests {
 
         let broken = serde_json::json!({});
         assert!(!payload_has_image(&broken), "畸形体不应触发 vision");
+    }
+
+    /// usage 解析：OpenAI 兼容顶层 usage + DeepSeek 缓存命中扩展字段。
+    #[test]
+    fn usage_parsing() {
+        // 非流式：usage 在响应体顶层
+        let body = r#"{"id":"x","choices":[{"message":{"content":"hi"}}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}"#;
+        let u = parse_usage_tokens(body).expect("应解析出 usage");
+        assert_eq!(u.prompt_tokens, 100);
+        assert_eq!(u.completion_tokens, 50);
+        assert_eq!(u.total_tokens, 150);
+        assert_eq!(u.prompt_cache_hit_tokens, 0);
+
+        // DeepSeek 扩展：缓存命中 token 单列
+        let ds = r#"{"usage":{"prompt_tokens":100,"prompt_cache_hit_tokens":30,"completion_tokens":20,"total_tokens":120}}"#;
+        let u2 = parse_usage_tokens(ds).expect("应解析出 DeepSeek usage");
+        assert_eq!(u2.prompt_cache_hit_tokens, 30);
+        assert_eq!(u2.prompt_tokens, 100);
+
+        // 流式：usage 在最后一个 data 块里
+        let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\ndata: [DONE]\n\n";
+        let u3 = parse_usage_tokens(sse).expect("应从 SSE 解析出 usage");
+        assert_eq!(u3.prompt_tokens, 7);
+        assert_eq!(u3.completion_tokens, 3);
+
+        // 上游不回 usage → None（只记请求数，不计成本）
+        assert!(parse_usage_tokens(r#"{"choices":[]}"#).is_none());
+        assert!(parse_usage_tokens("").is_none());
+    }
+
+    /// 成本折算：DeepSeek 式两段输入计费（命中价 / 未命中价）+ 输出价。
+    #[test]
+    fn cost_computation() {
+        let meta = ModelMeta {
+            name: "deepseek-flash".into(),
+            kind: "text".into(),
+            enabled: true,
+            priority: 100,
+            health: Default::default(),
+            price_in_hit: 0.02,
+            price_in_miss: 1.0,
+            price_out: 2.0,
+            currency: "CNY".into(),
+        };
+        // 100 输入（其中 30 命中）+ 50 输出
+        let u = UsageTokens {
+            prompt_tokens: 100,
+            prompt_cache_hit_tokens: 30,
+            completion_tokens: 50,
+            total_tokens: 150,
+        };
+        let (cost, cur) = compute_cost(&meta, &u);
+        // 30×0.02 + 70×1.0 + 50×2.0 = 0.6 + 70 + 100 = 170.6 元/百万 → 0.0001706
+        assert_eq!(cur, "CNY");
+        assert!((cost - 0.0001706).abs() < 1e-9, "成本折算不对：{cost}");
+
+        // 免费模型（无单价档案）→ 成本 0、币种空
+        let free = ModelMeta {
+            name: "free".into(),
+            kind: "text".into(),
+            enabled: true,
+            priority: 50,
+            health: Default::default(),
+            price_in_hit: 0.0,
+            price_in_miss: 0.0,
+            price_out: 0.0,
+            currency: String::new(),
+        };
+        let (c2, cur2) = compute_cost(&free, &u);
+        assert_eq!(c2, 0.0);
+        assert_eq!(cur2, "");
+    }
+
+    /// DeepSeek 种子渠道：现行模型名 + 单价档案 + 默认 disabled。
+    #[test]
+    fn deepseek_seed_channel_well_formed() {
+        let now = "2026-10-20T00:00:00Z";
+        let ds = default_deepseek_channels(now);
+        assert_eq!(ds.len(), 1, "DeepSeek 种子应为 1 条");
+        let c = &ds[0];
+        assert_eq!(c.id, "seed-deepseek-chat");
+        assert!(!c.enabled, "种子必须默认 disabled（需登记 Key）");
+        assert!(c.priority < 80, "DeepSeek 优先级应低于国内主力，实际 {}", c.priority);
+        assert!(c.caps.iter().any(|x| x == "vision"), "应声明 vision 能力");
+        // 现行模型名（旧的 deepseek-chat/deepseek-reasoner 已弃用）
+        let names: Vec<&str> = c.models_meta.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"deepseek-flash"), "应含 deepseek-flash");
+        assert!(names.contains(&"deepseek-v4-pro"), "应含 deepseek-v4-pro");
+        assert!(
+            !names.contains(&"deepseek-chat"),
+            "deepseek-chat 已弃用，不应再作默认模型"
+        );
+        // 视觉能力标在 deepseek-flash（实测支持 image 输入）
+        let vision = c.models_meta.iter().find(|m| m.kind == "vision").unwrap();
+        assert_eq!(vision.name, "deepseek-flash", "视觉应落在 deepseek-flash");
+        // 单价档案齐全（CNY）
+        for m in &c.models_meta {
+            assert!(m.priced(), "{} 缺单价档案", m.name);
+            assert_eq!(m.currency(), "CNY", "{} 币种应为 CNY", m.name);
+        }
+        assert_eq!(c.created_at, now);
+        assert_eq!(c.updated_at, now);
     }
 }

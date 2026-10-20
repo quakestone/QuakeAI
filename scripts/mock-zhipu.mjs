@@ -155,7 +155,15 @@ const server = createServer((req, res) => {
         let i = 0;
         const timer = setInterval(() => {
           if (i < pieces.length) res.write(pieces[i++]);
-          else { res.write("data: [DONE]\n\n"); res.end(); clearInterval(timer); }
+          else {
+            // 真实上游在 [DONE] 前会补一帧 usage（OpenAI 兼容惯例，stream_options.include_usage）
+            res.write(`data: ${JSON.stringify({
+              id: "chatcmpl-mock-1", object: "chat.completion.chunk", model,
+              choices: [],
+              usage: { prompt_tokens: 7, prompt_cache_hit_tokens: 2, completion_tokens: 9, total_tokens: 16 },
+            })}\n\n`);
+            res.write("data: [DONE]\n\n"); res.end(); clearInterval(timer);
+          }
         }, 30);
         return;
       }

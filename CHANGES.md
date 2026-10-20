@@ -1,5 +1,22 @@
 # CHANGES
 
+## v0.14.0（2026-10-21）—— DeepSeek 渠道对接 + 用量成本账本（逐请求记账 / 聚合 / 对账 CSV 导出）
+
+用户指令：「这个是DeepSeek的 你也对接下」+ 上传 DeepSeek 官方 `usage_data_*.zip`，随后纠偏「我给你是空白的文件 你也在做」。
+
+- **方案纠偏（重要）**：用户上传的 `cost-*.csv` / `amount-*.csv` **只有表头、零数据行**（账户零余额、从未产生调用），拿它做 CSV 导入对账是空转功能。因此**放弃「导入官方 CSV 对账」**，改为：网关自己逐请求记账（跑起来就有真数据）+ **导出**网关账单且列名严格对齐官方 `cost-*.csv` schema，将来官方有数据时两边并排 diff。
+- **DeepSeek 渠道对接**（联网核实 2026-10 现行实况 + 真实 Key 实测）：
+  - 现行模型仅 2 个：`deepseek-flash`（DeepSeek-V4.1-Flash，1M 上下文，**原生支持 image 输入**）、`deepseek-v4-pro`（纯文本旗舰）。`deepseek-chat`/`deepseek-reasoner` 已于 2026-07-24 弃用，`deepseek-v4-flash-vision-exp` 已下线——三者全部不再出现在预设与种子中。
+  - 新增种子 `seed-deepseek-chat`：`https://api.deepseek.com/v1`、priority 70（低于智谱 100/90、硅基 90、智谱音频 80，高于海外 40/35/30）、默认 `enabled=false`、caps `["text","vision"]`。
+  - 视觉能力标在 **`deepseek-flash`**（实测支持 image 输入），`deepseek-v4-pro` 为 `text`。
+- **单价档案（`ModelMeta` 新字段）**：`price_in_hit` / `price_in_miss` / `price_out`（每百万 token）+ `currency`，实现 DeepSeek 式**两段输入计费**（缓存命中/未命中分别计价）+ 输出单独计价。Flash 0.02 / 1 / 2，Pro 0.025 / 3 / 6（CNY）。serde default 兼容旧账本。
+- **逐请求用量账本**：新增 `UsageRecord`（ts/day/scope/provider/channel/model/prompt_tokens/prompt_cache_hit_tokens/completion_tokens/total_tokens/latency_ms/status/cost/currency/estimated）。DO 侧新增 `usage` 存储键与 `GET/POST/DELETE /usage` 端点（环形保留 30 天 × 400 条）。
+- **tee 旁路采集**：命中成功后 `web_sys::Response::clone()`（tee，克隆体独立可读、原体照常流重放），异步读 `usage` 字段并落账——**不改动已验证的流重放逻辑，零回归风险**。`parse_usage_tokens` 手工配平花括号截取，兼容顶层 usage 与 SSE 末帧 usage。
+- **聚合 API + 对账导出**：`GET /admin/api/usage` 返回 totals / by_provider / by_model / by_day（requests/ok/failed/success_rate/tokens/cache_hit/cost/currency/mixed_currency/priced_requests/avg_latency_ms）；`GET /admin/api/usage/export` 导出 CSV，**列名严格等于官方 `cost-*.csv`**（`user_id,start_time_iso,end_time_iso,model,name,wallet_type,cost,currency`）并带 UTF-8 BOM（Excel 双击不乱码）。
+- **管理页「用量与成本」面板**：6 张指标卡（请求数/成功率/总 token/缓存命中/估算成本/平均延迟）+「按源 / 按 源×模型 / 按自然日」三张表 +「导出对账 CSV」下载按钮；混币种显式打 ⚠ 标记（成本不可直接相加）。
+- **验证**：单测 **20/20**（新增 `aggregate_usage_by_all_dimensions` / `aggregate_usage_flags_mixed_currency` / `aggregate_usage_empty_is_zero` / `csv_field_escapes_special_chars` / `usage_parsing` / `cost_computation` / `deepseek_seed_channel_well_formed`）+ e2e **233/233**（新增 §20 共 26 项断言：DeepSeek 种子落库与单价档案、usage 记账落 DO、聚合三维度、成本折算、CSV 列名与 BOM、管理页面板挂载）。
+- **测试基建**：mock 上游的流式响应补 `[DONE]` 前的 usage 帧（真实上游 OpenAI 兼容惯例），使流式路径的 token 采集可被 e2e 验证。
+
 ## v0.13.0（2026-10-20）—— 海外视觉全量对接（免费视觉模型补列 / video_url 甄别 / 统一选择逻辑）
 
 用户指令：「把海外视觉模型全部对接补上」+「视觉模型管理要对接聊天的视觉甄别自动切换视觉模型 与文本模型的选择一个逻辑的」。

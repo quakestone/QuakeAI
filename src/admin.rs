@@ -9,6 +9,8 @@
 //!   POST   /admin/api/channels/{id}/test  连通性探测 + 回写健康状态
 //!   POST   /admin/api/seed            一键载入默认（国内 3 + 海外 3：OpenRouter/Groq/NVIDIA NIM）
 //!   GET    /admin/api/events          降权/切换事件账本（最近 50 条）
+//!   GET    /admin/api/usage           用量成本聚合（按源 × 模型 × 日）
+//!   GET    /admin/api/usage/export    对账 CSV 导出（列名对齐 DeepSeek 官方 cost-*.csv）
 //!   GET    /admin/api/diag            部署自检（DO 绑定/env 状态，排障用）
 //!
 //! 安全：配置 ADMIN_TOKEN（var 或 secret）后，所有 /admin/api/* 都要求
@@ -111,6 +113,8 @@ async fn handle_admin_inner(req: Request, env: &Env, sub: &str) -> Result<Respon
         (Method::Post, "/channels") => api_create(req, env).await,
         (Method::Post, "/seed") => api_seed(env).await,
         (Method::Get, "/events") => api_events(env).await,
+        (Method::Get, "/usage") => api_usage(env).await,
+        (Method::Get, "/usage/export") => api_usage_export(env).await,
         (Method::Get, "/diag") => api_diag(env).await,
         _ => {
             // /channels/{id} 与 /channels/{id}/test
@@ -418,6 +422,12 @@ async fn api_seed(env: &Env) -> Result<Response> {
             added += 1;
         }
     }
+    for seed in default_deepseek_channels(&now) {
+        if !list.iter().any(|c| c.id == seed.id) {
+            list.push(seed);
+            added += 1;
+        }
+    }
     if let Err(e) = save_all_channels(env, &list).await {
         return store_unavailable(&e);
     }
@@ -434,6 +444,174 @@ async fn api_seed(env: &Env) -> Result<Response> {
 async fn api_events(env: &Env) -> Result<Response> {
     let events = load_events(env).await;
     json_response(200, serde_json::json!({ "events": events }))
+}
+
+// ---------------------------------------------------------------------------
+// 用量成本：聚合视图 + 对账 CSV 导出
+// ---------------------------------------------------------------------------
+
+/// GET /admin/api/usage —— 用量成本聚合（按源 × 模型 × 日）。
+/// 与 DeepSeek 官方 usage_data 导出同口径：requests / tokens / 成本 / 币种。
+async fn api_usage(env: &Env) -> Result<Response> {
+    let records = load_usage(env).await;
+    json_response(200, aggregate_usage(&records))
+}
+
+/// 聚合算法（纯函数，可单测）：
+/// - `totals`：全部记录合计（requests / tokens / 成本 / 成功率）
+/// - `by_provider`：按源
+/// - `by_model`：按 源 × 模型
+/// - `by_day`：按自然日
+fn aggregate_usage(records: &[UsageRecord]) -> serde_json::Value {
+    let mut totals = UsageAgg::default();
+    let mut by_provider: std::collections::BTreeMap<String, UsageAgg> = Default::default();
+    let mut by_model: std::collections::BTreeMap<String, UsageAgg> = Default::default();
+    let mut by_day: std::collections::BTreeMap<String, UsageAgg> = Default::default();
+
+    for r in records {
+        totals.add(r);
+        by_provider.entry(r.provider.clone()).or_default().add(r);
+        by_model
+            .entry(format!("{}|{}", r.provider, r.model))
+            .or_default()
+            .add(r);
+        by_day.entry(r.day.clone()).or_default().add(r);
+    }
+
+    let dump = |m: &std::collections::BTreeMap<String, UsageAgg>| -> Vec<serde_json::Value> {
+        m.iter()
+            .map(|(k, v)| {
+                let mut o = serde_json::Map::new();
+                o.insert("key".into(), serde_json::Value::String(k.clone()));
+                o.insert("value".into(), v.to_json());
+                serde_json::Value::Object(o)
+            })
+            .collect()
+    };
+
+    serde_json::json!({
+        "records": records.len(),
+        "totals": totals.to_json(),
+        "by_provider": dump(&by_provider),
+        "by_model": dump(&by_model),
+        "by_day": dump(&by_day),
+    })
+}
+
+/// 聚合桶：请求数 / 成功数 / token / 成本 / 平均延迟。
+#[derive(Default, Clone)]
+struct UsageAgg {
+    requests: u64,
+    ok: u64,
+    failed: u64,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    cache_hit_tokens: u64,
+    cost: f64,
+    latency_sum: u64,
+    currency: String,
+    /// 币种不一致时标记（混币种不可直接相加）
+    mixed_currency: bool,
+    /// 真正折算出成本的请求数（其余为免费模型或上游未回 usage）
+    priced_requests: u64,
+}
+
+impl UsageAgg {
+    fn add(&mut self, r: &UsageRecord) {
+        self.requests += 1;
+        if r.status == "ok" {
+            self.ok += 1;
+        } else {
+            self.failed += 1;
+        }
+        self.prompt_tokens += r.prompt_tokens;
+        self.completion_tokens += r.completion_tokens;
+        self.total_tokens += r.total_tokens;
+        self.cache_hit_tokens += r.prompt_cache_hit_tokens;
+        self.cost += r.cost;
+        self.latency_sum += r.latency_ms;
+        if r.has_cost() {
+            self.priced_requests += 1;
+        }
+        if self.currency.is_empty() {
+            self.currency = r.currency.clone();
+        } else if !r.currency.is_empty() && self.currency != r.currency {
+            self.mixed_currency = true;
+        }
+    }
+    fn avg_latency_ms(&self) -> u64 {
+        if self.requests == 0 {
+            0
+        } else {
+            self.latency_sum / self.requests
+        }
+    }
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "requests": self.requests,
+            "ok": self.ok,
+            "failed": self.failed,
+            "success_rate": if self.requests > 0 {
+                (self.ok as f64 / self.requests as f64 * 1000.0).round() / 1000.0
+            } else { 0.0 },
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "cache_hit_tokens": self.cache_hit_tokens,
+            "cost": (self.cost * 1e6).round() / 1e6,
+            "currency": self.currency,
+            "mixed_currency": self.mixed_currency,
+            "priced_requests": self.priced_requests,
+            "avg_latency_ms": self.avg_latency_ms(),
+        })
+    }
+}
+
+/// GET /admin/api/usage/export —— 导出对账 CSV。
+///
+/// 列名**严格对齐 DeepSeek 官方 usage_data 的 cost-*.csv schema**
+/// （user_id / start_time_iso / end_time_iso / model / name / wallet_type / cost / currency），
+/// 这样网关导出的表与官方账单导出可以并排 diff 直接对账：
+/// 官方按「每次调用一行」给，我们按「源 × 模型 × 日」聚合给，
+/// 对账时把官方 CSV 按 model+日期透视后与本表比对即可。
+async fn api_usage_export(env: &Env) -> Result<Response> {
+    let records = load_usage(env).await;
+    let mut rows: Vec<&UsageRecord> = records.iter().collect();
+    rows.sort_by(|a, b| a.day.cmp(&b.day).then(a.model.cmp(&b.model)));
+
+    let mut csv = String::from("user_id,start_time_iso,end_time_iso,model,name,wallet_type,cost,currency\n");
+    for r in &rows {
+        csv.push_str(&format!(
+            "gateway,{},{},{},{},{},{},{}\n",
+            csv_field(&r.day),
+            csv_field(&r.day),
+            csv_field(&r.model),
+            csv_field(&r.provider),
+            csv_field(if r.currency.is_empty() { "免费" } else { &r.currency }),
+            csv_field(&format!("{:.6}", r.cost)),
+            csv_field(&r.currency),
+        ));
+    }
+    // BOM：Excel 直接双击打开不乱码（官方导出同样带 BOM）
+    let mut body = vec![0xEF, 0xBB, 0xBF];
+    body.extend_from_slice(csv.as_bytes());
+    let mut resp = Response::from_bytes(body)?;
+    resp.headers_mut().set("Content-Type", "text/csv; charset=utf-8")?;
+    resp.headers_mut().set(
+        "Content-Disposition",
+        "attachment; filename=\"gateway-usage-export.csv\"",
+    )?;
+    Ok(resp)
+}
+
+/// CSV 字段转义：含逗号/引号/换行时用双引号包裹，内部引号翻倍。
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// 部署自检：前端排障页与运维脚本都能用。一次请求说清
@@ -723,5 +901,121 @@ pub async fn report_degraded(env: &Env, id: &str, provider: &str, scope: &str, m
 fn ensure_models_meta(ch: &mut Channel) {
     if ch.models_meta.is_empty() {
         ch.models_meta = ch.effective_models();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(
+        provider: &str,
+        model: &str,
+        day: &str,
+        status: &str,
+        pt: u64,
+        ct: u64,
+        hit: u64,
+        cost: f64,
+        cur: &str,
+        latency: u64,
+    ) -> UsageRecord {
+        UsageRecord {
+            ts: format!("{day}T06:00:00.000Z"),
+            day: day.to_string(),
+            scope: "chat".into(),
+            provider: provider.into(),
+            channel_id: format!("ch-{provider}"),
+            channel_name: format!("{provider} 渠道"),
+            model: model.into(),
+            prompt_tokens: pt,
+            prompt_cache_hit_tokens: hit,
+            completion_tokens: ct,
+            total_tokens: pt + ct,
+            latency_ms: latency,
+            status: status.into(),
+            cost,
+            currency: cur.to_string(),
+            estimated: true,
+        }
+    }
+
+    #[test]
+    fn aggregate_usage_empty_is_zero() {
+        let v = aggregate_usage(&[]);
+        assert_eq!(v["records"], serde_json::json!(0));
+        assert_eq!(v["totals"]["requests"], serde_json::json!(0));
+        assert_eq!(v["totals"]["success_rate"], serde_json::json!(0.0));
+        assert_eq!(v["by_provider"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn aggregate_usage_by_all_dimensions() {
+        let rs = vec![
+            rec("deepseek", "deepseek-flash", "2026-10-20", "ok", 100, 50, 30, 0.001, "CNY", 200),
+            rec("deepseek", "deepseek-flash", "2026-10-20", "failed", 0, 0, 0, 0.0, "CNY", 400),
+            rec("deepseek", "deepseek-v4-pro", "2026-10-21", "ok", 10, 5, 0, 0.002, "CNY", 100),
+            rec("zhipu", "glm-4.6", "2026-10-21", "ok", 7, 3, 0, 0.0, "", 50),
+        ];
+        let v = aggregate_usage(&rs);
+        assert_eq!(v["records"], serde_json::json!(4));
+
+        let t = &v["totals"];
+        assert_eq!(t["requests"], serde_json::json!(4));
+        assert_eq!(t["ok"], serde_json::json!(3));
+        assert_eq!(t["failed"], serde_json::json!(1));
+        // 3/4 = 0.75
+        assert_eq!(t["success_rate"], serde_json::json!(0.75));
+        assert_eq!(t["total_tokens"], serde_json::json!(175));
+        assert_eq!(t["cache_hit_tokens"], serde_json::json!(30));
+        // 0.001 + 0.002 = 0.003
+        assert_eq!(t["cost"], serde_json::json!(0.003));
+        // 平均延迟 (200+400+100+50)/4 = 187.5 → 187
+        assert_eq!(t["avg_latency_ms"], serde_json::json!(187));
+        // 只有 2 条真正折出成本
+        assert_eq!(t["priced_requests"], serde_json::json!(2));
+
+        // 按源：2 个
+        let bp = v["by_provider"].as_array().unwrap();
+        assert_eq!(bp.len(), 2);
+        let ds = bp.iter().find(|o| o["key"] == "deepseek").unwrap();
+        assert_eq!(ds["value"]["requests"], serde_json::json!(3));
+        assert_eq!(ds["value"]["success_rate"], serde_json::json!(0.667));
+
+        // 按 源×模型：3 个（deepseek 有两个模型）
+        assert_eq!(v["by_model"].as_array().unwrap().len(), 3);
+
+        // 按日：2 天，且按字典序排列
+        let bd = v["by_day"].as_array().unwrap();
+        assert_eq!(bd.len(), 2);
+        assert_eq!(bd[0]["key"], serde_json::json!("2026-10-20"));
+        assert_eq!(bd[0]["value"]["requests"], serde_json::json!(2));
+        assert_eq!(bd[1]["key"], serde_json::json!("2026-10-21"));
+    }
+
+    #[test]
+    fn aggregate_usage_flags_mixed_currency() {
+        let rs = vec![
+            rec("deepseek", "deepseek-flash", "2026-10-20", "ok", 10, 5, 0, 0.001, "CNY", 10),
+            rec("zhipu", "glm-4.6", "2026-10-20", "ok", 10, 5, 0, 0.01, "USD", 10),
+        ];
+        let v = aggregate_usage(&rs);
+        // 混币种时 totals 必须标记（成本不可直接相加）
+        assert_eq!(v["totals"]["mixed_currency"], serde_json::json!(true));
+        assert_eq!(v["totals"]["currency"], serde_json::json!("CNY"));
+        // 但按源分组各自币种单一
+        let bp = v["by_provider"].as_array().unwrap();
+        assert!(bp.iter().all(|o| o["value"]["mixed_currency"] == serde_json::json!(false)));
+    }
+
+    #[test]
+    fn csv_field_escapes_special_chars() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_field("line1\nline2"), "\"line1\nline2\"");
+        assert_eq!(csv_field("cr\r"), "\"cr\r\"");
+        // 空串无需引号
+        assert_eq!(csv_field(""), "");
     }
 }

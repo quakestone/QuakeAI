@@ -292,6 +292,17 @@
 
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
   .card h2 { font-size: 15px; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .btn-link { text-decoration: none; display: inline-flex; }
+
+  /* 用量成本表 */
+  .usage-tbl-wrap { overflow-x: auto; margin-top: 10px; }
+  .usage-tbl { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 560px; }
+  .usage-tbl th, .usage-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line2); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .usage-tbl th { color: var(--dim); font-weight: 600; font-size: 11px; }
+  .usage-tbl th:first-child, .usage-tbl td:first-child { text-align: left; }
+  .usage-tbl caption { text-align: left; font-size: 12px; color: var(--dim); padding: 8px 0 4px; }
+  .usage-tbl td.num { font-family: ui-monospace, Consolas, monospace; }
+  .usage-cap { font-size: 12px; color: var(--dim); font-weight: 600; padding-top: 12px; display: block; }
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
   details.fold { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
@@ -559,6 +570,26 @@
       </div>
       <div class="ch-grid" id="channel-rows"><div class="empty">加载中…</div></div>
       <div class="hint">Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。路由规则：priority 大者优先，冷却中的模型/渠道自动跳过；模型出错自动更换同能力模型。</div>
+    </div>
+
+    <div class="card" id="usage-card">
+      <h2>用量与成本 <span class="muted" id="usage-note">网关自身逐请求记账</span></h2>
+      <div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
+      <div class="stats" style="margin-bottom:12px">
+        <div class="stat"><div class="k">请求数</div><div class="v" id="us-requests">0</div></div>
+        <div class="stat"><div class="k">成功率</div><div class="v" id="us-success">—</div></div>
+        <div class="stat"><div class="k">总 token</div><div class="v" id="us-tokens">0</div></div>
+        <div class="stat"><div class="k">缓存命中</div><div class="v" id="us-cache">0</div></div>
+        <div class="stat"><div class="k">估算成本</div><div class="v" id="us-cost">—</div></div>
+        <div class="stat"><div class="k">平均延迟</div><div class="v" id="us-latency">—</div></div>
+      </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <button onclick="loadUsage()">刷新用量</button>
+        <a class="btn-link" href="/admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
+        <div class="spacer"></div>
+        <span class="muted" id="us-records"></span>
+      </div>
+      <div id="usage-tables"><div class="empty">加载中…</div></div>
     </div>
 
     <details class="fold" id="events-fold">
@@ -2637,6 +2668,7 @@ async function loadAll() {
     const ev = await api("/events");
     renderEvents(ev.events || []);
   } catch { /* 事件账本失败不阻塞主界面 */ }
+  loadUsage(); // 用量面板失败也只提示，不阻塞主界面
   // 管理页不可见时也刷新聊天首页的渠道可用性提示
   if (currentView() === "chat") renderMessages();
 }
@@ -2898,6 +2930,76 @@ function renderPresets(filter) {
   const os = PRESETS.map((p, i) => ({ p, i })).filter(x => x.p.region !== "CN" && match(x.p));
   $("preset-cn").innerHTML = cn.map(x => card(x.p, x.i)).join("") || `<div class="empty">无匹配预设</div>`;
   $("preset-os").innerHTML = os.map(x => card(x.p, x.i)).join("") || `<div class="empty">无匹配预设</div>`;
+}
+
+/// 用量与成本：拉 /admin/api/usage 并渲染「总计 + 按源 / 按模型 / 按日」三张表。
+/// 失败只提示不阻塞——用量是观测面板，不该让整个管理页报错。
+async function loadUsage() {
+  const el = $("usage-tables");
+  if (!el) return;
+  try {
+    const d = await api("/usage");
+    renderUsage(d);
+  } catch (e) {
+    el.innerHTML = `<div class="empty">用量加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+function fmtInt(n) {
+  n = Number(n || 0);
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + " 亿";
+  if (n >= 1e4) return (n / 1e4).toFixed(2) + " 万";
+  return n.toLocaleString("zh-CN");
+}
+
+/// 成本展示：免费/无档案显示「—」，有值带币种；混币种明确提示不可直接相加。
+function fmtCost(v) {
+  const n = Number(v || 0);
+  if (!n) return "—";
+  if (n < 0.001) return n.toFixed(6);
+  if (n < 1) return n.toFixed(4);
+  return n.toFixed(2);
+}
+
+function usageTable(caption, rows, keyHeader) {
+  if (!rows || !rows.length) return `<span class="usage-cap">${esc(caption)}</span><div class="empty">暂无数据</div>`;
+  const body = rows.map(o => {
+    const v = o.value || {};
+    const cost = fmtCost(v.cost) + (v.currency ? ` ${esc(v.currency)}` : "") + (v.mixed_currency ? " ⚠混币种" : "");
+    return `<tr>
+      <td>${esc(o.key)}</td>
+      <td class="num">${fmtInt(v.requests)}</td>
+      <td class="num">${(Number(v.success_rate || 0) * 100).toFixed(1)}%</td>
+      <td class="num">${fmtInt(v.total_tokens)}</td>
+      <td class="num">${fmtInt(v.cache_hit_tokens)}</td>
+      <td class="num">${v.avg_latency_ms || 0}ms</td>
+      <td class="num">${cost}</td>
+    </tr>`;
+  }).join("");
+  return `<span class="usage-cap">${esc(caption)}</span>
+  <div class="usage-tbl-wrap"><table class="usage-tbl">
+    <thead><tr>
+      <th>${esc(keyHeader)}</th><th>请求</th><th>成功率</th><th>token</th><th>缓存命中</th><th>平均延迟</th><th>估算成本</th>
+    </tr></thead><tbody>${body}</tbody>
+  </table></div>`;
+}
+
+function renderUsage(d) {
+  const t = d.totals || {};
+  $("us-requests").textContent = fmtInt(t.requests);
+  $("us-success").textContent = t.requests ? ((Number(t.success_rate || 0) * 100).toFixed(1) + "%") : "—";
+  $("us-tokens").textContent = fmtInt(t.total_tokens);
+  $("us-cache").textContent = fmtInt(t.cache_hit_tokens);
+  const costEl = $("us-cost");
+  costEl.textContent = fmtCost(t.cost) + (t.currency ? " " + t.currency : "");
+  costEl.title = t.mixed_currency ? "存在多种币种，成本不可直接相加" : "";
+  $("us-latency").textContent = t.requests ? (t.avg_latency_ms + "ms") : "—";
+  $("us-records").textContent = `${fmtInt(d.records)} 条记录 · ${fmtInt(t.priced_requests)} 条已计价`;
+
+  $("usage-tables").innerHTML =
+    usageTable("按源", d.by_provider, "源") +
+    usageTable("按 源 × 模型", d.by_model, "源|模型") +
+    usageTable("按自然日", d.by_day, "日期");
 }
 
 function renderEvents(events) {
