@@ -289,6 +289,12 @@
   .enh-row b.enh-hint { display: block; font-weight: 400; font-size: 11px; color: var(--dim); }
   /* 不可用时置灰并给出原因（纯文本 >20 字 / 非通话 / 至少 3 个模型） */
   .enh-row.off { border-color: var(--border); background: var(--panel2); color: var(--dim); cursor: not-allowed; opacity: .72; }
+  /* 选择器常驻「当前选择」条：让「模型」与「skill 表达线」两条独立轴线一眼可见，
+     避免用户误以为选了 skill 就等于换了模型。 */
+  .mp-current { font-size: 12px; color: var(--dim); padding: 6px 10px; margin-bottom: 8px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; line-height: 1.5; }
+  .mp-current b { color: var(--txt); font-weight: 600; }
+  .mp-current .mx { color: var(--acc); cursor: pointer; text-decoration: underline dotted; margin-left: 6px; }
   .mp-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--dim); }
   .mp-pager button { width: 32px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; }
   .mp-pager button:disabled { opacity: .35; }
@@ -1039,6 +1045,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   </div>
   <input id="model-search" type="search" placeholder="🔍 搜索模型名 / 渠道 / 供应商…" autocomplete="off">
   <label class="enh-row" id="enh-row"><input type="checkbox" id="enh-check"><span class="enh-ic">⚡</span><span>增强模式<b class="enh-hint" id="enh-hint"></b></span></label>
+  <div id="mp-current" class="mp-current"></div>
   <div id="model-list"></div>
   <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button></div>
   <div class="dlg-actions"><button onclick="modelDlg.close()">关闭</button></div>
@@ -2378,13 +2385,23 @@ function enhanceAvailable(text, atts) {
 }
 /// 增强模式要用的三个模型：积分第三（drill）/ 第二（总结）/ 第一（最终回答）。
 /// 积分榜不足 3 个时，用当前选中模型补齐；仍不足则返回 null（前端置灰）。
+/// 关键：用户**显式选了具体模型**时，用它作最终作答模型（尊重手动选择，不再强制积分第 1 名）；
+/// drill / summarize 仍用积分榜里其余高分工模型，保证"三模型接力"成立。
 function enhanceModels() {
   const ranked = Points.list().filter(x => x.key && x.key !== AUTO_KEY);
   const fallback = curModel || "";
   const pick = (i) => ranked[i] && ranked[i].key || fallback;
-  const uniq = [...new Set([pick(2), pick(1), pick(0)])].filter(Boolean);
+  let drill = pick(2), summary = pick(1), answer = pick(0);
+  if (curModel && curModel !== AUTO_KEY) {
+    answer = curModel;
+    // 用积分榜里除「用户所选」外的模型做钻取/总结，避免与作答模型撞车
+    const others = ranked.map(x => x.key).filter(k => k !== curModel);
+    drill = others[others.length - 1] || fallback;     // 积分相对最低的做钻取
+    summary = others[others.length - 2] || fallback;    // 次低做总结
+  }
+  const uniq = [...new Set([drill, summary, answer])].filter(Boolean);
   // 去重后不足 3 个 → 无法真正做"三个模型接力"，判为不可用
-  return uniq.length >= 3 ? { drill: pick(2), summary: pick(1), answer: pick(0) } : null;
+  return uniq.length >= 3 ? { drill, summary, answer } : null;
 }
 /// 同步模型选择器里的增强开关可用状态（每次渲染都调，保证提示语实时准确）。
 function syncEnhanceRow() {
@@ -3675,9 +3692,10 @@ function turnModelPage(d) { setMpPage(mpPage() + d); }
 function setMpTab(k) {
   if (!MP_TABS.includes(k)) return;
   mpTab = k;
-  // 增强模式是纯文本多模型接力，只在「文本模型」标签下有意义；音频/图视标签直接隐藏该行
+  // 增强模式是纯文本多模型接力：文本标签 + skill 标签（纯文本提示词，兼容）下可见；
+  // 音频/图视标签（STT/TTS/视觉/视频）与接力无关，隐藏。
   const er = $("enh-row");
-  if (er) er.hidden = (k !== "text");
+  if (er) er.hidden = !(k === "text" || k === "skill");
   mpQuery = "";                       // 切标签清掉搜索词，避免"搜不到"误判为空列表
   const s = $("model-search"); if (s) s.value = "";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
@@ -3720,9 +3738,20 @@ function mpItems() {
   }
   return out;
 }
+/// 模型选择器常驻「当前选择」条：把「模型」与「skill 表达线」两条独立轴线并排显示，
+/// 让用户清楚——选了 skill ≠ 换了模型，两者各自独立生效。
+function renderMpCurrent() {
+  const el = $("mp-current"); if (!el) return;
+  const m = curModel ? curModel : "自动（按积分选路）";
+  const sHtml = activeSkill
+    ? `${esc(activeSkill.title)} <span class="mx" onclick="clearActiveSkill(); renderMpCurrent();">✕ 清除</span>`
+    : "无（纯模型回答）";
+  el.innerHTML = `当前模型：<b>${esc(m)}</b> ｜ 表达线：<b>${sHtml}</b>`;
+}
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
+  renderMpCurrent();
   // skill 标签：skill 是独立于模型对象的表达线（有自己的标题与提示词正文），
   // 展示使用最频繁的前 6 条 + 第 7 行「扩展 skill」入口，不从模型池里取数据。
   if (mpTab === "skill") {
@@ -3868,6 +3897,7 @@ async function loadSkills() {
 
 /// 选择器 skill 标签：只显示标题一行，按使用频次取前 6 条；第 7 行是「扩展 skill」入口。
 function renderSkillPicker() {
+  renderMpCurrent();
   const list = SKILLS.slice()
     .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
   const top = list.slice(0, 6);

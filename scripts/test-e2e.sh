@@ -928,8 +928,11 @@ echo "$UI" | grep -q 'const MP_TABS = \["text", "skill", "audio", "mm"\]'; check
 echo "$UI" | grep -q 'let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 }'; check "选择页各标签独立页码" $? "mpPages not per-tab"
 # 回归：增强模式行的 checkbox 曾被 flex 撑到 290px，整行看起来像空框
 echo "$UI" | grep -qF '.enh-row input[type="checkbox"] { flex: none; width: 15px;'; check "增强模式 checkbox 不被拉伸" $? "checkbox may stretch"
-echo "$UI" | grep -qF 'if (er) er.hidden = (k !== "text")'; check "增强模式仅文本标签可见" $? "enh not scoped"
+echo "$UI" | grep -qF 'if (er) er.hidden = !(k === "text" || k === "skill")'; check "增强模式在文本+skill标签可见（音频/图视隐藏）" $? "enh not scoped"
 echo "$UI" | grep -q 'if (mpTab === "skill") return \[\];'; check "skill 标签不从模型池取数" $? "skill pulls models"
+echo "$UI" | grep -qF 'id="mp-current"' ; check "选择器含当前选择条DOM" $? "no mp-current dom"
+echo "$UI" | grep -qF 'function renderMpCurrent'; check "选择器常驻当前选择条函数" $? "no renderMpCurrent"
+echo "$UI" | grep -qF 'answer = curModel;'; check "增强模式尊重手选模型（不再强制第1名）" $? "enh ignores curModel"
 # 回归：后台 HTML 曾完全缺 Cache-Control，浏览器缓存旧 SPA，"改了没生效"
 grep -q '"Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"' src/admin.rs; check "后台 HTML 已禁缓存" $? "no no-store"
 grep -qF '.set("Pragma", "no-cache")' src/admin.rs; check "后台 HTML 带 Pragma 兼容老浏览器" $? "no pragma"
