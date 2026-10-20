@@ -930,6 +930,17 @@ echo "$UI" | grep -q 'let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 }'; che
 echo "$UI" | grep -qF '.enh-row input[type="checkbox"] { flex: none; width: 15px;'; check "增强模式 checkbox 不被拉伸" $? "checkbox may stretch"
 echo "$UI" | grep -qF 'if (er) er.hidden = (k !== "text")'; check "增强模式仅文本标签可见" $? "enh not scoped"
 echo "$UI" | grep -q 'if (mpTab === "skill") return \[\];'; check "skill 标签不从模型池取数" $? "skill pulls models"
+# 回归：后台 HTML 曾完全缺 Cache-Control，浏览器缓存旧 SPA，"改了没生效"
+grep -q '"Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"' src/admin.rs; check "后台 HTML 已禁缓存" $? "no no-store"
+grep -qF '.set("Pragma", "no-cache")' src/admin.rs; check "后台 HTML 带 Pragma 兼容老浏览器" $? "no pragma"
+grep -q '.set("X-Gateway-Version", VERSION)' src/admin.rs; check "后台 HTML 带版本头" $? "no version header"
+grep -q 'split(MARK).collect::<Vec<_>>().join(VERSION)' src/admin.rs; check "版本号注入全部占位符" $? "single replace only"
+# 注意：这一段 $UI 来自运行中的服务（占位符已被替换成真实版本号），
+# 所以涉及 __BUILD_VERSION__ 字面量的断言必须查源文件。
+grep -qF 'const BUILD_MARK = "__BUILD_VERSION__";' "$ROOT/src/admin_ui.html"; check "前端有 BUILD_MARK 常量" $? "no BUILD_MARK"
+grep -q 'split(MARK)' "$ROOT/src/admin.rs" && grep -q 'join(VERSION)' "$ROOT/src/admin.rs"; check "服务端注入版本到页面" $? "no inject"
+echo "$UI" | grep -qF 'const BUILD_MARK = "'; check "服务页面已注入真实版本号" $? "mark not replaced"
+echo "$UI" | grep -q 'id="cache-warn"'; check "侧栏有缓存自检提示位" $? "no cache-warn"
 echo "$UI" | grep -q 'function setMpTab(k)'; check "选择页标签切换函数" $? "no setMpTab"
 echo "$UI" | grep -q 'const TAB_CAPS = { text: \["text"\], mm: \["stt", "tts", "vision", "video"\] }'; check "多媒体标签合并音频+图视能力" $? "bad tab caps"
 echo "$UI" | grep -q 'let mgmtTab = "text"'; check "标签页默认文本" $? "no default tab"

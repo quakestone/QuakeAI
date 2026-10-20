@@ -610,6 +610,7 @@
   <div class="sidebar-foot">
     <button onclick="clearAllConvos()">🗑 清空全部会话</button>
     <div class="sidebar-meta">QUAKEAI 聚合网关 · <span id="side-version">…</span></div>
+    <div class="sidebar-meta" id="cache-warn" hidden>⚠ 页面缓存未刷新，请硬刷新（⌘/Ctrl + Shift + R）</div>
   </div>
 </aside>
 <div id="scrim" onclick="closeSidebar()"></div>
@@ -1069,6 +1070,10 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 <div id="toast"></div>
 
 <script>
+// 构建时由 admin.rs 注入的版本号（替换 __BUILD_VERSION__ 占位）；
+// 与 /health 返回的版本比对可识别浏览器缓存的旧页面。
+const BUILD_MARK = "__BUILD_VERSION__";
+
 // ================= 基础 =================
 const $ = (id) => document.getElementById(id);
 const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg");
@@ -3765,7 +3770,16 @@ async function loadAll() {
 async function refreshVersion() {
   try {
     const h = await (await fetch("/health")).json();
-    if (h && h.version) $("side-version").textContent = "v" + h.version;
+    if (h && h.version) {
+      $("side-version").textContent = "v" + h.version;
+      // 缓存自检：HTML 里写死的 BUILD_MARK 若与 /health 返回的版本不一致，
+      // 说明浏览器仍在跑缓存的旧页面。
+      // 注意：旧 HTML 里没有这段逻辑，所以旧页面不会提示 —— 只有新版才会。
+      if (typeof BUILD_MARK === "string" && BUILD_MARK && h.version !== BUILD_MARK) {
+        const w = $("cache-warn");
+        if (w) { w.hidden = false; w.textContent = "⚠ 缓存旧页面（内置 " + BUILD_MARK + " / 服务端 " + h.version + "），请硬刷新 ⌘/Ctrl+Shift+R"; }
+      }
+    }
   } catch { /* health 也不通：保持「…」 */ }
 }
 

@@ -80,7 +80,12 @@ pub async fn handle_admin(req: Request, env: &Env, sub: &str) -> Result<Response
 async fn handle_admin_inner(req: Request, env: &Env, sub: &str) -> Result<Response> {
     // 管理页本体：不强制 token（token 只保护 API），方便本地直接打开
     if req.method() == Method::Get && (sub.is_empty() || sub == "/") {
-        return html_response(include_str!("admin_ui.html"));
+        // 构建时把版本号注入 HTML（替换全部 __BUILD_VERSION__ 占位，共 2 处）。
+        // 前端拿它与 /health 返回的版本比对，一眼识别"浏览器还在跑缓存旧页面"。
+        //注意：no_std 环境没有 str::replace_all，用 split + join 等价实现。
+        const MARK: &str = "__BUILD_VERSION__";
+        let page: String = include_str!("admin_ui.html").split(MARK).collect::<Vec<_>>().join(VERSION);
+        return html_response(&page);
     }
     if sub == "/health" {
         return json_response(
@@ -795,6 +800,18 @@ pub fn html_response(body: &str) -> Result<Response> {
     headers
         .set("Content-Type", "text/html; charset=utf-8")
         .map_err(|e| Error::RustError(format!("set header: {e:?}")))?;
+    // 后台 HTML 必须禁缓存：页面骨架 + 内嵌 wasm 都编在这份 HTML 里，
+    // 浏览器一旦缓存就会一直跑旧代码（表现为"改了没生效""标签没回来"）。
+    headers
+        .set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        .map_err(|e| Error::RustError(format!("set cache-control: {e:?}")))?;
+    headers
+        .set("Pragma", "no-cache")
+        .map_err(|e| Error::RustError(format!("set pragma: {e:?}")))?;
+    // 带出版本与构建时间，浏览器/用户一眼能确认跑的是哪一版
+    headers
+        .set("X-Gateway-Version", VERSION)
+        .map_err(|e| Error::RustError(format!("set version: {e:?}")))?;
     let init = web_sys::ResponseInit::new();
     init.set_status(200);
     init.set_headers(&headers);

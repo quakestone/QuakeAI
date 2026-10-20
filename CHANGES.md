@@ -1,5 +1,51 @@
 # CHANGES
 
+## v0.18.2（2026-10-22）—— 后台 HTML 禁缓存 + 缓存自检（"改了没生效"的真凶）
+
+用户反馈：
+- 「模型选择页面页面的黑块怎么还没处理掉 skill标签还是没有增加回来」
+
+### 排查结论：代码是对的，是浏览器在跑缓存
+
+上一版（v0.18.1）已修好 checkbox 拉伸并恢复 skill 标签，构建产物里也确认存在：
+```
+strings build/index_bg.wasm | grep MP_TABS   →  MP_TABS = ["text", "skill", "audio", "mm"]
+curl http://127.0.0.1:8787/ | grep skill      →  2 处 data-mtab="skill"
+```
+但**根因是后台 HTML 从来没发过 `Cache-Control` 头**（只有流式 API 有 `no-cache`）。
+后台页面是「HTML 骨架 + 内嵌 wasm」的 SPA，浏览器一旦缓存就会一直跑旧代码 ——
+表现就是"我改了但界面没变""标签没回来"，而且**反复普通刷新无效**。
+
+### 修复
+
+**1. 后台 HTML 强制禁缓存**（`html_response`，三条一起上）：
+```rust
+Cache-Control: no-store, no-cache, must-revalidate, max-age=0
+Pragma: no-cache                        // 兼容老浏览器
+X-Gateway-Version: 0.18.2               // 一眼确认跑的是哪一版
+```
+
+**2. 构建时把版本号注入 HTML**（`admin.rs`）：
+```rust
+const MARK: &str = "__BUILD_VERSION__";
+let page: String = include_str!("admin_ui.html").split(MARK).collect::<Vec<_>>().join(VERSION);
+```
+>踩坑：`no_std` 环境没有 `str::replace_all`（E0599编译错误），改用 `split + join` 等价实现；
+> 而 `split().join()` 会替换**全部**占位符（2 处：`BUILD_MARK` 常量 + 校验逻辑），比 `replace()` 只换第一个更可靠。
+
+**3. 前端缓存自检**：`BUILD_MARK`（编译进 HTML 的版本）与 `/health` 返回版本比对，
+不一致时侧栏底部亮出红字：
+> ⚠ 缓存旧页面（内置 0.18.2 / 服务端 0.19.0），请硬刷新 ⌘/Ctrl+Shift+R
+
+设计要点：**旧 HTML 里根本没有这段脚本**，所以旧页面不会提示 —— 只有新版才具备自检能力，
+这正是它的价值：一旦你跑的是旧页面，新版逻辑根本没加载，也就无从提示。真正的解法是硬刷新一次。
+
+### 测试
+
+- e2e **375/375**（+8）：禁缓存三头、版本注入、`BUILD_MARK`、缓存提示位等。
+- 浏览器实测：响应头 `no-store` + `X-Gateway-Version: 0.18.2`、`BUILD_MARK=0.18.2` 与 `/health` 一致不提示；
+  拦截 `/health` 返回 `0.19.0` 后提示正确弹出；选择页 4 标签（含 skill）、checkbox 15px、零pageerror。
+
 ## v0.18.1（2026-10-22）—— 恢复 skill 标签 / 修掉增强模式行的「空框」
 
 用户指令：
