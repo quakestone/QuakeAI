@@ -176,7 +176,7 @@ UI=$(curl -s http://127.0.0.1:8787/admin)
 echo "$UI" | grep -q '资源管理'; check "管理页含标题" $? "no title"
 echo "$UI" | grep -q 'id="preset-cn"'; check "管理页含国内预设目录" $? "no preset list"
 echo "$UI" | grep -q 'id="channel-rows"'; check "管理页含渠道表格" $? "no channel table"
-echo "$UI" | grep -q '一键载入国内默认'; check "管理页含 seed 按钮" $? "no seed button"
+echo "$UI" | grep -q '一键载入默认'; check "管理页含 seed 按钮（国内+海外）" $? "no seed button"
 # v0.7.4 防回归：侧栏版本号曾是 HTML 硬编码 v0.6.0——接口一失败就显示
 # 过期版本（用户实测「前端版本变成 6.0」）。HTML 里禁止再出现任何硬编码版本。
 if echo "$UI" | grep -qE 'id="side-version">v[0-9]'; then check "HTML 无硬编码版本号（防过期显示）" 1 "$(echo "$UI" | grep -oE 'id="side-version">[^<]*' | head -1)"; else check "HTML 无硬编码版本号（防过期显示）" 0 ""; fi
@@ -188,11 +188,14 @@ CV=$(curl -s http://127.0.0.1:8787/admin/api/channels | python3 -c 'import json,
 PV=$(grep -m1 '^version = ' "$ROOT/Cargo.toml" | sed -E 's/version = "([^"]+)"/\1/')
 check "health/channels/Cargo.toml 三处版本一致" $([ "$HV" = "$CV" ] && [ "$CV" = "$PV" ] && echo 0 || echo 1) "health=$HV channels=$CV cargo=$PV"
 
-# 12.2 一键载入国内默认（智谱/硅基流动/智谱音频，均为 disabled 待登记）
+# 12.2 一键载入默认（国内 3 + 海外 3，均为 disabled 待登记）
 SEED=$(curl -s -X POST http://127.0.0.1:8787/admin/api/seed)
-echo "$SEED" | grep -q '"added":3'; check "seed 载入 3 个国内默认渠道" $? "$SEED"
+echo "$SEED" | grep -q '"added":6'; check "seed 载入 6 个默认渠道（国内 3 + 海外 3）" $? "$SEED"
 echo "$SEED" | grep -q 'seed-zhipu-chat'; check "seed 含智谱主线" $? "$SEED"
 echo "$SEED" | grep -q 'seed-siliconflow-chat'; check "seed 含硅基流动" $? "$SEED"
+echo "$SEED" | grep -q 'seed-openrouter-chat'; check "seed 含海外 OpenRouter" $? "$SEED"
+echo "$SEED" | grep -q 'seed-groq-chat'; check "seed 含海外 Groq" $? "$SEED"
+echo "$SEED" | grep -q 'seed-nvidia-chat'; check "seed 含海外 NVIDIA NIM" $? "$SEED"
 
 # 12.3 登记两个动态渠道（显式 id，便于断言）
 curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
@@ -637,6 +640,39 @@ console.log("origin-test OK (6 cases)");
 EOF
 node "$ROOT/.origin-test.mjs" >/dev/null 2>&1; check "shareOrigin 平台域回落/子域推断真实单测（node + location stub）" $? "origin logic broken"
 rm -f "$ROOT/.origin-extract.mjs" "$ROOT/.origin-fns.mjs" "$ROOT/.origin-test.mjs"
+
+echo "== 19. v0.12.0：海外模型融合（一键载入国内+海外 / 兜底路由 / 海外视觉承接）=="
+stop_workerd
+start_workerd workerd.config.capnp; check "workerd(海外融合) 已就绪" $? "worker not reachable"
+# 19.1 seed 现在载入 6 条（国内 3 + 海外 3），全部 disabled 待登记
+SEED=$(curl -s -X POST http://127.0.0.1:8787/admin/api/seed)
+echo "$SEED" | grep -q '"added":6'; check "seed 载入 6 条（国内 3 + 海外 3）" $? "$SEED"
+for id in seed-zhipu-chat seed-siliconflow-chat seed-zhipu-audio seed-openrouter-chat seed-groq-chat seed-nvidia-chat; do
+  echo "$SEED" | grep -q "$id"; check "seed 含 $id" $? "$SEED"
+done
+# 海外种子全部 disabled（需登记 Key 才参与路由）
+echo "$SEED" | python3 -c 'import json,sys; chs=json.load(sys.stdin)["channels"]; ids={"seed-openrouter-chat","seed-groq-chat","seed-nvidia-chat"}; bad=[c["id"] for c in chs if c["id"] in ids and c["enabled"]]; sys.exit(1 if bad else 0)'; check "海外种子全部 disabled（需登记 Key）" $? "$SEED"
+# 优先级有序：openrouter(40)>groq(35)>nvidia(30)，且都低于国内(80~100)
+echo "$SEED" | python3 -c 'import json,sys; pr={c["id"]:c["priority"] for c in json.load(sys.stdin)["channels"]}; ok=pr["seed-openrouter-chat"]>pr["seed-groq-chat"]>pr["seed-nvidia-chat"] and pr["seed-openrouter-chat"]<80; sys.exit(0 if ok else 1)'; check "海外优先级 40>35>30 且低于国内" $? "$SEED"
+# 每条海外种子都声明 vision 能力（含视觉模型），image_url 才能兜底
+echo "$SEED" | python3 -c 'import json,sys; chs=json.load(sys.stdin)["channels"]; ids={"seed-openrouter-chat","seed-groq-chat","seed-nvidia-chat"}; bad=[c["id"] for c in chs if c["id"] in ids and "vision" not in c["caps"]]; sys.exit(1 if bad else 0)'; check "海外种子全部声明 vision 能力" $? "$SEED"
+
+# 19.2 海外视觉兜底路由：启用 openrouter 种子并指向 mock，image_url 应落到其 vision 模型
+curl -s -X PUT http://127.0.0.1:8787/admin/api/channels/seed-openrouter-chat -H 'Content-Type: application/json' \
+  -d '{"enabled":true,"api_key":"test-key-local","base_url":"http://127.0.0.1:8788"}' > /dev/null
+rm -f "$MOCK_LOG"; touch "$MOCK_LOG"
+VIS=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":[{"type":"text","text":"图里是什么"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}]}')
+echo "$VIS" | grep -q 'gemma-4-31b-it:free'; check "海外视觉模型 gemma-4-31b-it:free 承接 image_url（国内全挂时兜底）" $? "$VIS"
+# 纯文本仍走海外 text 模型（同渠道多能力互不干扰）
+TXT=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"你好"}]}')
+echo "$TXT" | grep -q 'openrouter/free\|nemotron-3-super\|qwen3.8\|cohere'; check "纯文本走海外 text 模型（与视觉互通）" $? "$TXT"
+
+# 19.3 预设清单：海外 3 个 provider 模型已更新为现行免费模型
+#     PRESETS 由 /admin/api/channels 的 presets 字段下发（前端不内联），抓 API 而非 HTML
+PJ=$(curl -s http://127.0.0.1:8787/admin/api/channels)
+echo "$PJ" | grep -qF 'openrouter/free'; check "预设 OpenRouter 含现行 :free 自动路由模型" $? "no openrouter/free"
+echo "$PJ" | grep -qF 'llama-3.2-11b-vision-preview'; check "预设 Groq 含视觉模型 llama-3.2-11b-vision-preview" $? "no groq vision"
+echo "$PJ" | grep -qF 'nemotron-3.5-super-vl-120b-a12b'; check "预设 NVIDIA NIM 含视觉模型 nemotron-3.5-super-vl" $? "no nim vision"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

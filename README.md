@@ -1,4 +1,4 @@
-# zhipu-wasm-gateway（v0.11.0）
+# zhipu-wasm-gateway（v0.12.0）
 
 **Rust → WASM 的免费资源 AI 聚合网关：资源管理 + 智能路由单例。**
 
@@ -20,7 +20,8 @@
 | v0.7.0 | **模型选择引擎**：四级能力（text/vision/stt/tts）+ 模型级路由/健康/冷却/自动换模型 + TTS 播音端点（`/v1/audio/speech`）+ 跨渠道 Key 复用（音频渠道借同 provider 主线 Key）；**设备级隔离**：`gw_device_keys` 头 + 本机 Key 卡片 + DO localDisk 持久化（重启不丢 Key）；**前端**：回答复制/分享/播音、最近会话缓存、右上角双向通话、消息长按重发、明暗主题、模型管理模型行/能力徽章/筛选 | ✅ e2e **89/89** + 单测 **7/7** + WASM 编译 0 警告 |
 | v0.7.1 | **三连修**：iOS 键盘弹起 App 消失（visualViewport offsetTop）、STT「不支持当前文件格式」（iOS mp4 → WebAudio 重采样 16kHz WAV）、播音无模型（tts 候选池 chat+audio 双池合并） | ✅ e2e **89/89** + 单测 **7/7** |
 | v0.7.2 | **智谱语音端点模型修正**：STT=glm-asr-2512（+stream=false）、TTS=glm-tts（音色 tongtong）——glm-4-voice 是端到端语音模型，放到转写/合成端点会被上游按 chat 校验（1210/1214）；旧模型名请求时自动改写，老账本零迁移 | ✅ e2e **90/90** + 单测 **7/7** |
-| v0.11.0（本版） | **测试反馈三修**（用户实测三条）：① **呼叫页播放修复**——iOS/Android 媒体自动播放策略下「按键→识别→流式→合成」链路已离手势数秒，`Audio.play()` 被拒/`speechSynthesis` 不发声；首个 pointerdown 手势内 `unlockMedia()` 预热（AudioContext resume + 0.1s 静音 WAV 换 sticky activation + 空 utterance 唤醒），`openCall()` 显式再调；② **交流模式**——`callMode`（duplex 同时问答默认 / half 一问一答禁抢话），呼叫页 ⇄/↔ 按钮切换 + VoiceCfg 持久化 + 状态文案分化 + TTS 降级 toast 可见提示；③ **分享直通系统面板**（修「没成功」）——`shareMsg()` 优先 `navigator.share()` 不弹二级页，AbortError 安静退出，失败才落级对话框；顺手修 s. 子域 404 实测根因（workers.dev 等 22 个平台域无权配 s. 子域 → PLATFORM_SUFFIXES 回落同源 /s，node 单测 6 用例）；④ **多媒体容器播放**——音频/视频存 Blob 进 IDB，消息渲染 `<audio controls>` / `<video controls playsinline>`，blob: URL WeakMap 缓存，视频 canvas 抽帧首帧 poster 缩略图（输入区 chip + 消息双呈现），刷新后容器仍可播放 | ✅ e2e **183/183** + 单测 **11/11** + Playwright **23 断言三场景**零 JS 错误 |
+| v0.12.0（本版） | **海外模型融合**（用户指令「把国外的那几个模型都融和进来」）：① 三个海外预设（OpenRouter / Groq / NVIDIA NIM）从「仅登记模板」升级为**网关种子资源**——一键载入即落库 6 条（国内 3 + 海外 3）；② 海外种子 `enabled=false`、优先级 40/35/30 低于国内（100/90/80），作「国内渠道全挂时的兜底」；③ 各家现行免费模型清单实况化（OpenRouter 17 个 `:free`，含 `openrouter/free` 自动路由 + `gemma-4-31b-it` 视觉；Groq 14400 RPD/30 RPM 免卡含 `llama-3.2-11b-vision-preview`；NVIDIA NIM ~40 RPM 免卡含 `nemotron-3.5-super-vl-120b-a12b` 视觉）；④ 海外种子均声明 `text+vision` 能力（各视觉模型入 `models_meta`），国内视觉全挂时 `image_url` 自动落到海外视觉模型兜底；⑤ 预设 vision 推断正则扩展覆盖 gemma/vl；⑥ 单测新增 `overseas_seed_channels_well_formed` | ✅ e2e **202/202** + 单测 **12/12** |
+| v0.11.0 | **测试反馈三修**（用户实测三条）：① **呼叫页播放修复**——iOS/Android 媒体自动播放策略下「按键→识别→流式→合成」链路已离手势数秒，`Audio.play()` 被拒/`speechSynthesis` 不发声；首个 pointerdown 手势内 `unlockMedia()` 预热（AudioContext resume + 0.1s 静音 WAV 换 sticky activation + 空 utterance 唤醒），`openCall()` 显式再调；② **交流模式**——`callMode`（duplex 同时问答默认 / half 一问一答禁抢话），呼叫页 ⇄/↔ 按钮切换 + VoiceCfg 持久化 + 状态文案分化 + TTS 降级 toast 可见提示；③ **分享直通系统面板**（修「没成功」）——`shareMsg()` 优先 `navigator.share()` 不弹二级页，AbortError 安静退出，失败才落级对话框；顺手修 s. 子域 404 实测根因（workers.dev 等 22 个平台域无权配 s. 子域 → PLATFORM_SUFFIXES 回落同源 /s，node 单测 6 用例）；④ **多媒体容器播放**——音频/视频存 Blob 进 IDB，消息渲染 `<audio controls>` / `<video controls playsinline>`，blob: URL WeakMap 缓存，视频 canvas 抽帧首帧 poster 缩略图（输入区 chip + 消息双呈现），刷新后容器仍可播放 | ✅ e2e **183/183** + 单测 **11/11** + Playwright **23 断言三场景**零 JS 错误 |
 | v0.10.0 | **分享微信功能线 / 二级子页分发裂变**（用户三条优化指令之分享线）：① 新增 `GET /s` 独立分享页（share_ui.html include_str! 进 WASM，随网关部署零基础设施）；② **零存储架构**：回答全文 deflate-raw 压缩 → base64url 塞 URL hash（`z.` 前缀，老浏览器降级 `p.` 明文）——fragment 浏览器不发给服务器，无存储无日志天然「阅后即焚」；③ `shareOrigin()` 二级子域推断（www.x.com → s.x.com，生产 CNAME 即可；localhost/IP 回落同源）；④ 分享页：迷你 Markdown 渲染 + 二维码 + 微信 UA 检测（内置浏览器引导「⋯→发送给朋友」，外部浏览器引导「复制链接/扫一扫」）+ 明暗主题 + 「打开应用继续对话」裂变回流 CTA；⑤ 管理页分享对话框（复制/系统分享/二维码/打开分享页，clipboard 失败降级 execCommand）；⑥ 6000 字上限截断保护；⑦ 顺手修 p. 明文路径 base64url 字母表 bug（实测挖出：中文必含 -/_ 直接炸解码） | ✅ e2e **164/164** + 单测 **11/11** + Playwright 六场景实测 |
 | v0.9.0 | **聊天记录迁 IndexedDB**（用户三条优化指令之聊天记录线）：① convos/msgs 双 store（消息复合主键，重发截断同位置覆盖不重复）；② 附件随消息持久化——图片 dataUrl 刷新后缩略图不丢、音频 Blob 刷新后重发可用；③ **可删**：会话级/消息级（长按菜单删除）/一键清空；④ **可查**：侧栏搜索标题即过滤 + 消息内容跨会话命中（片段高亮）；⑤ **联动视图**：搜索/删除/打开同一渲染链路；⑥ **流式持久化**：SSE 节流落库 + pagehide/visibility 双兜底冲刷，流式中刷新不丢已生成部分；⑦ **新会话修复**：旧流抢占（streamGen）——否则发送键是旧流停止键，新对话发不出去；⑧ 顺手修 toast 拦截底部点击（悬浮 4.6s 输入区点不动） | ✅ e2e **146/146** + 单测 **11/11** + Playwright 九场景实测 |
 | v0.8.0 | **语音全链路重构**（用户三条优化指令之语音线）：① 麦克风单所有者 `MicHub` + `VoiceInput` 单消费者（识别与录音绝不并存——「第二次就挂/STT 跑不通」的软件层根治）；② 通话状态机 `CallFsm` 六态，**barge-in 播报中抢话打断是一等公民**（speaking→listening 立即停播+断流+释放麦克风）；③ TTS 三层递降链：网关 → 自定义端点（OpenAI 兼容，客户自有资源替换点）→ 浏览器语音（GitHub 抓 Speakit-JS 融合改造，离线兜底）；④ STT 两层链：浏览器实时识别（零上传）→ 网关转写；⑤ 🎛 语音设置对话框（模式/端点/音色/语速可配，localStorage 持久化） | ✅ e2e **124/124** + 单测 **11/11** + Playwright 六场景实测（打断停播/浏览器兜底/端点降级） |
@@ -133,7 +134,7 @@ OpenAI 兼容 `https://api.siliconflow.cn/v1`）：
 - 其他国内源同理：管理页「+ 登记新资源」或从预设目录点「登记」，粘 Key、启用即可，
   **无需改代码**（OpenAI 兼容管线复用；audio 类走 `/audio/transcriptions` 同路径）。
 
-## 验证结论（mock e2e 183/183 + 分版本浏览器交互实测通过）
+## 验证结论（mock e2e 202/202 + 分版本浏览器交互实测通过）
 
 第 1–11 项（前 32 断言，v0.1/v0.2 既有能力）不变：
 

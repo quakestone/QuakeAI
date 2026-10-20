@@ -1,5 +1,54 @@
 # CHANGES
 
+## v0.12.0（2026-10-20）—— 海外模型融合（OpenRouter / Groq / NVIDIA NIM 一键载入兜底）
+
+用户指令：「把国外的那几个模型都融和进来」。此前三个海外预设（OpenRouter /
+Groq / NVIDIA NIM）仅作「登记模板」——`PRESETS` 里有、但 `/seed` 不载入、路由
+也不参与。本次把它们升级为**网关种子资源**，与国内渠道同走「一键载入默认」。
+
+### ① 海外预设模型清单实况化（2026-10 调研）
+
+| 预设 | 旧模型 | 新模型（现行免费层） |
+| --- | --- | --- |
+| OpenRouter | `:free` | `openrouter/free`（自动路由）+ `nvidia/nemotron-3-super-120b-a12b:free` + `qwen/qwen3.8-27b:free` + `google/gemma-4-31b-it:free`（视觉）+ `cohere/north-mini-code:free`；17 个 `:free` 多数 50/天、部分 1000/天，免卡 |
+| Groq | `llama-3.1-8b-instant` | `llama-3.3-70b-versatile` + `llama-3.1-8b-instant` + `llama-3.2-11b-vision-preview`（视觉）；免费层 14400 RPD / 30 RPM 免卡 |
+| NVIDIA NIM | `nemotron` | `nvidia/nemotron-3-ultra-550b-a55b` + `nvidia/nemotron-3.5-super-vl-120b-a12b`（视觉）+ `deepseek-ai/deepseek-v4.1-flash` + `meta/llama-3.3-70b-instruct`；约 40 RPM 免卡，100+ 模型 |
+
+> 刻意避开 `poolside` 系 `:free`（2026-10-31 到期）；免费额度随时变动，以控制台为准。
+
+### ② 新增 `default_overseas_channels(now_iso)`
+
+复用 `default_cn_channels` 的 `mk`/`mm` 闭包模式，生成 3 条种子：
+
+- `id`：`seed-openrouter-chat` / `seed-groq-chat` / `seed-nvidia-chat`；
+- `enabled = false`：Key 留空，登记 Key 后才参与路由（避免空 Key 打爆上游）；
+- `priority`：40 / 35 / 30，**低于国内**（zhipu 100 / siliconflow 90 / zhipu-audio 80）
+  —— 国内优先、海外兜底；
+- `caps`：`["text", "vision"]`，每家视觉模型入 `models_meta`（gemma-4-31b /
+  llama-3.2-11b-vision / nemotron-3.5-super-vl），`image_url` 才能在国内视觉全挂时
+  落到海外视觉模型兜底；
+- `note`：注明「海外补充、国内全挂时兜底、需 Key、可能需科学上网」。
+
+`api_seed` 在 CN 种子之后合并海外种子，按 `id` 幂等（已存在不重复添加）。
+
+### ③ 前端联动
+
+- 「一键载入国内默认」按钮 →「一键载入默认（国内+海外）」，toast 文案同步；
+- `presetFill` 的 vision 推断正则从 `/glm-4v|glm-4\.1v|-vl|vision/i` 扩展为
+  加 `gemma`，覆盖 gemma-4 / 各 `vl` / `vision` 系海外视觉模型；
+- `seed()` 现返回 6 条（国内 3 + 海外 3），e2e §12.2 / §19 同步断言。
+
+### 验证
+
+- 单测新增 `overseas_seed_channels_well_formed`：3 条、id 唯一、全 disabled、
+  优先级 <80 且 40>35>30、各含 vision 能力、时间戳填充。
+- e2e §19（v0.12.0）：seed 6 条 + 海外全 disabled + 优先级有序 + 各含 vision；
+  **海外视觉兜底路由实测**——启用 openrouter 种子指向 mock，`image_url` 请求
+  命中 `google/gemma-4-31b-it:free`，纯文本命中海外 text 模型；预设清单含三家
+  现行免费模型。
+- 全量：e2e **202/202**（原 183 + §19 新增 19，§12.2 由 3 扩到 6 的 3 条断言计入
+  §12）+ 单测 **12/12**（原 11 + 1）。
+
 ## v0.11.0（2026-10-23）—— 呼叫交流模式 / 分享直通系统面板 / 多媒体容器播放
 
 按用户测试反馈三条：「① 呼叫页面无法播放，该页面增加交流模式设置：一问一答 /

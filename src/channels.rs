@@ -273,9 +273,9 @@ pub const PRESETS: &[Preset] = &[
     Preset { provider: "spark", name: "讯飞星火 Spark", base_url: "https://spark-api.xf-yun.com/v1", models: &["4.0Ultra"], tier: "T2", kind: "chat", region: "CN", free_tier: "注册赠免费额度", doc: "https://xinghuo.xfyun.cn/" },
     Preset { provider: "zhipu-audio", name: "智谱语音（GLM-ASR / GLM-TTS）", base_url: "https://open.bigmodel.cn/api/paas/v4", models: &["glm-asr-2512", "glm-tts"], tier: "T2", kind: "audio", region: "CN", free_tier: "语音转写 /audio/transcriptions + 播音 /audio/speech", doc: "https://open.bigmodel.cn/" },
     // ---- 海外补充（低优先，边缘部署时启用） ----
-    Preset { provider: "openrouter", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", models: &[":free"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "免费模型 50 次/天", doc: "https://openrouter.ai/" },
-    Preset { provider: "groq", name: "Groq", base_url: "https://api.groq.com/openai/v1", models: &["llama-3.1-8b-instant"], tier: "T1", kind: "chat", region: "OVERSEAS", free_tier: "免费层限速", doc: "https://groq.com/" },
-    Preset { provider: "nvidia", name: "NVIDIA NIM", base_url: "https://integrate.api.nvidia.com/v1", models: &["nemotron"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "注册赠额度", doc: "https://build.nvidia.com/" },
+    Preset { provider: "openrouter", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", models: &["openrouter/free", "nvidia/nemotron-3-super-120b-a12b:free", "qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free", "cohere/north-mini-code:free"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "17 个 :free 模型（多数 50/天，部分 1000/天）免卡；避 poolside 10-31 到期", doc: "https://openrouter.ai/" },
+    Preset { provider: "groq", name: "Groq", base_url: "https://api.groq.com/openai/v1", models: &["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama-3.2-11b-vision-preview"], tier: "T1", kind: "chat", region: "OVERSEAS", free_tier: "免费层 14400 RPD / 30 RPM 免卡", doc: "https://groq.com/" },
+    Preset { provider: "nvidia", name: "NVIDIA NIM", base_url: "https://integrate.api.nvidia.com/v1", models: &["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-super-vl-120b-a12b", "deepseek-ai/deepseek-v4.1-flash", "meta/llama-3.3-70b-instruct"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "约 40 RPM 免卡，100+ 模型", doc: "https://build.nvidia.com/" },
 ];
 
 /// "一键载入国内默认"：智谱主线 + 硅基流动，按国内优先排序。
@@ -336,6 +336,72 @@ pub fn default_cn_channels(now_iso: &str) -> Vec<Channel> {
                mm("Qwen/Qwen3-8B", "text", 90),
                mm("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "text", 80),
                mm("Qwen/Qwen2.5-VL-7B-Instruct", "vision", 70),
+           ]),
+    ]
+}
+
+/// "一键载入" 的海外补充：OpenRouter + Groq + NVIDIA NIM。
+/// enabled=false、优先级低于国内（40/35/30），作为「国内渠道全挂时的兜底」。
+/// 各家免费层免卡即可用，但需 Key 且大概率需科学上网；caps 含 text+vision，
+/// models_meta 标注各家视觉模型（gemma-4-31b / llama-3.2-11b-vision / nemotron-3.5-super-vl），
+/// 这样当国内视觉渠道不可用时，image_url 请求可被海外视觉渠道承接。
+pub fn default_overseas_channels(now_iso: &str) -> Vec<Channel> {
+    let mk = |provider: &str, name: &str, url: &str, models: &[&str], tier: &str, kind: &str, priority: i64, note: &str, caps: &[&str], meta: Vec<ModelMeta>| Channel {
+        id: format!("seed-{provider}-{kind}"),
+        provider: provider.into(),
+        name: name.into(),
+        kind: kind.into(),
+        base_url: url.into(),
+        api_key: String::new(),
+        models: models.iter().map(|s| s.to_string()).collect(),
+        tier: tier.into(),
+        priority,
+        enabled: false,
+        note: note.into(),
+        caps: caps.iter().map(|s| s.to_string()).collect(),
+        models_meta: meta,
+        health: Health::default(),
+        created_at: now_iso.into(),
+
+        updated_at: now_iso.into(),
+    };
+    let mm = |name: &str, kind: &str, prio: i64| ModelMeta {
+        name: name.into(),
+        kind: kind.into(),
+        enabled: true,
+        priority: prio,
+        health: Health::default(),
+    };
+    vec![
+        mk("openrouter", "OpenRouter（海外兜底）", "https://openrouter.ai/api/v1",
+           &["openrouter/free", "nvidia/nemotron-3-super-120b-a12b:free", "qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free", "cohere/north-mini-code:free"], "T0", "chat", 40,
+           "海外聚合网关，17 个 :free 免卡模型（多数 50/天，部分 1000/天）。国内全挂时兜底；需 Key + 可能需科学上网。避 poolside 10-31 到期。",
+           &["text", "vision"],
+           vec![
+               mm("openrouter/free", "text", 100),
+               mm("nvidia/nemotron-3-super-120b-a12b:free", "text", 90),
+               mm("qwen/qwen3.8-27b:free", "text", 80),
+               mm("google/gemma-4-31b-it:free", "vision", 70),
+               mm("cohere/north-mini-code:free", "text", 60),
+           ]),
+        mk("groq", "Groq（海外兜底）", "https://api.groq.com/openai/v1",
+           &["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama-3.2-11b-vision-preview"], "T1", "chat", 35,
+           "免费层 14400 RPD / 30 RPM 免卡；极速推理。国内全挂时兜底；需 Key + 可能需科学上网。",
+           &["text", "vision"],
+           vec![
+               mm("llama-3.3-70b-versatile", "text", 100),
+               mm("llama-3.1-8b-instant", "text", 90),
+               mm("llama-3.2-11b-vision-preview", "vision", 70),
+           ]),
+        mk("nvidia", "NVIDIA NIM（海外兜底）", "https://integrate.api.nvidia.com/v1",
+           &["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-super-vl-120b-a12b", "deepseek-ai/deepseek-v4.1-flash", "meta/llama-3.3-70b-instruct"], "T0", "chat", 30,
+           "约 40 RPM 免卡，100+ 模型。国内全挂时兜底；需 Key + 可能需科学上网。",
+           &["text", "vision"],
+           vec![
+               mm("nvidia/nemotron-3-ultra-550b-a55b", "text", 100),
+               mm("nvidia/nemotron-3.5-super-vl-120b-a12b", "vision", 70),
+               mm("deepseek-ai/deepseek-v4.1-flash", "text", 90),
+               mm("meta/llama-3.3-70b-instruct", "text", 80),
            ]),
     ]
 }

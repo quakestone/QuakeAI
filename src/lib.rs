@@ -1202,6 +1202,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::{header_safe, resolve_stt_model, resolve_tts_model};
+    use crate::channels::default_overseas_channels;
 
     /// 版本号单一事实源：admin.rs 的 VERSION 与 /health 的字面量都必须来自
     /// Cargo.toml（编译期注入）。曾经 admin.rs 常量停在 0.7.2 没跟着升级，
@@ -1210,7 +1211,7 @@ mod tests {
     #[test]
     fn version_single_source_of_truth() {
         assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(crate::admin::VERSION, "0.11.0");
+        assert_eq!(crate::admin::VERSION, "0.12.0");
     }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
@@ -1280,5 +1281,44 @@ mod tests {
     fn resolve_converges_on_z_ai() {
         assert_eq!(resolve_stt_model("zhipu", "https://api.z.ai/api/paas/v4", "glm-4-voice"), "glm-asr-2512");
         assert_eq!(resolve_tts_model("z.ai", "https://api.z.ai/api/paas/v4", "glm-4-voice"), "glm-tts");
+    }
+
+    /// 海外兜底种子：3 条、全部 disabled、优先级低于国内、各含 vision 能力
+    ///（image_url 才能在国内全挂时落到海外视觉模型）。名字幂等（id 不重复）。
+    #[test]
+    fn overseas_seed_channels_well_formed() {
+        let now = "2026-10-20T00:00:00Z";
+        let os = default_overseas_channels(now);
+        assert_eq!(os.len(), 3, "海外种子应为 openrouter/groq/nvidia 共 3 条");
+
+        // id 唯一、全部 disabled
+        let mut ids = std::collections::HashSet::new();
+        for c in &os {
+            assert!(ids.insert(c.id.clone()), "id 重复：{}", c.id);
+            assert!(!c.enabled, "海外种子必须默认 disabled（需登记 Key）：{}", c.id);
+        }
+
+        // 优先级均低于国内主力（国内 zhipu=100 / siliconflow=90 / zhipu-audio=80）
+        for c in &os {
+            assert!(c.priority < 80, "海外兜底优先级应低于国内（<80），实际 {} = {}", c.id, c.priority);
+        }
+        // 三条之间按 openrouter(40) > groq(35) > nvidia(30) 排序
+        assert_eq!(os[0].id, "seed-openrouter-chat");
+        assert_eq!(os[1].id, "seed-groq-chat");
+        assert_eq!(os[2].id, "seed-nvidia-chat");
+        assert!(os[0].priority > os[1].priority && os[1].priority > os[2].priority);
+
+        // 每条都自带 vision 能力（含一个视觉模型），否则 image_url 无法兜底路由
+        for c in &os {
+            let caps: Vec<&str> = c.caps.iter().map(|s| s.as_str()).collect();
+            assert!(caps.contains(&"vision"), "{} 必须声明 vision 能力", c.id);
+            assert!(c.models_meta.iter().any(|m| m.kind == "vision"), "{} 必须至少登记一个视觉模型", c.id);
+        }
+
+        // 时间戳字段填充
+        for c in &os {
+            assert_eq!(c.created_at, now);
+            assert_eq!(c.updated_at, now);
+        }
     }
 }

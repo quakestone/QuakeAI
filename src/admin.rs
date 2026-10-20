@@ -7,7 +7,7 @@
 //!   PUT    /admin/api/channels/{id}   更新（含 API Key 轮换：空值=不改变）
 //!   DELETE /admin/api/channels/{id}   删除
 //!   POST   /admin/api/channels/{id}/test  连通性探测 + 回写健康状态
-//!   POST   /admin/api/seed            一键载入国内默认（智谱/硅基流动/智谱音频）
+//!   POST   /admin/api/seed            一键载入默认（国内 3 + 海外 3：OpenRouter/Groq/NVIDIA NIM）
 //!   GET    /admin/api/events          降权/切换事件账本（最近 50 条）
 //!   GET    /admin/api/diag            部署自检（DO 绑定/env 状态，排障用）
 //!
@@ -407,6 +407,12 @@ async fn api_seed(env: &Env) -> Result<Response> {
     let now = now_iso();
     let mut added = 0;
     for seed in default_cn_channels(&now) {
+        if !list.iter().any(|c| c.id == seed.id) {
+            list.push(seed);
+            added += 1;
+        }
+    }
+    for seed in default_overseas_channels(&now) {
         if !list.iter().any(|c| c.id == seed.id) {
             list.push(seed);
             added += 1;

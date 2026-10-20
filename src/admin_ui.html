@@ -525,7 +525,7 @@
     <div class="card">
       <div class="toolbar">
         <button class="primary" onclick="openDrawer()">＋ 登记新资源</button>
-        <button onclick="seed()">一键载入国内默认</button>
+        <button onclick="seed()">一键载入默认（国内+海外）</button>
         <button onclick="exportJson()">导出配置</button>
         <div class="spacer"></div>
         <button onclick="showDiag()">部署自检</button>
@@ -2950,7 +2950,7 @@ function presetFill(i) {
   $("f-models").value = (p.models || []).join(", ");
   renderModelMetaRows((p.models || []).map(name => ({
     name,
-    kind: p.kind === "audio" ? "stt" : (/glm-4v|glm-4\.1v|-vl|vision/i.test(name) ? "vision" : "text"),
+    kind: p.kind === "audio" ? "stt" : (/glm-4v|glm-4\.1v|-vl|vision|gemma/i.test(name) ? "vision" : "text"),
     priority: 50, enabled: true,
   })), p.kind || "chat");
   $("f-note").value = p.free_tier || "";
@@ -3010,7 +3010,7 @@ async function submitChannel() {
 async function seed() {
   try {
     const j = await api("/seed", "POST", {});
-    toast(`已载入 ${j.added} 条国内默认渠道（Key 待登记）`, "ok");
+    toast(`已载入 ${j.added} 条默认渠道（国内优先 + 海外兜底，Key 待登记）`, "ok");
     loadAll();
   } catch (e) { toast("载入失败：" + e.message, "err"); }
 }
