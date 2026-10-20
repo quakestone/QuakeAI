@@ -492,6 +492,68 @@
   .badge.err { color: var(--bad); border-color: var(--bad); }
   .mgmt-wrap { max-width: 1080px; margin: 0 auto; padding: 14px 14px calc(40px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 14px; }
 
+  /* ---- 极简页头 ----
+     作用域页只有一行字：不吸顶、无边框、无背景，滚走就滚走。
+     设置子页多一个 ‹（分区 → 菜单 → 聊天是两级，不能只靠系统返回）。 */
+  .mgmt-top.bare { display: block; position: static; padding: 18px 16px 6px; padding-top: calc(18px + env(safe-area-inset-top, 0px)); border-bottom: none; background: none; backdrop-filter: none; }
+  .mgmt-top.bare .ttl { font-size: 17px; font-weight: 700; letter-spacing: .2px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .mgmt-top.bare .ttl:active { opacity: .55; }
+  .mgmt-top.slim { display: flex; align-items: center; gap: 4px; position: static; padding: 14px 16px 6px; padding-top: calc(14px + env(safe-area-inset-top, 0px)); border-bottom: none; background: none; backdrop-filter: none; }
+  .mgmt-top.slim .ttl { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
+  .mgmt-top.slim .back { border: none; background: none; color: var(--dim); font-size: 19px; line-height: 1; padding: 2px 8px 4px 0; cursor: pointer; }
+  .mgmt-top.slim .back:active { opacity: .55; }
+  /* 作用域页页头下方紧接标签栏：靠留白分段，不加线 */
+  #view-models .mgmt-wrap { padding-top: 4px; }
+
+  /* ---- 设置菜单（#/settings） ---- */
+  .sect-menu { display: flex; flex-direction: column; gap: 8px; }
+  .sect-item { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 13px 14px; cursor: pointer; color: var(--txt); font: inherit; }
+  .sect-item:active { background: var(--panel2); }
+  .sect-item .ic { font-size: 17px; width: 22px; text-align: center; flex: none; }
+  .sect-item .tx { flex: 1; min-width: 0; }
+  .sect-item .nm { font-size: 14px; font-weight: 600; }
+  .sect-item .ds { font-size: 11.5px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sect-item .ar { color: var(--dim); flex: none; font-size: 15px; }
+
+  /* ---- 概览（作用域页首屏） ---- */
+  .ov-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .ov-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ov-name { font-size: 17px; font-weight: 700; }
+  .ov-sub { font-size: 12px; color: var(--dim); margin-top: 5px; }
+  .ov-line { font-size: 12.5px; margin-top: 5px; color: var(--dim); }
+  .ov-kv { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+  .ov-kv > div { background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+  .ov-kv .k { font-size: 10.5px; color: var(--dim); }
+  .ov-kv .v { font-size: 15px; font-weight: 700; margin-top: 2px; }
+  .ov-acts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .ov-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  @media (max-width: 430px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
+
+  /* ---- 模型登记：每页 2 张大 banner ---- */
+  .reg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .reg-sum { font-size: 12px; color: var(--dim); flex: 1 1 auto; min-width: 0; }
+  .reg-stage { display: flex; align-items: center; gap: 4px; }
+  .reg-arrow { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; flex: none; }
+  .reg-arrow:disabled { opacity: .3; cursor: default; }
+  .reg-cards { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .reg-dots { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 10px; }
+  .reg-dot { width: 5px; height: 5px; border-radius: 50%; background: #33415c; transition: width .18s, background .18s; }
+  .reg-dot.on { width: 12px; border-radius: 3px; background: var(--acc); }
+  .reg-n { font-size: 10.5px; color: var(--dim); margin-left: 4px; }
+  #channel-rows { display: flex; flex-direction: column; gap: 10px; }
+
+  /* ---- 模型列表过滤 chips ---- */
+  .mchips { display: flex; gap: 6px; }
+  .mchip { font-size: 11.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--dim); cursor: pointer; }
+  .mchip.sel { color: var(--txt); border-color: var(--acc); background: var(--sel); }
+
+  /* ---- 换 Key 待办队列 ---- */
+  .kq-row { display: flex; align-items: center; gap: 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; }
+  .kq-row .nm { font-size: 12.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kq-row .st { font-size: 10.5px; flex: none; }
+  .kq-row .st.miss { color: var(--warn); }
+  .kq-row .st.bad { color: var(--bad); }
+
   .store-banner { background: #2b1216; border: 1px solid var(--bad); border-radius: var(--radius); padding: 14px 16px; }
   .store-banner b { color: var(--bad); }
   .store-banner pre { background: #170a0d; border: 1px solid #4a2027; border-radius: 8px; padding: 10px; margin-top: 8px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -702,7 +764,7 @@
     <span class="sidebar-brand">QuakeAI</span>
     <div class="spacer"></div>
     <button class="icon-btn side-home" onclick="navigate('chat'); closeSidebar()" aria-label="对话首页" title="对话首页">💬</button>
-    <button class="icon-btn" onclick="openModels()" aria-label="模型管理" title="模型管理">⚙</button>
+    <button class="icon-btn" onclick="openSettings()" aria-label="设置" title="设置（全局）">⚙</button>
   </div>
   <button class="new-chat" onclick="newConvo()">＋ 新对话</button>
   <div class="convo-search">
@@ -819,18 +881,11 @@
   </main>
 </div>
 
-<!-- ==================== 模型管理（二级子页） ==================== -->
+<!-- ==================== 模型管理（作用域页 · 只看当前模型） ==================== -->
 <div id="view-models" hidden>
-  <header class="mgmt-top">
-    <button class="icon-btn" onclick="navigate('chat')" aria-label="返回上一页" title="返回上一页">←</button>
-    <button class="icon-btn" onclick="openSidebar()" aria-label="侧栏" title="侧栏（左缘右滑打开）">☰</button>
-    <div class="ttl-box">
-      <div class="ttl">模型管理</div>
-      <div class="sub">资源管理 · 智能路由 · 国内优先</div>
-    </div>
-    <div class="spacer"></div>
-    <span class="badge" id="store-badge">store: -</span>
-    <button class="primary" onclick="openDrawer()">＋ 登记资源</button>
+  <header class="mgmt-top bare">
+    <div class="ttl" role="button" tabindex="0" title="返回聊天" onclick="navigate('chat')"
+         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();navigate('chat')}">模型管理</div>
   </header>
 
   <div class="mgmt-wrap">
@@ -841,56 +896,33 @@
       <button style="margin-top:10px" onclick="showDiag()">查看部署自检</button>
     </div>
 
-    <section class="stats">
-      <div class="stat"><div class="k">渠道总数</div><div class="v" id="st-total">0</div></div>
-      <div class="stat"><div class="k">已启用</div><div class="v" id="st-enabled">0</div></div>
-      <div class="stat"><div class="k">健康</div><div class="v" id="st-healthy" style="color:var(--ok)">0</div></div>
-      <div class="stat"><div class="k">降权冷却</div><div class="v" id="st-cooling" style="color:var(--cool)">0</div></div>
-      <div class="stat"><div class="k">待登记Key</div><div class="v" id="st-pending" style="color:var(--warn)">0</div></div>
-    </section>
-
-    <div class="card">
-      <div class="toolbar">
-        <button class="primary" onclick="openDrawer()">＋ 登记新资源</button>
-        <button onclick="seed()">一键载入默认（国内+海外）</button>
-        <button onclick="exportJson()">导出配置</button>
-        <div class="spacer"></div>
-        <button onclick="showDiag()">部署自检</button>
-      </div>
+    <!-- 5 标签：概览 / 模型 / 提示词 / 用量 / 积分榜。这一页零写入口（只剩模型启停）。 -->
+    <div class="tabbar" id="mgmt-tabs">
+      <button class="tab sel" data-mtab="overview" onclick="setMgmtTab('overview')">概览</button>
+      <button class="tab" data-mtab="models" onclick="setMgmtTab('models')">模型</button>
+      <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="skill 提示词">提示词</button>
+      <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')" title="模型用量">用量</button>
+      <button class="tab" data-mtab="points" onclick="setMgmtTab('points')" title="模型积分榜">积分榜</button>
     </div>
 
-    <div class="card" id="device-key-card">
-      <h2>本设备 Key <span class="muted">（浏览器级 · 只在本机生效）</span></h2>
-      <div class="hint" style="margin-bottom:8px">多人共用一个网关时，A 不想用 B 登记的 Key：在这里按 provider 录入本设备自己的 Key。它只随本浏览器请求生效（请求头 <code>x-device-keys</code>），<b>不写入共享账本</b>；仅当对应渠道没登记共享 Key 时才会用这里的。留空保存 = 清除，清除后回退共享账本 Key。</div>
-      <div id="device-key-rows"></div>
+    <!-- 面板 0：概览（当前模型唯一一张大卡 + 四个指标） -->
+    <div id="pane-overview">
+      <div class="ov-card" id="ov-card"><div class="empty">加载中…</div></div>
+      <div class="ov-metrics" id="ov-metrics" style="margin-top:10px"></div>
     </div>
 
-    <details class="fold" id="preset-fold">
-      <summary>从预设快速登记（国内 11 + 海外 3，点卡片「登记」自动预填）</summary>
-      <div class="fold-body">
-        <input id="preset-search" placeholder="搜索 provider / 名称…" style="margin:8px 0">
-        <div class="preset-grid" id="preset-cn"></div>
-        <div class="hint" style="margin:10px 0 4px">海外补充（低优先）：</div>
-        <div class="preset-grid" id="preset-os"></div>
-      </div>
-    </details>
-
-    <!-- 模型视图：顶部 5 标签统一切换「文本模型 / 提示词 / 多媒体 / 用量 / 积分榜」。
-         5 栏等分后每栏只有约 62px，放不下完整的「skill 提示词」，所以这里用 2 字 + title 补全称
-         （聊天页的模型选择器是 4 栏、每栏约 73px，能放下完整文案）。
-         资源登记、Key、多媒体等通用卡片留在下方常驻，不随标签切换。 -->
-    <div class="card" id="model-view-card">
-      <div class="tabbar" id="mgmt-tabs">
-        <button class="tab sel" data-mtab="text" onclick="setMgmtTab('text')">文本模型</button>
-        <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="skill 提示词">提示词</button>
-        <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')" title="多媒体模型（音频 · 图片 · 视频）">多媒体</button>
-        <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')" title="模型用量">用量</button>
-        <button class="tab" data-mtab="points" onclick="setMgmtTab('points')" title="模型积分榜">积分榜</button>
-      </div>
-      <h2 id="mgmt-view-ttl">模型列表 <span class="muted" id="model-count"></span></h2>
-
-      <!-- 面板 1：模型平铺列表（文本 / 多媒体两类，各自独立翻页，超过 5 条必分页） -->
-      <div id="pane-models">
+    <!-- 面板 1：模型列表（全部 / 文本 / 多媒体，超 5 条分页） -->
+    <div id="pane-models" hidden>
+      <div class="card">
+        <div class="toolbar" style="margin-bottom:10px">
+          <div class="mchips" id="model-scope-chips">
+            <button class="mchip sel" data-scope="all" onclick="setModelScope('all')">全部</button>
+            <button class="mchip" data-scope="text" onclick="setModelScope('text')">文本</button>
+            <button class="mchip" data-scope="mm" onclick="setModelScope('mm')">多媒体</button>
+          </div>
+          <div class="spacer"></div>
+          <span class="muted" id="model-count"></span>
+        </div>
         <div id="model-rows"></div>
         <div class="pager" id="model-rows-pager" hidden>
           <button onclick="turnModelRowsPage(-1)">‹</button>
@@ -898,139 +930,234 @@
           <button onclick="turnModelRowsPage(1)">›</button>
         </div>
       </div>
+    </div>
 
-      <!-- 面板 2：skill 子系统（独立于模型的对象） -->
-      <div id="pane-skill" hidden>
+    <!-- 面板 2：skill 子系统（独立于模型的对象） -->
+    <div id="pane-skill" hidden>
+      <div class="card">
         <div class="hint" style="margin-bottom:10px">skill 是<b>独立于模型</b>的表达线：只登记「标题 + 提示词正文」。选中并发送时，skill 的提示词会作为 <code>system</code> 消息注入本轮对话，模型按它的指令作答——与选哪个模型无关。列表按使用频次展示。</div>
         <div class="mg-pane-body" id="skill-card-body"></div>
       </div>
-
-      <!-- 面板 3：模型用量 -->
-      <div id="pane-usage" hidden>
-<div class="mg-pane-body" id="usage-card-body">
-<div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
-      <div class="stats" style="margin-bottom:12px">
-        <div class="stat"><div class="k">请求数</div><div class="v" id="us-requests">0</div></div>
-        <div class="stat"><div class="k">成功率</div><div class="v" id="us-success">—</div></div>
-        <div class="stat"><div class="k">总 token</div><div class="v" id="us-tokens">0</div></div>
-        <div class="stat"><div class="k">缓存命中</div><div class="v" id="us-cache">0</div></div>
-        <div class="stat"><div class="k">估算成本</div><div class="v" id="us-cost">—</div></div>
-        <div class="stat"><div class="k">平均延迟</div><div class="v" id="us-latency">—</div></div>
-      </div>
-      <div class="toolbar" style="margin-bottom:10px">
-        <button onclick="loadUsage()">刷新用量</button>
-        <a class="btn-link" href="/admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
-        <div class="spacer"></div>
-        <span class="muted" id="us-records"></span>
-      </div>
-      <div id="usage-tables"><div class="empty">加载中…</div></div>
-      <div class="pager" id="usage-pager" hidden>
-        <button onclick="turnUsagePage(-1)">‹</button>
-        <span class="pg-n" id="usage-page-n"></span>
-        <button onclick="turnUsagePage(1)">›</button>
-      </div>
-</div>
-      </div>
-
-      <!-- 面板 4：模型积分榜 -->
-      <div id="pane-points" hidden>
-<div class="mg-pane-body" id="points-card-body">
-<div class="hint" style="margin-bottom:10px">
-        积分规则：<b>每次模型选择 +1</b> · <b>模型每使用一次 +1</b> · <b>每分享一次 +10</b> · <b>每次模型降权 −20</b>。
-        模型选择器按积分<b>倒序</b>排列（分高的排前面），「自动」条目同样计分参与排序。
-        数据存在本浏览器 localStorage（个人偏好，不写入共享账本）。
-      </div>
-      <div class="toolbar" style="margin-bottom:10px">
-        <button onclick="renderPoints()">刷新积分榜</button>
-        <div class="spacer"></div>
-        <button onclick="resetPoints()">清空积分</button>
-      </div>
-      <div class="tbl-scroll"><div id="points-table"><div class="empty">加载中…</div></div></div>
-      <div class="pager" id="points-pager" hidden>
-        <button onclick="turnPointsPage(-1)">‹</button>
-        <span class="pg-n" id="points-page-n"></span>
-        <button onclick="turnPointsPage(1)">›</button>
-      </div>
-</div>
-      </div>
     </div>
 
-    <div class="card">
-      <h2>已登记资源 <span class="muted" id="channel-count"></span></h2>
-      <div class="ch-grid" id="channel-rows"><div class="empty">加载中…</div></div>
-      <div class="hint">Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。路由规则：priority 大者优先，冷却中的模型/渠道自动跳过；模型出错自动更换同能力模型。</div>
-    </div>
-
-    
-
-    <div class="card" id="mm-card">
-      <h2>语音与多媒体模型 <span class="muted">音频 / 图片视频 两块独立配置</span></h2>
-      <div class="hint" style="margin-bottom:10px">
-        <b>音频块</b>：转写（STT）与播音（TTS）各选一个模型，留空则网关按能力自动选路。
-        <b>图片视频块</b>：视觉与视频各选一个模型，逻辑与音频块一致 —— 留空即自动，
-        选中则带图片/视频的消息固定走该模型。点右上角 🎛 可打开完整设置。
-      </div>
-      <div class="mm-grid">
-        <div class="mm-sec">
-          <div class="mm-sec-ttl">🎧 音频模型</div>
-          <div class="vg-row"><label>转写 STT</label><select id="mg-stt-model"><option value="">自动</option></select></div>
-          <div class="vg-row"><label>播音 TTS</label><select id="mg-tts-model"><option value="">自动</option></select></div>
+    <!-- 面板 3：模型用量 -->
+    <div id="pane-usage" hidden>
+      <div class="card">
+        <div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
+        <div class="stats" style="margin-bottom:12px">
+          <div class="stat"><div class="k">请求数</div><div class="v" id="us-requests">0</div></div>
+          <div class="stat"><div class="k">成功率</div><div class="v" id="us-success">—</div></div>
+          <div class="stat"><div class="k">总 token</div><div class="v" id="us-tokens">0</div></div>
+          <div class="stat"><div class="k">缓存命中</div><div class="v" id="us-cache">0</div></div>
+          <div class="stat"><div class="k">估算成本</div><div class="v" id="us-cost">—</div></div>
+          <div class="stat"><div class="k">平均延迟</div><div class="v" id="us-latency">—</div></div>
         </div>
-        <div class="mm-sec">
-          <div class="mm-sec-ttl">🖼 图片视频模型</div>
-          <div class="vg-row"><label>视觉</label><select id="mg-vision-model"><option value="">自动</option></select></div>
-          <div class="vg-row"><label>视频</label><select id="mg-video-model"><option value="">跟随视觉</option></select></div>
-          <div class="vg-row"><label>范围</label>
-            <select id="mg-mm-scope">
-              <option value="attach">仅带附件的消息</option>
-              <option value="always">所有消息</option>
-            </select>
+        <div class="toolbar" style="margin-bottom:10px">
+          <button onclick="loadUsage()">刷新用量</button>
+          <a class="btn-link" href="/admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
+          <div class="spacer"></div>
+          <span class="muted" id="us-records"></span>
+        </div>
+        <div id="usage-tables"><div class="empty">加载中…</div></div>
+        <div class="pager" id="usage-pager" hidden>
+          <button onclick="turnUsagePage(-1)">‹</button>
+          <span class="pg-n" id="usage-page-n"></span>
+          <button onclick="turnUsagePage(1)">›</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 面板 4：模型积分榜 -->
+    <div id="pane-points" hidden>
+      <div class="card">
+        <div class="hint" style="margin-bottom:10px">
+          积分规则：<b>每次模型选择 +1</b> · <b>模型每使用一次 +1</b> · <b>每分享一次 +10</b> · <b>每次模型降权 −20</b>。
+          模型选择器按积分<b>倒序</b>排列（分高的排前面），「自动」条目同样计分参与排序。
+          数据存在本浏览器 localStorage（个人偏好，不写入共享账本）。
+        </div>
+        <div class="toolbar" style="margin-bottom:10px">
+          <button onclick="renderPoints()">刷新积分榜</button>
+          <div class="spacer"></div>
+          <button onclick="resetPoints()">清空积分</button>
+        </div>
+        <div class="tbl-scroll"><div id="points-table"><div class="empty">加载中…</div></div></div>
+        <div class="pager" id="points-pager" hidden>
+          <button onclick="turnPointsPage(-1)">‹</button>
+          <span class="pg-n" id="points-page-n"></span>
+          <button onclick="turnPointsPage(1)">›</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 设置（全局 · 侧栏 ⚙ 入口） ==================== -->
+<div id="view-settings" hidden>
+  <header class="mgmt-top slim">
+    <button class="back" onclick="sectBack()" aria-label="返回" title="返回">‹</button>
+    <div class="ttl" id="sect-ttl">设置</div>
+  </header>
+
+  <div class="mgmt-wrap">
+    <!-- 菜单：只写名字 + 一句副标题，不放开关和数字 -->
+    <div id="sect-list" class="sect-menu">
+      <button class="sect-item" onclick="goSect('registry')">
+        <span class="ic">📦</span>
+        <span class="tx"><span class="nm">模型登记</span><span class="ds">已登记资源 · 分页浏览 · 新增 · 预设 · 设备 Key</span></span>
+        <span class="ar">›</span>
+      </button>
+      <button class="sect-item" onclick="goSect('keys')">
+        <span class="ic">🔑</span>
+        <span class="tx"><span class="nm">模型换 Key</span><span class="ds">缺 Key / 失效渠道的待办队列</span></span>
+        <span class="ar">›</span>
+      </button>
+      <button class="sect-item" onclick="goSect('mm')">
+        <span class="ic">🎛</span>
+        <span class="tx"><span class="nm">多媒体配置</span><span class="ds">STT / TTS / 视觉 / 视频 四路映射</span></span>
+        <span class="ar">›</span>
+      </button>
+      <button class="sect-item" onclick="goSect('wf')">
+        <span class="ic">🧩</span>
+        <span class="tx"><span class="nm">工作流参数</span><span class="ds">用量记账 · 自动标题 · 记忆压缩 · 版式</span></span>
+        <span class="ar">›</span>
+      </button>
+      <button class="sect-item" onclick="goSect('api')">
+        <span class="ic">🔌</span>
+        <span class="tx"><span class="nm">接入方式</span><span class="ds">OpenAI 兼容端点与响应头</span></span>
+        <span class="ar">›</span>
+      </button>
+      <button class="sect-item" onclick="goSect('auth')">
+        <span class="ic">🔐</span>
+        <span class="tx"><span class="nm">管理面鉴权</span><span class="ds">ADMIN_TOKEN</span></span>
+        <span class="ar">›</span>
+      </button>
+      <button class="sect-item" onclick="showDiag()">
+        <span class="ic">🩺</span>
+        <span class="tx"><span class="nm">部署自检</span><span class="ds">绑定 / 存储 / 版本</span></span>
+        <span class="ar">›</span>
+      </button>
+    </div>
+
+    <!-- 3.1 模型登记：每页 2 张大 banner -->
+    <div id="sect-registry" hidden>
+      <div class="card">
+        <div class="reg-bar">
+          <span class="reg-sum" id="reg-sum">已登记 0</span>
+          <button class="primary" onclick="openDrawer()">＋ 登记</button>
+        </div>
+        <div class="mchips" id="reg-chips" style="margin-top:10px">
+          <button class="mchip sel" data-rf="all" onclick="setRegFilter('all')">全部</button>
+          <button class="mchip" data-rf="nokey" onclick="setRegFilter('nokey')">缺 Key</button>
+          <button class="mchip" data-rf="off" onclick="setRegFilter('off')">已停用</button>
+        </div>
+        <div class="reg-stage" style="margin-top:12px">
+          <button class="reg-arrow" id="reg-prev" onclick="regGo(-1)" aria-label="上一页">‹</button>
+          <div class="reg-cards" id="channel-rows"><div class="empty">加载中…</div></div>
+          <button class="reg-arrow" id="reg-next" onclick="regGo(1)" aria-label="下一页">›</button>
+        </div>
+        <div class="reg-dots" id="reg-dots"></div>
+        <div class="hint" id="channel-count" style="margin-top:10px"></div>
+      </div>
+
+      <details class="fold" id="preset-fold" style="margin-top:14px">
+        <summary>从预设快速登记（国内 11 + 海外 3，点卡片「登记」自动预填）</summary>
+        <div class="fold-body">
+          <input id="preset-search" placeholder="搜索 provider / 名称…" style="margin:8px 0">
+          <div class="preset-grid" id="preset-cn"></div>
+          <div class="hint" style="margin:10px 0 4px">海外补充（低优先）：</div>
+          <div class="preset-grid" id="preset-os"></div>
+        </div>
+      </details>
+
+      <div class="card" id="device-key-card" style="margin-top:14px">
+        <h2>本设备 Key <span class="muted">（浏览器级 · 只在本机生效）</span></h2>
+        <div class="hint" style="margin-bottom:8px">多人共用一个网关时，A 不想用 B 登记的 Key：在这里按 provider 录入本设备自己的 Key。它只随本浏览器请求生效（请求头 <code>x-device-keys</code>），<b>不写入共享账本</b>；仅当对应渠道没登记共享 Key 时才会用这里的。留空保存 = 清除，清除后回退共享账本 Key。</div>
+        <div id="device-key-rows"></div>
+      </div>
+
+      <details class="fold" id="events-fold" style="margin-top:14px">
+        <summary>降权 / 切换事件（最近 50 条环形账本）</summary>
+        <div class="fold-body" id="event-list"><div class="empty">暂无事件</div></div>
+      </details>
+
+      <details class="fold" id="maint-fold" style="margin-top:14px">
+        <summary>维护（载入默认 / 导出配置 / 部署自检）</summary>
+        <div class="fold-body toolbar">
+          <button onclick="seed()">一键载入默认（国内+海外）</button>
+          <button onclick="exportJson()">导出配置</button>
+          <button onclick="showDiag()">部署自检</button>
+        </div>
+      </details>
+    </div>
+
+    <!-- 3.2 模型换 Key：只列待补的，不重复全量列表 -->
+    <div id="sect-keys" hidden>
+      <div class="card">
+        <h2>待补 Key <span class="muted" id="kq-count"></span></h2>
+        <div class="hint" style="margin-bottom:10px">只列「从没配过 Key」和「最近出现 401 / 403 / invalid_api_key」的渠道。补完一条就从这里消失。Key 只以掩码展示，任何 API 响应都不含明文。</div>
+        <div id="key-queue"><div class="empty">加载中…</div></div>
+        <div class="toolbar" style="margin-top:12px">
+          <button onclick="goSect('registry')">查看全部渠道 →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3.3 多媒体配置 -->
+    <div id="sect-mm" hidden>
+      <div class="card" id="mm-card">
+        <h2>语音与多媒体模型 <span class="muted">音频 / 图片视频 两块独立配置</span></h2>
+        <div class="hint" style="margin-bottom:10px">
+          <b>音频块</b>：转写（STT）与播音（TTS）各选一个模型，留空则网关按能力自动选路。
+          <b>图片视频块</b>：视觉与视频各选一个模型，逻辑与音频块一致 —— 留空即自动，
+          选中则带图片/视频的消息固定走该模型。
+        </div>
+        <div class="mm-grid">
+          <div class="mm-sec">
+            <div class="mm-sec-ttl">🎧 音频模型</div>
+            <div class="vg-row"><label>转写 STT</label><select id="mg-stt-model"><option value="">自动</option></select></div>
+            <div class="vg-row"><label>播音 TTS</label><select id="mg-tts-model"><option value="">自动</option></select></div>
+          </div>
+          <div class="mm-sec">
+            <div class="mm-sec-ttl">🖼 图片视频模型</div>
+            <div class="vg-row"><label>视觉</label><select id="mg-vision-model"><option value="">自动</option></select></div>
+            <div class="vg-row"><label>视频</label><select id="mg-video-model"><option value="">跟随视觉</option></select></div>
+            <div class="vg-row"><label>范围</label>
+              <select id="mg-mm-scope">
+                <option value="attach">仅带附件的消息</option>
+                <option value="always">所有消息</option>
+              </select>
+            </div>
           </div>
         </div>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="primary" onclick="saveMgmtMm()">保存多媒体设置</button>
+          <div class="spacer"></div>
+          <span class="muted" id="mg-mm-hint"></span>
+        </div>
       </div>
-      <div class="toolbar" style="margin-top:10px">
-        <button class="primary" onclick="saveMgmtMm()">保存多媒体设置</button>
-        <div class="spacer"></div>
-        <span class="muted" id="mg-mm-hint"></span>
-      </div>
+
+      <details class="fold" id="tts-fallback-fold" style="margin-top:14px">
+        <summary>TTS 兜底（网关播不了时怎么办）</summary>
+        <div class="fold-body">
+          <div class="vg-row"><label><input type="checkbox" id="tts-fb-browser" checked> 网关失败时仍用浏览器语音</label></div>
+          <div class="hint" style="margin:6px 0 10px">默认开：网关没有 TTS 模型、Key 失效或超时时，自动退回本机语音合成，保证"点播放有声音"。关掉则只走网关，失败就报错。</div>
+          <div class="toolbar">
+            <button onclick="testTtsChain()">测试播报（逐层输出）</button>
+            <span class="muted" id="tts-test-out"></span>
+          </div>
+        </div>
+      </details>
     </div>
 
-    
-
-    <details class="fold" id="events-fold">
-      <summary>降权 / 切换事件（最近 50 条环形账本）</summary>
-      <div class="fold-body" id="event-list"><div class="empty">暂无事件</div></div>
-    </details>
-
-    <details class="fold">
-      <summary>接入方式（OpenAI 兼容端点）</summary>
-      <div class="fold-body usage">
-        <pre>curl &lt;gateway&gt;/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"glm-4-flash","stream":true,"messages":[{"role":"user","content":"你好"}]}'
-
-# 音频/视频 multipart 上传（同端点，任意二进制）
-curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm-asr-2512'</pre>
-        <div class="hint">响应头 <code>x-gateway-channel</code> / <code>x-gateway-attempts</code> 可观测命中渠道与降权链（如 <code>ch-a=HTTP429;ch-b=ok</code>）。</div>
-      </div>
-    </details>
-
-    <details class="fold">
-      <summary>设置（管理面鉴权）</summary>
-      <div class="fold-body">
-        <label style="font-size:12px;color:var(--dim);display:block;margin-bottom:4px">ADMIN_TOKEN（部署配置了鉴权才需要填）</label>
-        <input id="admin-token" placeholder="留空 = 未配置鉴权" autocomplete="off">
-      </div>
-    </details>
-
-    <details class="fold" id="wf-fold">
-      <summary>⚙ 工作流引擎（浏览器侧 WASM）</summary>
-      <div class="fold-body">
+    <!-- 3.4 工作流参数 -->
+    <div id="sect-wf" hidden>
+      <div class="card">
+        <h2>工作流参数 <span class="muted">浏览器侧 WASM · 本地执行、服务端零存储</span></h2>
         <p class="hint">Rust 编译的 WASM 内核跑在主线程：每次回答结束后自动执行 ① token 流用量记账 ② LLM 总结历史标题 ③ 会话记忆更新（WASM 状态机按 token 阈值自适应触发）④ 附件显示规格。全部在本地执行、服务端零存储；模型调用走网关自身（计入账本）。</p>
         <div class="vg-row"><label><input type="checkbox" id="wf-on-usage"> token 流用量统计（徽章 + 会话累计）</label></div>
         <div class="vg-row"><label><input type="checkbox" id="wf-on-title"> LLM 总结历史标题（失败保留首条截断兜底）</label></div>
         <div class="vg-row"><label><input type="checkbox" id="wf-on-memory"> 会话记忆更新（WASM 状态机：按 token 阈值自适应触发）</label></div>
-        <div style="margin:6px 0 2px 18px;border-left:2px solid var(--line);padding-left:10px">
+        <div style="margin:6px 0 2px 18px;border-left:2px solid var(--border);padding-left:10px">
           <div class="vg-row"><label>软阈 tokens（超此触发摘要）</label><input id="wf-mem-maxtok" type="number" min="256" max="32000" value="4000"></div>
           <div class="vg-row"><label>硬上限 tokens（超此锁会话）</label><input id="wf-mem-hard" type="number" min="512" max="64000" value="16000"></div>
           <div class="vg-row"><label>最近保留条数</label><input id="wf-mem-keep" type="number" min="2" max="40" value="8"></div>
@@ -1046,7 +1173,33 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
         </div>
         <div class="vg-row"><label>当前会话记忆</label><span class="muted" id="wf-mem-view" style="white-space:pre-wrap">（无）</span></div>
       </div>
-    </details>
+    </div>
+
+    <!-- 3.5 接入方式 -->
+    <div id="sect-api" hidden>
+      <div class="card">
+        <h2>接入方式 <span class="muted">OpenAI 兼容端点</span></h2>
+        <div class="fold-body usage">
+          <pre>curl &lt;gateway&gt;/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"glm-4-flash","stream":true,"messages":[{"role":"user","content":"你好"}]}'
+
+# 音频/视频 multipart 上传（同端点，任意二进制）
+curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm-asr-2512'</pre>
+          <div class="hint">响应头 <code>x-gateway-channel</code> / <code>x-gateway-attempts</code> 可观测命中渠道与降权链（如 <code>ch-a=HTTP429;ch-b=ok</code>）。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3.6 管理面鉴权 -->
+    <div id="sect-auth" hidden>
+      <div class="card">
+        <h2>管理面鉴权</h2>
+        <div class="hint" style="margin-bottom:10px">部署时配置了 <code>ADMIN_TOKEN</code> 才需要填。填了之后所有 <code>/admin/api/*</code> 请求会带 <code>x-admin-token</code> 头，存在本浏览器 localStorage。</div>
+        <label style="font-size:12px;color:var(--dim);display:block;margin-bottom:4px">ADMIN_TOKEN</label>
+        <input id="admin-token" placeholder="留空 = 未配置鉴权" autocomplete="off">
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1134,7 +1287,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 
 <dialog id="model-dlg">
   <button class="dlg-back" onclick="modelDlg.close()" aria-label="返回" title="返回">←</button>
-  <h3>选择模型<span id="mp-scan-ago"></span><button class="icon-btn mp-mgmt" onclick="openModels(); modelDlg.close()" aria-label="模型管理" title="模型管理">⚙</button></h3>
+  <h3>选择模型<span id="mp-scan-ago"></span><button class="icon-btn mp-mgmt" onclick="openModelScope()" aria-label="模型管理" title="模型管理">⚙</button></h3>
   <div class="tabbar" id="mp-tabs">
     <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">文本模型</button>
     <button class="tab" data-mtab="skill" onclick="setMpTab('skill')" title="skill 提示词：独立于模型的表达线">skill 提示词</button>
@@ -1320,31 +1473,78 @@ async function api(path, method="GET", body=null, timeoutMs=0) {
   return j;
 }
 
-// ================= 视图路由（#/ = 对话首页，#/models = 模型管理二级页） =================
-// 显式 hash 优先：#/models → 模型管理，#/ → 对话首页（含从 /admin 旧链接点
-// 「← 返回对话」的场景——不能因路径名含 /admin 又把用户按在 models 页）。
-// 只有空 hash 才按路径名兜底：/admin 无 hash 落 models（兼容旧链接），其余落 chat。
+// ================= 视图路由（#/ = 对话首页，#/models = 模型管理，#/settings = 设置） =================
+// 三个一级视图：chat / models（作用域页）/ settings（全局设置，含 7 个分区）。
+// `/admin` 无 hash 现在落 chat —— 拆分后「打开管理面」不再是「看模型管理」，
+// 模型管理是聊天页里的一个二级入口（选择器 ⚙ / 侧栏 ⚙ 进设置）。
+const SECT_TTL = {
+  registry: "模型登记", keys: "模型换 Key", mm: "多媒体配置",
+  wf: "工作流参数", api: "接入方式", auth: "管理面鉴权",
+};
 function currentView() {
-  if (location.hash === "#/models") return "models";
-  if (location.hash === "#/skills") return "skills";
-  if (location.hash === "#/") return "chat";
-  if (location.hash === "") return location.pathname.startsWith("/admin") ? "models" : "chat";
+  const h = location.hash;
+  if (h === "#/models") return "models";
+  if (h === "#/skills") return "models";            // 旧书签兼容：落到作用域页的「提示词」标签
+  if (h.indexOf("#/settings") === 0) return "settings";
   return "chat";
 }
+function sectOf() {
+  const m = /^#\/settings\/([a-z]+)/.exec(location.hash);
+  return m && SECT_TTL[m[1]] ? m[1] : "";
+}
 function navigate(view) {
-  const h = view === "models" ? "#/models" : view === "skills" ? "#/skills" : "#/";
+  const h = view === "models" ? "#/models" : view === "settings" ? "#/settings" : "#/";
   if (location.hash === h) applyRoute(); else location.hash = h;
+}
+function goSect(name) {
+  if (!SECT_TTL[name]) return;
+  location.hash = "#/settings/" + name;
+}
+function sectBack() {
+  if (sectOf()) location.hash = "#/settings";
+  else navigate("chat");
+}
+// 分区切换：只显示一段，其余 hidden；无分区时显示菜单
+function applySect(name) {
+  const list = $("sect-list");
+  if (list) list.hidden = !!name;
+  for (const k of Object.keys(SECT_TTL)) {
+    const el = $("sect-" + k);
+    if (el) el.hidden = (k !== name);
+  }
+  const ttl = $("sect-ttl");
+  if (ttl) ttl.textContent = name ? SECT_TTL[name] : "设置";
 }
 function applyRoute() {
   const v = currentView();
   $("view-chat").hidden = v !== "chat";
-  $("view-models").hidden = (v !== "models" && v !== "skills");
-  if (v === "models" || v === "skills") {
+  $("view-models").hidden = v !== "models";
+  const st = $("view-settings");
+  if (st) st.hidden = v !== "settings";
+  if (v === "models") {
     loadAll();
-    if (v === "skills") setMgmtTab("skill");
+    if (location.hash === "#/skills") setMgmtTab("skill");
+  }
+  if (v === "settings") {
+    applySect(sectOf());
+    loadAll();
   }
   closeSidebar();
-  if (v === "chat") setTimeout(() => $("input")?.focus(), 80);
+  if (v === "chat") {
+    setTimeout(() => $("input")?.focus(), 80);
+    // 从选择器 ⚙ 进来又退回聊天：把选择器原样打开，停在原来的 tab
+    if (pendingPickerReturn) {
+      const t = pendingPickerReturn;
+      pendingPickerReturn = null;
+      setTimeout(() => { if (typeof openModelPicker === "function") { openModelPicker(); setMpTab(t); } }, 120);
+    }
+  }
+}
+// 选择器 ⚙ → 作用域页；记住来源 tab，返回时重开选择器停在原 tab
+let pendingPickerReturn = null;
+function openModelScope() {
+  if (modelDlg && modelDlg.open) { pendingPickerReturn = mpTab || "text"; modelDlg.close(); }
+  navigate("models");
 }
 
 // ================= 侧栏 =================
@@ -3966,6 +4166,46 @@ function ttsErrHint(msg) {
     : "";
 }
 
+// ================= 多媒体配置 · TTS 链路测试 =================
+// 逐层输出：先试网关 TTS（/v1/audio/speech），失败且「网关失败时仍用浏览器语音」开启则降级浏览器语音。
+// 真实播放一句测试文本，把每一层的成功/失败写到 #tts-test-out，便于定位"点播放没声音"到底卡在哪一层。
+async function testTtsChain() {
+  const out = $("tts-test-out");
+  if (!out) return;
+  const txt = "这是一条测试播报，用于验证语音链路是否通畅。";
+  const fbOn = $("tts-fb-browser") ? $("tts-fb-browser").checked : true;
+  out.style.color = "var(--dim)";
+  out.textContent = "① 试网关 TTS…";
+  let gwErr = null;
+  try {
+    const blob = await ttsBlob(txt);
+    await playCallBlob(blob);
+    out.style.color = "var(--ok, #2ecc71)";
+    out.textContent = "✓ 网关 TTS 正常，已播放测试句";
+    return;
+  } catch (e) { gwErr = e; }
+  if (!fbOn) {
+    out.style.color = "var(--warn)";
+    out.textContent = "① 网关 TTS 失败：" + gwErr.message + "（浏览器兜底已关闭）";
+    return;
+  }
+  out.textContent = "① 网关失败：" + gwErr.message + " → ② 试浏览器语音…";
+  try {
+    await BrowserTts.init();
+    if (!BrowserTts.ready) {
+      out.style.color = "var(--warn)";
+      out.textContent = "① 网关失败：" + gwErr.message + "；② 浏览器语音不可用（本浏览器不支持或引擎未就绪）";
+      return;
+    }
+    await BrowserTts.speak(txt);
+    out.style.color = "var(--warn)";
+    out.textContent = "⚠ 网关播音失败，已用浏览器语音兜底播放（检查渠道 Key 或播音模型）";
+  } catch (e2) {
+    out.style.color = "var(--warn)";
+    out.textContent = "✗ 全链路失败：网关 " + gwErr.message + "；浏览器 " + e2.message;
+  }
+}
+
 /// 解析一段 SSE data 块并累积到 sink（{content, reasoning}）
 function feedSseBlock(block, sink) {
   const data = block.split("\n")
@@ -4528,11 +4768,13 @@ async function loadAll() {
     renderPresets(($("preset-search").value || "").trim());
     renderPoints();       // 模型积分榜（个人使用数据）
     renderMgmtMm();       // 音频 / 图片视频 两块的多媒体设置
+    // 数据到位后刷新作用域页当前标签（默认概览）：否则进入模型管理页时
+    // 概览大卡一直停在「加载中…」—— loadAll 是异步的，applyRoute 不会等它。
+    if (currentView() === "models") setMgmtTab(mgmtTab);
     if (data.version) $("side-version").textContent = "v" + data.version;
   } catch (e) {
-    // 账本异常不再往顶栏糊红标（用户要求屏蔽 error 展示），详情仍见页面顶部 store-banner
-    $("store-badge").textContent = "store: —";
-    $("store-badge").className = "badge";
+    // 账本异常不再往顶栏糊红标（用户要求屏蔽 error 展示），详情仍见页面顶部 store-banner。
+    // 注意：页头极简后 #store-badge 已删除，这里绝不能再去碰它（null.textContent 会二次崩溃）。
     toast("加载失败：" + e.message, "err");
     refreshVersion(); // /channels 挂了也尽量显示真实版本（/health 兜底）
   }
@@ -4851,20 +5093,17 @@ async function refreshVersion() {
 
 function renderStore(data) {
   const ok = data.store === "durable-object";
-  $("store-banner").hidden = ok;
-  if (!ok) $("store-error").textContent = data.store_error || "未知";
-  // 只在账本可用时点亮；不可用不报红（用户要求屏蔽 error 展示）
-  $("store-badge").textContent = ok ? "store: " + (data.store || "ok") : "store: —";
-  $("store-badge").className = "badge" + (ok ? " on" : "");
+  const ban = $("store-banner");
+  if (ban) ban.hidden = ok;
+  if (!ok) { const se = $("store-error"); if (se) se.textContent = data.store_error || "未知"; }
+  // 页头的 store 徽标已随极简页头撤掉：账本异常只由内容区那条红条表达，正常态一个字都不显示
 }
 
+// 渠道口径的统计已压成一句话（见 renderChannels 里的 reg-sum），这里只留兜底
 function renderStats(s) {
-  $("st-total").textContent = s.total ?? 0;
-  $("st-enabled").textContent = s.enabled ?? 0;
-  $("st-healthy").textContent = s.healthy ?? 0;
-  $("st-cooling").textContent = s.cooling ?? 0;
-  $("st-pending").textContent = s.pending_key ?? 0;
+  LAST_SUMMARY = s || {};
 }
+let LAST_SUMMARY = {};
 
 function tierClass(t) { return t === "T0" ? "tag t0" : (t === "T1" ? "tag t1" : "tag"); }
 
@@ -5062,82 +5301,85 @@ function modelRow(c, m) {
 //   audio = stt / tts
 //   mm    = vision / video
 // 每个模型只在其**主能力**所在页出现一次，次要能力用徽章标注，避免重复计数。
-// 模型管理页顶部的 6 标签（文本/skill/音频/图视/用量/积分榜）。
-// 前4 个切「模型列表」面板（各自独立页码），后 2 个把用量、积分榜面板显出来。
-let mgmtTab = "text";
-const MGMT_TABS = ["text", "skill", "mm", "usage", "points"];
-const MGMT_TAB_TTL = {
-  text: "文本模型", skill: "skill 提示词", mm: "多媒体模型（音频 · 图片 · 视频）",
-  usage: "模型用量", points: "模型积分榜",
-};
-// 用户要求：列表深度超过 5 个就全部改成分页 —— 每页 5 条，宁可多页也不一拉到底
+// 作用域页 5 标签：概览 / 模型 / 提示词 / 用量 / 积分榜。
+// 「模型」标签内再用 chips 分 全部 / 文本 / 多媒体，页码按 scope 各自独立。
+let mgmtTab = "overview";
+const MGMT_TABS = ["overview", "models", "skill", "usage", "points"];
+let modelScope = "all";
+// 列表深度超过 5 个就分页 —— 每页 5 条，宁可多页也不一拉到底
 const MG_PAGE_SIZE = 5;
-let mgPages = { text: 1, mm: 1 };   // skill 是独立对象，不分页
+let mgPages = { all: 1, text: 1, mm: 1 };
 function setMgmtTab(k) {
   if (!MGMT_TABS.includes(k)) return;
   mgmtTab = k;
   document.querySelectorAll("#mgmt-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
-  // 面板归属：文本/音频/图视三个标签共用「模型列表」面板，skill/用量/积分榜各自一个面板
-  const PANE_OF = { text: "models", skill: "skill", mm: "models", usage: "usage", points: "points" };
-  const want = PANE_OF[k];
-  for (const p of ["models", "skill", "usage", "points"]) {
+  for (const p of MGMT_TABS) {
     const el = $("pane-" + p);
-    if (el) el.hidden = (p !== want);
+    if (el) el.hidden = (p !== k);
   }
-  const ttl = $("mgmt-view-ttl");
-  if (ttl) ttl.innerHTML = esc(MGMT_TAB_TTL[k] || "模型") + ' <span class="muted" id="model-count"></span>'
-    + (k === "usage" ? ' <span class="muted">网关自身逐请求记账</span>' : k === "points" ? ' <span class="muted" id="points-note">个人使用数据（本机）</span>' : "");
-  // 首次进入用量 / 积分榜 / skill 面板时才拉数据或渲染，避免在别的标签下打无效请求
+  // 首次进入某个面板时才拉数据/渲染，避免在别的标签下打无效请求
+  if (k === "overview") renderOverview();
+  if (k === "models") renderModelTab();
   if (k === "usage") loadUsage();
   if (k === "points") renderPoints();
   if (k === "skill") renderSkillPane();
+}
+function setModelScope(s) {
+  if (["all", "text", "mm"].indexOf(s) < 0) return;
+  modelScope = s;
+  document.querySelectorAll("#model-scope-chips .mchip").forEach(b => b.classList.toggle("sel", b.dataset.scope === s));
+  mgPages[s] = 1;
   renderModelTab();
 }
 function turnModelRowsPage(d) {
-  mgPages[mgmtTab] = Math.max(1, (mgPages[mgmtTab] || 1) + d);
+  mgPages[modelScope] = Math.max(1, (mgPages[modelScope] || 1) + d);
   renderModelTab();
 }
-// 兼容旧调用点（setModelFilter / 历史锚点）
-function setModelTab(k) { setMgmtTab(MGMT_TABS.includes(k) ? k : (k === "video" || k === "audio" ? "mm" : "text")); }
+// 兼容旧调用点（setModelFilter / 历史锚点 / #/skills）
+function setModelTab(k) {
+  if (k === "skill" || k === "usage" || k === "points") return setMgmtTab(k);
+  if (k === "text" || k === "mm") { setMgmtTab("models"); setModelScope(k); return; }
+  setMgmtTab("models");
+}
 
-// 多媒体标签一网打尽：STT / 播音 / 视觉 / 视频都归到「多媒体模型」
+// 多媒体标签一网打尽：STT / 播音 / 视觉 / 视频 都归到「多媒体」
 const TAB_CAPS = { text: ["text"], mm: ["stt", "tts", "vision", "video"] };
 const MG_EMPTY = {
-  text: "还没有登记文本类模型 —— 去「已登记资源」里点「编辑」给模型配置能力",
-  mm: "还没有登记多媒体类模型（音频 / 图片 / 视频）—— 同上，把模型的能力标成 stt / tts / vision / video",
+  all: "还没有登记任何模型 —— 去「设置 › 模型登记」点「＋ 登记」，或在渠道卡上点「编辑」配置模型能力",
+  text: "还没有文本类模型 —— 去「设置 › 模型登记」点渠道卡的「编辑」，把模型能力标成 text",
+  mm: "还没有多媒体类模型（音频 / 图片 / 视频）—— 同上，把能力标成 stt / tts / vision / video",
 };
-function modelsOfTab(k) {
-  const caps = TAB_CAPS[k] || [];
+function modelsOfTab(scope) {
+  const caps = TAB_CAPS[scope] || null;
   const out = [];
   for (const c of CHANNELS) {
     for (const m of effModels(c)) {
-      if (m.enabled === false) continue;
-      if (!caps.includes(m.kind)) continue;   // 只按主能力归页，避免同一模型在两页重复出现
+      if (caps && caps.indexOf(m.kind) < 0) continue;
       out.push({ c, m });
     }
   }
-  // 同名模型跨渠道并存时都列出来（各自 priority/health 可能不同），按渠道优先级 + 模型优先级排序
-  out.sort((a, b) => ((b.c.priority || 0) - (a.c.priority || 0))
-    || ((b.m.priority ?? 50) - (a.m.priority ?? 50))
+  // 启用的排前面，停用的置底灰显 —— 不能再像以前那样直接 continue 掉，
+  // 否则停用后行消失，用户再也点不到「启用」。
+  out.sort((a, b) => ((a.m.enabled === false ? 1 : 0) - (b.m.enabled === false ? 1 : 0))
+    || ((b.c.priority || 0) - (a.c.priority || 0))
+    || ((b.m.priority == null ? 50 : b.m.priority) - (a.m.priority == null ? 50 : a.m.priority))
     || String(a.m.name).localeCompare(String(b.m.name)));
   return out;
 }
 function renderModelTab() {
   const el = $("model-rows");
   if (!el) return;
-  // 非「模型列表」类标签（skill/用量/积分榜）不渲染模型行
-  if (!(mgmtTab in TAB_CAPS)) { mgSyncPager(0); return; }
-  const list = modelsOfTab(mgmtTab);
+  if (mgmtTab !== "models") { mgSyncPager(0); return; }
+  const list = modelsOfTab(modelScope);
   const total = list.length;
   const pages = Math.max(1, Math.ceil(total / MG_PAGE_SIZE));
-  if (mgPages[mgmtTab] > pages) mgPages[mgmtTab] = pages;
-  if (mgPages[mgmtTab] < 1) mgPages[mgmtTab] = 1;
-  const cur = mgPages[mgmtTab];
+  const cur = Math.min(Math.max(1, mgPages[modelScope] || 1), pages);
+  mgPages[modelScope] = cur;
   const slice = list.slice((cur - 1) * MG_PAGE_SIZE, cur * MG_PAGE_SIZE);
   const cnt = $("model-count");
-  if (cnt) cnt.textContent = total ? `（第 ${cur} / ${pages} 页 · 本页 ${slice.length} · 该类共 ${total}）` : "";
+  if (cnt) cnt.textContent = total ? `第 ${cur} / ${pages} 页 · 共 ${total} 个` : "";
   if (!total) {
-    el.innerHTML = `<div class="empty">${esc(MG_EMPTY[mgmtTab] || "该分类下还没有模型")}</div>`;
+    el.innerHTML = `<div class="empty">${esc(MG_EMPTY[modelScope] || "该分类下还没有模型")}</div>`;
     mgSyncPager(0);
     return;
   }
@@ -5156,48 +5398,189 @@ function mgSyncPager(total, cur, pages) {
     pg.hidden = true;
   }
 }
-function renderChannels() {
-  const el = $("channel-rows");
-  $("channel-count").textContent = `（${CHANNELS.length}）`;
-  renderModelTab();   // 模型列表与渠道列表同源，一次渲染两处
-  if (!CHANNELS.length) {
-    el.innerHTML = `<div class="empty">还没有登记任何资源 —— 点上方「＋ 登记新资源」，或从预设目录一键登记</div>`;
+// ================= 模型登记：每页 2 张大 banner =================
+// 分页对象是「已登记资源」：一张渠道卡就是一屏宽的大 banner，两张一页。
+// 统计压成一句话、工具条收成一个「＋ 登记」，都是为了把两张卡留在一屏内。
+const REG_PER = 2;
+let regPage = 1;
+let regFilter = "all";
+const REG_FILTERS = ["all", "nokey", "off"];
+function chMissKey(c) { return !c.api_key_masked || c.api_key_masked === "未登记" || c.api_key_masked === "—"; }
+function chCooling(c) { return !!(c.health && c.health.cooldown_until_ms && c.health.cooldown_until_ms > Date.now()); }
+function regFiltered() {
+  let list = CHANNELS.slice();
+  if (regFilter === "nokey") list = list.filter(chMissKey);
+  if (regFilter === "off") list = list.filter(c => !c.enabled);
+  // 排序：缺 Key → 冷却/降权 → 正常 → 停用置底
+  list.sort((a, b) => ((a.enabled ? 0 : 1) - (b.enabled ? 0 : 1))
+    || ((chMissKey(a) ? 0 : 1) - (chMissKey(b) ? 0 : 1))
+    || ((chCooling(a) ? 0 : 1) - (chCooling(b) ? 0 : 1))
+    || ((b.priority || 0) - (a.priority || 0))
+    || String(a.name).localeCompare(String(b.name)));
+  return list;
+}
+function regPageCount() { return Math.max(1, Math.ceil(regFiltered().length / REG_PER)); }
+function setRegFilter(f) {
+  if (REG_FILTERS.indexOf(f) < 0) return;
+  regFilter = f;
+  regPage = 1;   // 换筛选必须回第 1 页，否则容易停在空页
+  document.querySelectorAll("#reg-chips .mchip").forEach(b => b.classList.toggle("sel", b.dataset.rf === f));
+  renderChannels();
+}
+function regGo(d) {
+  regPage = Math.min(Math.max(1, regPage + d), regPageCount());
+  renderChannels();
+}
+// ================= 作用域页 · 概览 =================
+// 唯一一张大卡：当前所用模型 + 它落在哪个渠道、状态；下面一排指标是渠道整体健康。
+// 页头已极简（只留「模型管理」四字），"当前模型"这类状态信息归到这张卡，留白才干净。
+function renderOverview() {
+  const card = $("ov-card");
+  const metrics = $("ov-metrics");
+  if (!card) return;
+  const total = CHANNELS.length;
+  const miss = CHANNELS.filter(chMissKey).length;
+  const withKey = total - miss;
+  const cooling = CHANNELS.filter(chCooling).length;
+  const disabled = CHANNELS.filter(c => !c.enabled).length;
+  const healthy = CHANNELS.filter(c => healthOf(c).dot === "green").length;
+
+  let curRow = null;
+  for (const c of CHANNELS) for (const m of effModels(c)) if (m.name === curModel) { curRow = { c, m }; break; }
+  if (curRow) {
+    const h = healthOf(curRow.c);
+    card.innerHTML = `<div class="ov-head">
+        <span class="dot ${h.dot}"></span>
+        <div class="ov-title">${esc(curModel)}</div>
+        <span class="tag">${esc(curRow.c.provider)}</span>
+        <span class="tag">${esc(modelTabOf(curModel) || "文本")}</span>
+      </div>
+      <div class="ov-sub">当前所选模型 · 来自渠道「${esc(curRow.c.name)}」${curRow.m.enabled === false ? " · <span style=\'color:var(--warn)\'>该模型已停用</span>" : ""}</div>
+      <div class="ov-actions">
+        <button onclick="navigate('chat')">回到对话</button>
+        <button onclick="goSect('registry')">管理资源 →</button>
+      </div>`;
+  } else {
+    card.innerHTML = `<div class="ov-head"><div class="ov-title">${curModel ? esc(curModel) : "未选择模型"}</div></div>
+      <div class="ov-sub">${curModel ? "在已登记渠道里没找到这个模型（可能已被删除或改名）" : "去选一个模型开始对话"}</div>
+      <div class="ov-actions"><button onclick="openModelPicker()">选择模型</button></div>`;
+  }
+
+  const M = (k, v, cls) => `<div class="ov-metric ${cls || ""}"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  if (metrics) metrics.innerHTML =
+    M("已登记", total) + M("有 Key", withKey, miss ? "warn" : "") +
+    M("缺 Key", miss, miss ? "warn" : "") + M("降权/冷却", cooling, cooling ? "warn" : "") +
+    M("停用", disabled, disabled ? "warn" : "") + M("健康", healthy);
+}
+
+// ================= 模型换 Key · 待补队列 =================
+// 不重复全量列表（登记页已分页看过）。只列「从没配 Key」和「近期 401/403/invalid_api_key」的渠道，
+// 补完一条原地消失；空了显示一句庆祝。单行紧凑，主任务是"找出还没 Key 或 Key 失效的"。
+function renderKeyQueue() {
+  const el = $("key-queue");
+  if (!el) return;
+  const need = CHANNELS.filter(c =>
+    chMissKey(c) || /401|403|invalid_api_key|unauthorized|forbidden/i.test((c.health && c.health.last_error) || "")
+  );
+  const cnt = $("kq-count");
+  if (cnt) cnt.textContent = need.length ? `· 待补 ${need.length} 个` : "· 全部就绪";
+  if (!need.length) {
+    el.innerHTML = `<div class="empty">✓ 所有渠道都有可用 Key</div>`;
     return;
   }
-  const sorted = CHANNELS.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0));
-  el.innerHTML = sorted.map(c => {
+  el.innerHTML = need.map(c => {
     const h = healthOf(c);
-    const ms = effModels(c);
-    const caps = [...new Set(ms.flatMap(m => m.alt_kind ? [m.kind, m.alt_kind] : [m.kind]))].map(k => capBadge(k)).join("");
-    const lat = c.health && c.health.latency_ms ? `<span>${c.health.latency_ms}ms</span>` : "";
-    const err = c.health && c.health.last_error ? `<span style="color:var(--warn)">${esc(c.health.last_error)}</span>` : "";
-    return `<div class="ch-card ${c.enabled ? "" : "disabled"}">
-      <div class="ch-head">
-        <span class="dot ${h.dot}"></span>
-        <span class="ch-name">${esc(c.name)}</span>
-        <span class="tag">${esc(c.provider)}</span>
-        <span class="tag">${esc(c.kind)}</span>
-        <span class="${tierClass(c.tier)}">${esc(c.tier)}</span>
-        <div class="spacer"></div>
-        <span class="dot-lbl">${h.label}</span>
-      </div>
-      <div class="ch-sub" title="${esc(c.base_url)}">${esc(c.base_url)}</div>
-      ${caps ? `<div class="ch-caps">${caps}</div>` : ""}
-      <div class="ch-meta">
-        <span class="mask">${esc(c.api_key_masked || "未登记")}</span>
-        <span class="prio"><button onclick="bumpPriority('${esc(c.id)}',-10)" title="降优先级">▼</button>${c.priority ?? 0}<button onclick="bumpPriority('${esc(c.id)}',10)" title="升优先级">▲</button></span>
-        ${lat}${err}
-      </div>
-      ${c.note ? `<div class="ch-sub" style="white-space:normal">${esc(c.note)}</div>` : ""}
-      <div class="ch-ops">
-        <button onclick="testChannel('${esc(c.id)}')">测试</button>
-        <button onclick="openKeyDlg('${esc(c.id)}')">换 Key</button>
-        <button onclick="openDrawer('${esc(c.id)}')">编辑</button>
-        <button class="danger" onclick="delChannel('${esc(c.id)}')">删除</button>
-        <button onclick="toggleChannel('${esc(c.id)}',${!c.enabled})">${c.enabled ? "停用" : "启用"}</button>
-      </div>
+    const why = chMissKey(c) ? "缺 Key" : "近期鉴权失败";
+    return `<div class="kq-row">
+      <span class="dot ${h.dot}"></span>
+      <span class="kq-name">${esc(c.name)}</span>
+      <span class="tag">${esc(c.provider)}</span>
+      <span class="kq-why">${why}</span>
+      <div class="spacer"></div>
+      <button onclick="openKeyDlg('${esc(c.id)}')">补 Key</button>
     </div>`;
   }).join("");
+}
+
+function renderChannels() {
+  const el = $("channel-rows");
+  renderModelTab();   // 模型列表与渠道列表同源，一次渲染两处
+  if (!el) return;    // 作用域页没有这块 DOM（分页只在设置 › 模型登记里）
+
+  const all = CHANNELS;
+  const miss = all.filter(chMissKey).length;
+  const withKey = all.length - miss;
+  const sum = $("reg-sum");
+  if (sum) sum.textContent = `已登记 ${all.length} · 有 Key ${withKey} · 缺 Key ${miss}`;
+
+  const list = regFiltered();
+  const pages = Math.max(1, Math.ceil(list.length / REG_PER));
+  regPage = Math.min(Math.max(1, regPage), pages);   // 删除后可能越界，每次重排都夹一次
+  const slice = list.slice((regPage - 1) * REG_PER, regPage * REG_PER);
+
+  const prev = $("reg-prev"), next = $("reg-next");
+  if (prev) prev.disabled = regPage <= 1;
+  if (next) next.disabled = regPage >= pages;
+
+  // 页码点：≤8 页用圆点，超过就只给 2 / 13 文本
+  const dots = $("reg-dots");
+  if (dots) {
+    if (pages <= 1) dots.innerHTML = "";
+    else if (pages <= 8) {
+      dots.innerHTML = Array.from({ length: pages }, (_, i) =>
+        `<span class="reg-dot${i + 1 === regPage ? " on" : ""}" onclick="regJump(${i + 1})"></span>`).join("")
+        + `<span class="reg-n">${regPage} / ${pages}</span>`;
+    } else {
+      dots.innerHTML = `<span class="reg-n">${regPage} / ${pages}</span>`;
+    }
+  }
+
+  const cnt = $("channel-count");
+  if (cnt) cnt.textContent = "Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。";
+
+  if (!list.length) {
+    el.innerHTML = `<div class="empty">${all.length
+      ? "当前筛选下没有渠道"
+      : "还没有登记任何资源 —— 点上方「＋ 登记」，或展开下方「从预设快速登记」"}</div>`;
+    return;
+  }
+  el.innerHTML = slice.map(channelCard).join("");
+}
+function regJump(n) { regPage = Math.min(Math.max(1, n), regPageCount()); renderChannels(); }
+/// 一张渠道卡 = 一页里的大 banner。信息摊开：来源 · 模型 · Key 状态 · 可用性 · 自检时间
+function channelCard(c) {
+  const h = healthOf(c);
+  const ms = effModels(c);
+  const caps = [...new Set(ms.flatMap(m => m.alt_kind ? [m.kind, m.alt_kind] : [m.kind]))].map(k => capBadge(k)).join("");
+  const lat = c.health && c.health.latency_ms ? `<span>${c.health.latency_ms}ms</span>` : "";
+  const err = c.health && c.health.last_error ? `<span style="color:var(--warn)">${esc(c.health.last_error)}</span>` : "";
+  const keyTxt = chMissKey(c) ? "缺 Key" : (c.api_key_masked || "");
+  return `<div class="ch-card ${c.enabled ? "" : "disabled"}">
+    <div class="ch-head">
+      <span class="dot ${h.dot}"></span>
+      <span class="ch-name">${esc(c.name)}</span>
+      <span class="tag">${esc(c.provider)}</span>
+      <span class="tag">${esc(c.kind)}</span>
+      <span class="${tierClass(c.tier)}">${esc(c.tier)}</span>
+      <div class="spacer"></div>
+      <span class="dot-lbl">${h.label}</span>
+    </div>
+    <div class="ch-sub" title="${esc(c.base_url)}">${esc(c.base_url)}</div>
+    ${caps ? `<div class="ch-caps">${caps}</div>` : ""}
+    <div class="ch-meta">
+      <span class="mask">${esc(keyTxt)}</span>
+      <span class="prio"><button onclick="bumpPriority('${esc(c.id)}',-10)" title="降优先级">▼</button>${c.priority ?? 0}<button onclick="bumpPriority('${esc(c.id)}',10)" title="升优先级">▲</button></span>
+      ${lat}${err}
+    </div>
+    ${c.note ? `<div class="ch-sub" style="white-space:normal">${esc(c.note)}</div>` : ""}
+    <div class="ch-ops">
+      <button onclick="openDrawer('${esc(c.id)}')">编辑</button>
+      <button onclick="openKeyDlg('${esc(c.id)}')">换 Key</button>
+      <button onclick="testChannel('${esc(c.id)}')">测试</button>
+      <button onclick="toggleChannel('${esc(c.id)}',${!c.enabled})">${c.enabled ? "停用" : "启用"}</button>
+      <button class="danger" onclick="delChannel('${esc(c.id)}')">删除</button>
+    </div>
+  </div>`;
 }
 async function toggleModel(cid, idx, enable) {
   const c = CHANNELS.find(x => x.id === cid);
@@ -5214,6 +5597,12 @@ async function toggleModel(cid, idx, enable) {
 /// 侧栏顶部的 ⚙ 入口：进模型管理页并顺手把侧栏收起（移动端抽屉挡着内容）。
 function openModels() {
   navigate("models");
+  closeSidebar();
+}
+/// 侧栏 ⚙ 进「设置」菜单（全局作用域）；模型管理页是聊天侧入口，两者不再混为一谈。
+function openSettings() {
+  location.hash = "#/settings";
+  if (currentView() === "settings") applyRoute();
   closeSidebar();
 }
 
