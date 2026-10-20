@@ -905,6 +905,21 @@ echo "$UI" | grep -q '<span class="brand-name">QUAKEAI网关</span>'; check "首
 echo "$UI" | grep -q 'id="mp-tabs"'; check "模型选择页有 4 标签栏" $? "no mp tabs"
 
 echo "$UI" | grep -q 'const MP_TABS = \["text", "skill", "audio", "mm"\]'; check "选择页共 4 个标签" $? "bad MP_TABS"
+# v0.19.13：输入区顺序（+ ⋯ 输入框 🎙 ↑）、修改态提示条、模型页定位
+python3 - <<'PYX'
+import re, sys
+s = open('src/admin_ui.html', encoding='utf-8').read()
+m = re.search(r'<div id="composer">(.*?)</div>', s, re.S)
+ids = re.findall(r'id="([^"]+)"', m.group(1)) if m else []
+sys.exit(0 if ids == ["btn-attach", "btn-model", "input", "btn-voice", "btn-send"] else 1)
+PYX
+check "输入区顺序：+ ⋯ 输入框 🎙 ↑" $? "wrong composer order"
+grep -q 'id="edit-chip"' "$ROOT/src/admin_ui.html"; check "有「修改中」提示条" $? "no edit chip"
+grep -q 'function cancelEdit' "$ROOT/src/admin_ui.html"; check "修改可取消" $? "no cancelEdit"
+grep -q 'if (editCtx) {' "$ROOT/src/admin_ui.html"; check "发送前处理修改态" $? "edit not applied on send"
+if grep -q 'id="model-jump"' "$ROOT/src/admin_ui.html"; then check "「当前在第 N 页」已删除" 1 "model-jump still there"; else check "「当前在第 N 页」已删除" 0 ""; fi
+grep -q 'mpTab = curModel ? (modelTabOf(curModel) || "text") : "text";' "$ROOT/src/admin_ui.html"; check "打开模型页定位到当前模型标签" $? "no tab locate"
+grep -q 'Math.floor(idx / MP_PAGE_SIZE) + 1' "$ROOT/src/admin_ui.html"; check "打开模型页定位到当前页" $? "no page locate"
 # 回归（v0.19.12）：内核就绪步只回 {id,input}，没有 plugin 字段。
 # 曾写成 plugin(st.plugin, st.input)，插件收到 undefined，整条 run 空转——
 # 表现就是模型页永远「检测中」。参数错位用 grep 就能挡住。
