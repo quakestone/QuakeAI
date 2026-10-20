@@ -12,6 +12,12 @@
 //!   GET    /admin/api/usage           用量成本聚合（按源 × 模型 × 日）
 //!   GET    /admin/api/usage/export    对账 CSV 导出（列名对齐 DeepSeek 官方 cost-*.csv）
 //!   GET    /admin/api/diag            部署自检（DO 绑定/env 状态，排障用）
+//!   GET    /admin/api/skills           skill 列表（按 used_count 倒序）
+//!   POST   /admin/api/skills          登记新 skill（title + prompt 必填）
+//!   PUT    /admin/api/skills/{id}     更新（title / prompt / enabled / used_count 按字段覆盖）
+//!   DELETE /admin/api/skills/{id}     删除
+//!   POST   /admin/api/skills/{id}/use 累加 used_count（被应用到对话时调用）
+//!
 //!
 //! 安全：配置 ADMIN_TOKEN（var 或 secret）后，所有 /admin/api/* 都要求
 //! header `x-admin-token` 匹配；未配置则只面向本地/内网使用（页面有提示）。
@@ -121,6 +127,9 @@ async fn handle_admin_inner(req: Request, env: &Env, sub: &str) -> Result<Respon
         (Method::Get, "/usage") => api_usage(env).await,
         (Method::Get, "/usage/export") => api_usage_export(env).await,
         (Method::Get, "/diag") => api_diag(env).await,
+        // skill 子系统：与模型独立的表达线（标题 + 提示词正文）
+        (Method::Get, "/skills") => api_list_skills(env).await,
+        (Method::Post, "/skills") => api_create_skill(req, env).await,
         _ => {
             // /channels/{id} 与 /channels/{id}/test
             if let Some(rest) = api.strip_prefix("/channels/") {
@@ -132,6 +141,18 @@ async fn handle_admin_inner(req: Request, env: &Env, sub: &str) -> Result<Respon
                     return api_update(req, env, rest).await;
                 } else if method == Method::Delete {
                     return api_delete(env, rest).await;
+                }
+            }
+            // /skills/{id}、/skills/{id}/use
+            if let Some(rest) = api.strip_prefix("/skills/") {
+                if let Some(id) = rest.strip_suffix("/use") {
+                    if method == Method::Post {
+                        return api_touch_skill(env, id).await;
+                    }
+                } else if method == Method::Put {
+                    return api_update_skill(req, env, rest).await;
+                } else if method == Method::Delete {
+                    return api_delete_skill(env, rest).await;
                 }
             }
             json_error(404, "not_found", "unknown admin api route")
@@ -406,6 +427,158 @@ async fn api_delete(env: &Env, id: &str) -> Result<Response> {
         return store_unavailable(&e);
     }
     json_response(200, serde_json::json!({ "ok": true, "deleted": id }))
+}
+
+// ---------------------------------------------------------------------------
+// skill 子系统 API（与模型完全独立的表达线）
+// ---------------------------------------------------------------------------
+
+/// GET /admin/api/skills —— 列出全部 skill（按 used_count 倒序，便于前端展示「最频繁」）。
+async fn api_list_skills(env: &Env) -> Result<Response> {
+    let mut list = match load_all_skills(env).await {
+        Ok(l) => l,
+        Err(e) => return store_unavailable(&e),
+    };
+    list.sort_by(|a, b| b.used_count.cmp(&a.used_count).then_with(|| a.title.cmp(&b.title)));
+    json_response(200, serde_json::json!({ "skills": list }))
+}
+
+/// POST /admin/api/skills —— 登记新 skill（title + prompt 必填）。
+async fn api_create_skill(mut req: Request, env: &Env) -> Result<Response> {
+    let body = req.text().await.unwrap_or_default();
+    let v: serde_json::Value = if body.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => return json_error(400, "bad_json", &format!("请求体不是合法 JSON：{e}")),
+        }
+    };
+    let title = v.get("title").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let prompt = v.get("prompt").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if title.is_empty() {
+        return json_error(400, "missing_title", "field 'title' is required");
+    }
+    if prompt.is_empty() {
+        return json_error(400, "missing_prompt", "field 'prompt' is required");
+    }
+    let mut list = match load_all_skills(env).await {
+        Ok(l) => l,
+        Err(e) => return store_unavailable(&e),
+    };
+    let now = now_iso();
+    let want_id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+    let id = if want_id.is_empty() || list.iter().any(|s| s.id == want_id) {
+        let base = if want_id.is_empty() {
+            // 注意：Rust 的 char::is_alphanumeric() 对中文也返回 true，
+            // 必须用 is_ascii_alphanumeric()，否则中文标题会原样进入 id；
+            // 而 URL 路径里的非 ASCII 会被 new URL() 百分号编码，路由端对不上 → not_found。
+            let slug: String = title
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+                .collect();
+            ("sk-".to_string() + &slug).replace("--", "-")
+        } else {
+            want_id
+        };
+        let mut n = 1;
+        let mut cand = base.clone();
+        while list.iter().any(|s| s.id == cand) {
+            n += 1;
+            cand = format!("{base}-{n}");
+        }
+        cand
+    } else {
+        want_id
+    };
+    let sk = crate::channels::Skill {
+        id,
+        title,
+        prompt,
+        enabled: v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
+        used_count: 0,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    list.push(sk.clone());
+    if let Err(e) = save_all_skills(env, &list).await {
+        return store_unavailable(&e);
+    }
+    json_response(201, serde_json::json!({ "skill": sk }))
+}
+
+/// PUT /admin/api/skills/{id} —— 更新（title / prompt / enabled / used_count 按字段覆盖）。
+async fn api_update_skill(mut req: Request, env: &Env, id: &str) -> Result<Response> {
+    let body = req.text().await.unwrap_or_default();
+    let v: serde_json::Value = if body.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_str(&body) {
+            Ok(v) => v,
+            Err(e) => return json_error(400, "bad_json", &format!("请求体不是合法 JSON：{e}")),
+        }
+    };
+    let mut list = match load_all_skills(env).await {
+        Ok(l) => l,
+        Err(e) => return store_unavailable(&e),
+    };
+    let pos = match list.iter().position(|s| s.id == id) {
+        Some(p) => p,
+        None => return json_error(404, "skill_not_found", "no such skill"),
+    };
+    let mut sk = list[pos].clone();
+    if let Some(s) = v.get("title").and_then(|x| x.as_str()) {
+        sk.title = s.to_string();
+    }
+    if let Some(s) = v.get("prompt").and_then(|x| x.as_str()) {
+        sk.prompt = s.to_string();
+    }
+    if let Some(b) = v.get("enabled").and_then(|x| x.as_bool()) {
+        sk.enabled = b;
+    }
+    if let Some(n) = v.get("used_count").and_then(|x| x.as_u64()) {
+        sk.used_count = n;
+    }
+    sk.updated_at = now_iso();
+    list[pos] = sk.clone();
+    if let Err(e) = save_all_skills(env, &list).await {
+        return store_unavailable(&e);
+    }
+    json_response(200, serde_json::json!({ "skill": sk }))
+}
+
+/// DELETE /admin/api/skills/{id}
+async fn api_delete_skill(env: &Env, id: &str) -> Result<Response> {
+    let mut list = match load_all_skills(env).await {
+        Ok(l) => l,
+        Err(e) => return store_unavailable(&e),
+    };
+    let before = list.len();
+    list.retain(|s| s.id != id);
+    if list.len() == before {
+        return json_error(404, "skill_not_found", "no such skill");
+    }
+    if let Err(e) = save_all_skills(env, &list).await {
+        return store_unavailable(&e);
+    }
+    json_response(200, serde_json::json!({ "ok": true, "deleted": id }))
+}
+
+/// POST /admin/api/skills/{id}/use —— 累加 used_count（被应用到对话时调用）。
+async fn api_touch_skill(env: &Env, id: &str) -> Result<Response> {
+    let mut list = match load_all_skills(env).await {
+        Ok(l) => l,
+        Err(e) => return store_unavailable(&e),
+    };
+    let pos = match list.iter().position(|s| s.id == id) {
+        Some(p) => p,
+        None => return json_error(404, "skill_not_found", "no such skill"),
+    };
+    list[pos].used_count += 1;
+    if let Err(e) = save_all_skills(env, &list).await {
+        return store_unavailable(&e);
+    }
+    json_response(200, serde_json::json!({ "ok": true, "used_count": list[pos].used_count }))
 }
 
 async fn api_seed(env: &Env) -> Result<Response> {

@@ -404,6 +404,42 @@
   .att-row video.att-video { width: 230px; max-height: 170px; border-radius: 8px; background: #000; display: block; }
   .composer-hint { text-align: center; font-size: 11px; color: var(--dim); margin-top: 6px; }
 
+  /* ================= skill 独立表达线 ================= */
+  .skill-chip {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px; margin-bottom: 6px;
+    background: #1d1740; border: 1px solid #4a3d85; border-radius: 9px; font-size: 12.5px; color: #d8cffb;
+  }
+  .skill-chip .sk-ic { font-size: 14px; flex: none; }
+  .skill-chip .sk-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .skill-chip .sk-x { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 1px solid #4a3d85; background: transparent; color: #d8cffb; cursor: pointer; font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+  .skill-chip .sk-x:hover { border-color: var(--acc); color: var(--acc); }
+
+  /* 模型选择器里 skill 标签的条目 */
+  .sk-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; cursor: pointer; min-width: 0; }
+  .sk-item:hover { border-color: #4a3d85; }
+  .sk-item.sel { border-color: var(--acc); background: #1d1740; }
+  .sk-item .sk-rank { flex: none; width: 20px; height: 20px; border-radius: 50%; background: #2c2750; color: #cfc4ff; font-size: 10px; display: flex; align-items: center; justify-content: center; }
+  .sk-item .sk-main { flex: 1 1 auto; min-width: 0; }
+  .sk-item .sk-ttl { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sk-item .sk-meta { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .sk-item .sk-act { flex: none; display: flex; gap: 6px; }
+  .sk-item .sk-act button { border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 7px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+  .sk-item .sk-act button:hover { border-color: var(--acc); color: var(--acc); }
+
+  /* 管理页 skill 面板 */
+  .sk-row { padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; margin-bottom: 8px; min-width: 0; }
+  .sk-row .sk-top { display: flex; align-items: center; gap: 8px; }
+  .sk-row .sk-ttl { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sk-row .sk-body { font-size: 11.5px; color: var(--dim); margin: 6px 0 8px; max-height: 56px; overflow: hidden; line-height: 1.5; }
+  .sk-row .sk-foot { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--dim); }
+  .sk-row .sk-foot .sp { flex: 1 1 auto; }
+  .sk-row .sk-foot button { border: 1px solid var(--border); background: var(--panel2); color: var(--txt); border-radius: 7px; padding: 4px 9px; font-size: 11px; cursor: pointer; }
+  .sk-row .sk-foot button:hover { border-color: var(--acc); color: var(--acc); }
+  .sk-row .sk-foot button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  .sk-add { width: 100%; padding: 9px; border: 1px dashed #4a3d85; background: transparent; color: #cfc4ff; border-radius: 10px; cursor: pointer; font-size: 13px; }
+  .sk-add:hover { background: #1d1740; }
+  textarea.sk-prompt { width: 100%; min-height: 200px; resize: vertical; }
+
   /* ================= 模型管理（首页的二级子页 #/models） ================= */
   #view-models { height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); overflow-y: auto; overscroll-behavior: contain; }
   .mgmt-top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 10px 14px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); border-bottom: 1px solid var(--border); background: rgba(13,19,34,.92); backdrop-filter: blur(8px); }
@@ -642,6 +678,11 @@
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
     <div class="composer-wrap">
       <div id="attach-bar" hidden></div>
+      <div id="skill-chip" class="skill-chip" hidden>
+        <span class="sk-ic">🧩</span>
+        <span class="sk-t" id="skill-chip-title"></span>
+        <button class="sk-x" onclick="clearActiveSkill()" aria-label="取消 skill" title="取消 skill">✕</button>
+      </div>
       <div id="composer">
         <button id="btn-attach" type="button" onclick="pickFiles()" aria-label="添加附件" title="照片 / 视频 / 文件">+</button>
         <button id="btn-voice" type="button" aria-label="长按发语音" title="长按发语音">🎙</button>
@@ -778,14 +819,10 @@
         </div>
       </div>
 
-      <!-- 面板 2：skill 子系统（独立于模型的对象，开发中） -->
+      <!-- 面板 2：skill 子系统（独立于模型的对象） -->
       <div id="pane-skill" hidden>
-        <div class="empty">🧩 <b>skill 模型子系统正在开发中</b><br>
-          skill 与模型是两类对象：模型登记「名字 + 能力」，skill 登记「标题 + 提示词正文」，
-          模型选择器与本页共用同一个 skill 列表。<br>
-          列表只展示<b>标题</b>一行，默认显示<b>使用最频繁的 6 条</b>，第 7 行是「扩展 skill」管理入口；
-          内置首个 skill 为「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL v1.0）。<br>
-          在此之前，聊天页勾选 ⚡ 增强模式 即为同一套协议的临时入口。</div>
+        <div class="hint" style="margin-bottom:10px">skill 是<b>独立于模型</b>的表达线：只登记「标题 + 提示词正文」。选中并发送时，skill 的提示词会作为 <code>system</code> 消息注入本轮对话，模型按它的指令作答——与选哪个模型无关。列表按使用频次展示。</div>
+        <div class="mg-pane-body" id="skill-card-body"></div>
       </div>
 
       <!-- 面板 3：模型用量 -->
@@ -958,6 +995,21 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <div class="dlg-actions">
     <button onclick="channelDlg.close()">取消</button>
     <button class="primary" onclick="submitChannel()">保存</button>
+  </div>
+</dialog>
+
+<!-- ==================== skill 对话框 ==================== --><dialog id="skill-dlg">
+  <button class="dlg-back" onclick="skillDlg.close()" aria-label="返回" title="返回">←</button>
+  <h3 id="sk-dlg-title">新增 skill</h3>
+  <p class="dlg-sub">skill 是<b>独立于模型</b>的表达线：发送时其提示词会作为 <code>system</code> 消息注入本轮对话，与选哪个模型无关。只需填「标题」和「提示词正文」。</p>
+  <div class="form-grid">
+    <div class="full"><label>标题 *</label><input id="sk-title" placeholder="例：三个诸葛亮 / 中英双语润色 / 代码审查"></div>
+    <div class="full"><label>提示词正文 *</label><textarea id="sk-prompt" class="sk-prompt" placeholder="描述这个 skill 要模型怎么做……"></textarea></div>
+    <div><label>启用</label><select id="sk-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
+  </div>
+  <div class="dlg-actions">
+    <button onclick="skillDlg.close()">取消</button>
+    <button class="primary" onclick="submitSkill()">保存</button>
   </div>
 </dialog>
 
@@ -1138,19 +1190,23 @@ async function api(path, method="GET", body=null) {
 // 只有空 hash 才按路径名兜底：/admin 无 hash 落 models（兼容旧链接），其余落 chat。
 function currentView() {
   if (location.hash === "#/models") return "models";
+  if (location.hash === "#/skills") return "skills";
   if (location.hash === "#/") return "chat";
   if (location.hash === "") return location.pathname.startsWith("/admin") ? "models" : "chat";
   return "chat";
 }
 function navigate(view) {
-  const h = view === "models" ? "#/models" : "#/";
+  const h = view === "models" ? "#/models" : view === "skills" ? "#/skills" : "#/";
   if (location.hash === h) applyRoute(); else location.hash = h;
 }
 function applyRoute() {
   const v = currentView();
   $("view-chat").hidden = v !== "chat";
-  $("view-models").hidden = v !== "models";
-  if (v === "models") loadAll();
+  $("view-models").hidden = (v !== "models" && v !== "skills");
+  if (v === "models" || v === "skills") {
+    loadAll();
+    if (v === "skills") setMgmtTab("skill");
+  }
   closeSidebar();
   if (v === "chat") setTimeout(() => $("input")?.focus(), 80);
 }
@@ -2139,6 +2195,13 @@ async function sendWith(text, atts) {
   const history = c.msgs.slice(0, -1)
     .filter(m => (m.role === "user" || m.role === "assistant") && !m.error && (m.content || (m.attachments && m.attachments.length)))
     .map(m => ({ role: m.role, content: buildApiContent(m) }));
+  // skill 独立表达线：选中 skill 时，把其提示词作为 system 消息注入本轮对话
+  // （增强模式与外部调用都复用 history，因此两种路径都会带上 skill 指令）。
+  // used_count 累加走 fire-and-forget，失败不影响本轮发送。
+  if (activeSkill && activeSkill.prompt) {
+    history.unshift({ role: "system", content: activeSkill.prompt });
+    api("/skills/" + encodeURIComponent(activeSkill.id) + "/use", "POST").catch(() => {});
+  }
   const body = { messages: history, stream: true };
   if (curModel) body.model = curModel;
   // 图片视频块生效：带图片/视频附件（或历史上曾带过）时用选定的视觉/视频模型。
@@ -3658,14 +3721,9 @@ function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
   // skill 标签：skill 是独立于模型对象的表达线（有自己的标题与提示词正文），
-  // 子系统上线前给占位说明，不从模型池里取数据。
+  // 展示使用最频繁的前 6 条 + 第 7 行「扩展 skill」入口，不从模型池里取数据。
   if (mpTab === "skill") {
-    $("model-list").innerHTML = `<div class="empty">🧩 <b>skill 模型子系统正在开发中</b><br>
-      skill 与模型是两类对象：模型只登记「名字 + 能力」，skill 登记「标题 + 提示词正文」。
-      规划形态：列表只显示<b>标题</b>一行，默认展示<b>使用最频繁的 6 条</b>，第 7 行是「扩展 skill」入口；
-      内置首个 skill 为「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL v1.0）。<br>
-      在此之前，文本模型标签下勾选 ⚡ 增强模式 即为同一套协议的临时入口。</div>`;
-    $("model-pager").hidden = true;
+    renderSkillPicker();
     return;
   }
   const usable = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
@@ -3733,6 +3791,9 @@ function pickModel(m) {
 let CHANNELS = [];
 let PRESETS = [];
 let STORE_STATE = "unknown";
+// skill 子系统：与模型完全独立的表达线（标题 + 提示词正文）
+let SKILLS = [];
+let activeSkill = null;   // 当前选中的 skill（composer chip 显示，发送时注入 system 消息）
 
 async function loadAll() {
   try {
@@ -3760,8 +3821,171 @@ async function loadAll() {
     renderEvents(ev.events || []);
   } catch { /* 事件账本失败不阻塞主界面 */ }
   loadUsage(); // 用量面板失败也只提示，不阻塞主界面
+  loadSkills(); // skill 子系统：列表为空时自动种子化内置「三个诸葛亮」
   // 管理页不可见时也刷新聊天首页的渠道可用性提示
   if (currentView() === "chat") renderMessages();
+}
+
+// ================= skill 子系统（独立于模型的表达线） =================
+async function loadSkills() {
+  try {
+    const data = await api("/skills");
+    SKILLS = data.skills || [];
+    // 首次进入（列表为空）：用前端已有的 DRILL_PROMPT 把内置「三个诸葛亮」种子化。
+    // 单一事实源：与增强模式的 PRE-ANSWER DRILL PROTOCOL 共用同一段提示词，避免 Rust 侧重复。
+    if (SKILLS.length === 0) {
+      try {
+        await api("/skills", "POST", {
+          id: "sk-three-sages",
+          title: "三个诸葛亮",
+          prompt: DRILL_PROMPT,
+          enabled: true,
+        });
+        const data2 = await api("/skills");
+        SKILLS = data2.skills || [];
+      } catch (e) { /* 种子失败不阻塞 */ }
+    }
+  } catch (e) {
+    SKILLS = [];
+  }
+  if (mpTab === "skill") renderModelList();
+  if (mgmtTab === "skill") renderSkillPane();
+}
+
+/// 选择器 skill 标签：只显示标题一行，按使用频次取前 6 条；第 7 行是「扩展 skill」入口。
+function renderSkillPicker() {
+  const list = SKILLS.slice()
+    .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
+  const top = list.slice(0, 6);
+  let html = "";
+  if (top.length === 0) {
+    html = `<div class="empty">还没有 skill —— 点下面的「＋ 扩展 skill」登记第一个（标题 + 提示词正文）。<br>内置「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL）会在你首次进入时自动种子化。</div>`;
+  } else {
+    for (const s of top) {
+      const sel = activeSkill && activeSkill.id === s.id ? " sel" : "";
+      html += `<div class="sk-item${sel}" onclick="selectSkill('${esc(s.id)}')">
+        <span class="sk-rank">🧩</span>
+        <div class="sk-main">
+          <div class="sk-ttl">${esc(s.title)}</div>
+          <div class="sk-meta">已用 ${s.used_count} 次${s.enabled ? "" : " · 已停用"}</div>
+        </div>
+        <div class="sk-act">
+          <button type="button" onclick="event.stopPropagation(); openSkillDialog('${esc(s.id)}')">编辑</button>
+        </div>
+      </div>`;
+    }
+  }
+  html += `<button type="button" class="sk-add" onclick="openSkillManage()">＋ 扩展 skill（管理全部 / 新增）</button>`;
+  const box = $("model-list");
+  if (box) box.innerHTML = html;
+  const pager = $("model-pager");
+  if (pager) pager.hidden = true;
+}
+
+/// 管理页 skill 面板：完整 CRUD 列表。
+function renderSkillPane() {
+  const el = $("skill-card-body");
+  if (!el) return;
+  const list = SKILLS.slice()
+    .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
+  let html = "";
+  if (list.length === 0) {
+    html = `<div class="empty">还没有 skill。点下面的「＋ 新增 skill」登记第一个——只需填「标题」和「提示词正文」。</div>`;
+  } else {
+    for (const s of list) {
+      html += `<div class="sk-row">
+        <div class="sk-top"><span class="sk-ttl">${esc(s.title)}</span></div>
+        <div class="sk-body">${esc(s.prompt)}</div>
+        <div class="sk-foot">
+          <span>已用 ${s.used_count} 次</span>
+          <span>${s.enabled ? "启用中" : "已停用"}</span>
+          <span class="sp"></span>
+          <button type="button" onclick="openSkillDialog('${esc(s.id)}')">编辑</button>
+          <button type="button" class="danger" onclick="deleteSkill('${esc(s.id)}')">删除</button>
+        </div>
+      </div>`;
+    }
+  }
+  html += `<button type="button" class="sk-add" onclick="openSkillDialog()">＋ 新增 skill</button>`;
+  el.innerHTML = html;
+}
+
+/// 在模型选择器里点 skill 标题：设为当前表达线，关闭选择器，composer 显示 chip。
+function selectSkill(id) {
+  const s = SKILLS.find(x => x.id === id);
+  if (!s) return;
+  activeSkill = s;
+  renderSkillChip();
+  try { modelDlg.close(); } catch {}
+}
+
+function renderSkillChip() {
+  const chip = $("skill-chip");
+  if (!chip) return;
+  if (activeSkill) {
+    const t = $("skill-chip-title");
+    if (t) t.textContent = activeSkill.title;
+    chip.hidden = false;
+  } else {
+    chip.hidden = true;
+  }
+}
+
+function clearActiveSkill() {
+  activeSkill = null;
+  renderSkillChip();
+}
+
+/// 打开 skill 新增/编辑对话框。
+function openSkillDialog(editId) {
+  const dlg = $("skill-dlg");
+  if (!dlg) return;
+  const s = editId ? SKILLS.find(x => x.id === editId) : null;
+  $("sk-dlg-title").textContent = s ? "编辑 skill：" + s.title : "新增 skill";
+  $("sk-title").value = s ? s.title : "";
+  $("sk-prompt").value = s ? s.prompt : "";
+  $("sk-enabled").value = s ? (s.enabled ? "1" : "0") : "1";
+  dlg.dataset.editId = s ? s.id : "";
+  try { dlg.showModal(); } catch {}
+}
+
+function submitSkill() {
+  const dlg = $("skill-dlg");
+  const editId = (dlg && dlg.dataset.editId) || "";
+  const title = $("sk-title").value.trim();
+  const prompt = $("sk-prompt").value;
+  const enabled = $("sk-enabled").value === "1";
+  if (!title) { toast("标题不能为空", "err"); return; }
+  if (!prompt.trim()) { toast("提示词正文不能为空", "err"); return; }
+  const body = { title, prompt, enabled };
+  const run = editId
+    ? api("/skills/" + encodeURIComponent(editId), "PUT", body)
+    : api("/skills", "POST", body);
+  run.then(async () => {
+    try { dlg.close(); } catch {}
+    await loadSkills();
+    if (mgmtTab === "skill") renderSkillPane();
+    if (mpTab === "skill") renderModelList();
+    toast("已保存", "ok");
+  }).catch(e => toast("保存失败：" + e.message, "err"));
+}
+
+async function deleteSkill(id) {
+  if (!confirm("确定删除该 skill？")) return;
+  try {
+    await api("/skills/" + encodeURIComponent(id), "DELETE");
+    if (activeSkill && activeSkill.id === id) clearActiveSkill();
+    await loadSkills();
+    if (mgmtTab === "skill") renderSkillPane();
+    if (mpTab === "skill") renderModelList();
+    toast("已删除", "ok");
+  } catch (e) { toast("删除失败：" + e.message, "err"); }
+}
+
+/// 从选择器跳到管理页 skill 标签。
+function openSkillManage() {
+  try { modelDlg.close(); } catch {}
+  navigate("skills");
 }
 
 /// 侧栏版本号刷新：优先 /channels 的 version；失败回落 /health。
@@ -4021,9 +4245,10 @@ function setMgmtTab(k) {
   const ttl = $("mgmt-view-ttl");
   if (ttl) ttl.innerHTML = esc(MGMT_TAB_TTL[k] || "模型") + ' <span class="muted" id="model-count"></span>'
     + (k === "usage" ? ' <span class="muted">网关自身逐请求记账</span>' : k === "points" ? ' <span class="muted" id="points-note">个人使用数据（本机）</span>' : "");
-  // 首次进入用量 / 积分榜面板时才拉数据，避免在别的标签下打无效请求
+  // 首次进入用量 / 积分榜 / skill 面板时才拉数据或渲染，避免在别的标签下打无效请求
   if (k === "usage") loadUsage();
   if (k === "points") renderPoints();
+  if (k === "skill") renderSkillPane();
   renderModelTab();
 }
 function turnModelRowsPage(d) {

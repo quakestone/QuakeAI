@@ -76,6 +76,17 @@ export class ResourceStore extends DurableObject {
       await st.delete("usage");
       return Response.json({ ok: true });
     }
+    // skill 账本（独立于模型的表达线：标题 + 提示词正文）。
+    // 与 /channels 同构：全量 GET / PUT。单条增删改由 admin.rs 读-改-写完成。
+    if (req.method === "GET" && path === "/skills") {
+      const list = (await st.get("skills")) || [];
+      return Response.json({ skills: list });
+    }
+    if (req.method === "PUT" && path === "/skills") {
+      const body = await req.json();
+      await st.put("skills", Array.isArray(body) ? body : (body.skills || []));
+      return Response.json({ ok: true });
+    }
     return new Response("unsupported store path", { status: 404 });
   }
 }

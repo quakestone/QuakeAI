@@ -1,5 +1,67 @@
 # CHANGES
 
+## v0.19.0（2026-10-22）—— skill 子系统本体上线（独立于模型的「表达线」）
+
+用户指令（延续 v0.18.x 已批准的开发说明）：「继续开发」—— 把此前只做占位与 UI 标签的 skill 子系统真正落地。
+
+### 设计定位：skill 是独立于模型对象的表达线
+
+模型与 skill 是两类对象：
+- **模型**登记「名字 + 能力」（text / stt / tts / vision），用于「路由到哪个上游」。
+- **skill**登记「标题 + 提示词正文」，用于「怎么让模型作答」——与选哪个模型无关。
+
+二者在**模型选择器**与**管理页**共用同一份 skill 列表；选择器 skill 标签只显示标题一行，
+默认按 `used_count` 取**使用最频繁的前 6 条**，第 7 行是「扩展 skill」管理入口。
+
+### 改动
+
+**1. 数据模型 + 存储**（`channels.rs` / `scripts/storage-do.js`）
+- 新增 `Skill { id, title, prompt, enabled, used_count, created_at, updated_at }`，与 `Channel` 平级。
+- DO 账本新增 `/skills` 存储键与 `GET/PUT` 全量读写（与 `/channels` 同构；单条增删改由 admin 读-改-写完成）。
+
+**2. admin API**（`admin.rs` / `store.rs`）
+- `GET /admin/api/skills`（按 `used_count` 倒序）、`POST`（title + prompt 必填）、
+  `PUT /{id}`（字段覆盖）、`DELETE /{id}`、`POST /{id}/use`（累加 used_count）。
+- id 生成：用户未指定时由标题 slug 化（`sk-` 前缀）；**关键修正**见下方踩坑。
+
+**3. 前端选择器 skill 标签**（`renderSkillPicker`）
+- 取代原先的「开发中」占位；只显示标题 + 使用次数，前 6 条 + 第 7 行「扩展 skill」入口（跳 `#/skills`）。
+- 点标题即 `selectSkill(id)`：设为当前表达线、关闭选择器、composer 亮出 chip。
+
+**4. 前端管理页 skill 面板 CRUD**（`renderSkillPane` + `#skill-dlg` 对话框）
+- 列表（标题 + 提示词预览 + 次数 + 启用态）+ 编辑 / 删除；底部「＋ 新增 skill」打开对话框。
+
+**5. 内置种子「三个诸葛亮」**
+- `loadSkills()` 发现列表为空时，用前端已有的 `DRILL_PROMPT` 把内置「三个诸葛亮」
+  （PRE-ANSWER DRILL PROTOCOL v1.0）种子化。**单一事实源**：与增强模式共用同一段提示词，
+  不在 Rust 侧重复，避免日后漂移。
+
+**6. 聊天接入 = 独立表达线**（`sendWith`）
+- 选中 skill 后 composer 显示可取消的 chip；发送文本时，把 `activeSkill.prompt` 作为
+  `{ role: "system", content: ... }` 注入 `history` 首位（增强模式与外部调用都复用 `history`，两种路径都带上），
+  `used_count` 走 fire-and-forget `POST /skills/{id}/use`。
+- 与「增强模式」（⚡ 三段接力）正交：增强走自己的接力链路，skill 是更通用的「任意提示词注入」，
+  内置「三个诸葛亮」即该协议的持久化形态。
+
+**7. `#/skills` 路由**：`currentView`/`applyRoute`/`navigate` 新增该 hash，直达管理页 skill 面板。
+
+### 踩坑（重要）
+
+`api_create_skill` 的 id slug 原写 `title.replace(|c| !c.is_alphanumeric() && c != '-', "-")`。
+但 **Rust 的 `char::is_alphanumeric()` 对中文也返回 `true`**（它是 Unicode 感知的），
+于是「三个诸葛亮」原样进了 id（`sk-三个诸葛亮`）。URL 路径里的非 ASCII 会被 `new URL()`
+百分号编码，`admin.rs` 路由端拿到的是 `sk-%E4%B8%89...`，与 DO 里存的 `sk-三个诸葛亮` 对不上 →
+`POST /{id}/use` 与 `PUT/DELETE` 全部 `skill_not_found`。**改用 `is_ascii_alphanumeric()`**
+保证 id 全 ASCII 后即恢复正常。
+
+### 测试
+
+- e2e **393/393**（+18）：skills API 增删改查 / 计数累加 / 列表倒序 / 缺必填 400 / 前端渲染与路由函数与 DOM。
+- 单测 **22/22**、积分 **12/12** 全绿（无回归）。
+- 浏览器实测 **9/9 零 JS 错误**：内置 skill 种子化显示、选中 chip、管理面板 CRUD、发送时 skill 提示词
+  作为 `system` 消息注入首位（已在真实 `/v1/chat/completions` 请求体验证）、取消 chip 恢复隐藏。
+
+
 ## v0.18.2（2026-10-22）—— 后台 HTML 禁缓存 + 缓存自检（"改了没生效"的真凶）
 
 用户反馈：

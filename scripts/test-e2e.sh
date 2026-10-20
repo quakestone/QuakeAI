@@ -955,6 +955,35 @@ echo "$UI" | grep -q '\.mgmt-top > \.icon-btn, \.mgmt-top > button:not(\.icon-bt
 echo "$UI" | grep -q 'tabbar'; check "标签栏样式存在（横向滚动不换行）" $? "no tabbar css"
 echo "$UI" | grep -q 'flex-wrap: wrap; min-width: 0; }'; check "模型行允许换行防溢出" $? "m-row overflow"
 
+# ==================== 23. v0.19.0：skill 子系统（独立于模型的表达线）====================
+echo "== 23. skill 子系统：增删改查 / 计数 / 选择器前6 + 扩展入口 =="
+SKILLS_API=http://127.0.0.1:8787/admin/api/skills
+S1=$(curl -s -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":"三个诸葛亮","prompt":"PRE-ANSWER DRILL PROTOCOL"}')
+echo "$S1" | grep -q '"id"'; check "POST /skills 创建 skill" $? "$S1"
+S1ID=$(echo "$S1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skill"]["id"])')
+S2=$(curl -s -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":"中英润色","prompt":"polish"}')
+S2ID=$(echo "$S2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skill"]["id"])')
+curl -s -X PUT $SKILLS_API/$S1ID -H 'Content-Type: application/json' -d '{"enabled":false}' | grep -q '"enabled":false'; check "PUT /skills/{id} 更新字段" $? "update failed"
+curl -s -X POST $SKILLS_API/$S1ID/use > /dev/null
+USE=$(curl -s -X POST $SKILLS_API/$S1ID/use)
+echo "$USE" | grep -q '"used_count":2'; check "POST /skills/{id}/use 累加 used_count" $? "$USE"
+LIST=$(curl -s $SKILLS_API)
+echo "$LIST" | python3 -c 'import json,sys; s=json.load(sys.stdin)["skills"]; print("OK" if s[0]["used_count"]>=s[-1]["used_count"] else "BAD")' | grep -q OK; check "GET /skills 按 used_count 倒序" $? "$LIST"
+curl -s -X DELETE $SKILLS_API/$S2ID | grep -q '"ok":true'; check "DELETE /skills/{id} 删除" $? "delete failed"
+curl -s $SKILLS_API | python3 -c "import json,sys; s=[x['id'] for x in json.load(sys.stdin)['skills']]; print('OK' if '$S2ID' not in s else 'BAD')" | grep -q OK; check "删除后列表不含被删 skill" $? "still present"
+curl -s -o /tmp/sk.json -w '%{http_code}' -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":""}' | grep -q 400; check "POST /skills 缺标题返回 400" $? "no 400"
+curl -s -o /tmp/sk2.json -w '%{http_code}' -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":"x","prompt":""}' | grep -q 400; check "POST /skills 缺提示词返回 400" $? "no 400 prompt"
+echo "$UI" | grep -q 'function renderSkillPicker'; check "前端选择器 skill 渲染函数存在" $? "no renderSkillPicker"
+echo "$UI" | grep -q 'function renderSkillPane'; check "前端管理页 skill 面板函数存在" $? "no renderSkillPane"
+echo "$UI" | grep -q 'function openSkillDialog'; check "前端 skill 对话框函数存在" $? "no openSkillDialog"
+echo "$UI" | grep -q 'function selectSkill'; check "前端选择 skill 函数存在" $? "no selectSkill"
+echo "$UI" | grep -q 'id="skill-dlg"'; check "前端 skill 对话框 DOM 存在" $? "no skill-dlg"
+echo "$UI" | grep -q 'id="pane-skill"'; check "前端管理页 skill 面板 DOM 存在" $? "no pane-skill"
+echo "$UI" | grep -q 'sk-add'; check "前端扩展 skill 入口存在" $? "no sk-add"
+echo "$UI" | grep -q 'let activeSkill = null'; check "前端 activeSkill 状态存在" $? "no activeSkill"
+echo "$UI" | grep -q 'history.unshift({ role: "system", content: activeSkill.prompt })'; check "前端发送时注入 skill system 消息" $? "no inject"
+echo "$UI" | grep -q 'location.hash === "#/skills"'; check "前端 #/skills 路由存在" $? "no skills route"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

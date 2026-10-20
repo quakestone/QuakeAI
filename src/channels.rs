@@ -17,6 +17,9 @@ pub const DO_NAME: &str = "global-channel-ledger";
 pub const STORAGE_CHANNELS: &str = "channels";
 #[allow(dead_code)]
 pub const STORAGE_EVENTS: &str = "events";
+/// skill 账本存储键（镜像 storage-do.js 的 /skills 路径）。
+#[allow(dead_code)]
+pub const STORAGE_SKILLS: &str = "skills";
 /// 事件账本上限（环形）：DO storage 里只保留最近这么多次降权/切换记录。
 #[allow(dead_code)]
 pub const EVENT_LIMIT: usize = 50;
@@ -163,6 +166,25 @@ pub struct Channel {
     pub models_meta: Vec<ModelMeta>,
     #[serde(default)]
     pub health: Health,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// skill 子系统的一等对象：与模型完全独立——模型登记「名字 + 能力」，
+/// skill 登记「标题 + 提示词正文」。模型选择器与管理页共用同一份 skill 列表。
+/// `used_count` 累计被应用到对话的次数，决定列表里「使用最频繁的前 6 条」。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Skill {
+    pub id: String,
+    /// 列表只展示这一行标题（不展示提示词正文）
+    pub title: String,
+    /// 提示词正文：被选中并发送时，作为 system 消息注入本轮对话（独立表达线）
+    pub prompt: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 使用次数（被应用到对话的累计次数），缺省 0
+    #[serde(default)]
+    pub used_count: u64,
     pub created_at: String,
     pub updated_at: String,
 }

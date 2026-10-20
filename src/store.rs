@@ -81,6 +81,25 @@ pub async fn save_all_channels(env: &Env, list: &[Channel]) -> Result<()> {
     Ok(())
 }
 
+/// 读取完整 skill 账本（Err = DO 不可用，调用方回退空列表）。
+pub async fn load_all_skills(env: &Env) -> Result<Vec<crate::channels::Skill>> {
+    let mut resp = store_rpc(env, Method::Get, "/skills", None).await?;
+    let text = resp.text().await?;
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    Ok(v
+        .get("skills")
+        .and_then(|c| serde_json::from_value::<Vec<crate::channels::Skill>>(c.clone()).ok())
+        .unwrap_or_default())
+}
+
+/// 全量覆盖 skill 账本。
+pub async fn save_all_skills(env: &Env, list: &[crate::channels::Skill]) -> Result<()> {
+    let body = serde_json::to_string(list)
+        .map_err(|e| Error::RustError(format!("serialize skills: {e}")))?;
+    store_rpc(env, Method::Put, "/skills", Some(&body)).await?;
+    Ok(())
+}
+
 /// 追加一条路由/降权事件。
 pub async fn push_event(env: &Env, ev: &RouteEvent) {
     let body = match serde_json::to_string(ev) {
