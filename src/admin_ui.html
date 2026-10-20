@@ -280,8 +280,12 @@
   #model-search { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--txt); margin-bottom: 8px; }
   #model-search::placeholder { color: var(--dim); }
   .enh-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid #4a3d85; background: #16122b; border-radius: 9px; font-size: 12.5px; cursor: pointer; }
-  .enh-row input { margin-top: 2px; }
-  .enh-row .enh-ic { font-size: 14px; }
+  /* 关键修复：label 是 flex 容器，checkbox 默认 flex-shrink:1 但 min-width:auto
+     会被内容撑开 —— 实测被拉到 290px 宽，把⚡ 与文字全顶到右侧，
+     整行看起来像一个空荡荡的大框。必须 flex:none + 显式宽度收住。*/
+  .enh-row input[type="checkbox"] { flex: none; width: 15px; height: 15px; margin: 3px 0 0; }
+  .enh-row > span:last-child { flex: 1 1 auto; min-width: 0; }
+  .enh-row .enh-ic { font-size: 14px; flex: none; }
   .enh-row b.enh-hint { display: block; font-weight: 400; font-size: 11px; color: var(--dim); }
   /* 不可用时置灰并给出原因（纯文本 >20 字 / 非通话 / 至少 3 个模型） */
   .enh-row.off { border-color: var(--border); background: var(--panel2); color: var(--dim); cursor: not-allowed; opacity: .72; }
@@ -751,11 +755,12 @@
       </div>
     </details>
 
-    <!-- 模型视图：顶部 4 标签统一切换「文本模型 / 多媒体模型 / 模型用量 / 模型积分榜」。
+    <!-- 模型视图：顶部 5 标签统一切换「文本模型 / skill 模型 / 多媒体模型 / 模型用量 / 模型积分榜」。
          资源登记、Key、多媒体等通用卡片留在下方常驻，不随标签切换。 -->
     <div class="card" id="model-view-card">
       <div class="tabbar" id="mgmt-tabs">
         <button class="tab sel" data-mtab="text" onclick="setMgmtTab('text')">💬 文本模型</button>
+        <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')">🧩 skill 模型</button>
         <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')">🎬 多媒体模型</button>
         <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')">📊 模型用量</button>
         <button class="tab" data-mtab="points" onclick="setMgmtTab('points')">🏆 模型积分榜</button>
@@ -770,6 +775,16 @@
           <span class="pg-n" id="model-rows-page-n"></span>
           <button onclick="turnModelRowsPage(1)">›</button>
         </div>
+      </div>
+
+      <!-- 面板 2：skill 子系统（独立于模型的对象，开发中） -->
+      <div id="pane-skill" hidden>
+        <div class="empty">🧩 <b>skill 模型子系统正在开发中</b><br>
+          skill 与模型是两类对象：模型登记「名字 + 能力」，skill 登记「标题 + 提示词正文」，
+          模型选择器与本页共用同一个 skill 列表。<br>
+          列表只展示<b>标题</b>一行，默认显示<b>使用最频繁的 6 条</b>，第 7 行是「扩展 skill」管理入口；
+          内置首个 skill 为「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL v1.0）。<br>
+          在此之前，聊天页勾选 ⚡ 增强模式 即为同一套协议的临时入口。</div>
       </div>
 
       <!-- 面板 3：模型用量 -->
@@ -962,6 +977,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <input id="model-custom" placeholder="自定义模型名（回车确认）…" style="margin-bottom:10px">
   <div class="tabbar" id="mp-tabs">
     <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">💬 文本模型</button>
+    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')">🧩 skill 模型</button>
     <button class="tab" data-mtab="audio" onclick="setMpTab('audio')">🎧 音频模型</button>
     <button class="tab" data-mtab="mm" onclick="setMpTab('mm')">🖼 图视模型</button>
   </div>
@@ -3578,9 +3594,9 @@ async function chatStream(messages, model, handlers) {
 const MP_PAGE_SIZE = 6;
 // 四个标签：文本 / skill / 音频 / 图视。每个标签**各自独立页码**，
 // 切标签不会串页（mpPages[标签]），换搜索词才把当前标签重置回第 1 页。
-const MP_TABS = ["text", "audio", "mm"];
+const MP_TABS = ["text", "skill", "audio", "mm"];
 let mpTab = "text";                    // 当前标签
-let mpPages = { text: 1, audio: 1, mm: 1 };  // 各标签独立页码
+let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };  // 各标签独立页码
 let mpQuery = "";       // 模型名 / 渠道 / provider 模糊搜索词
 function mpPage() { return mpPages[mpTab] || 1; }
 function setMpPage(p) { mpPages[mpTab] = Math.max(1, p); renderModelList(); }
@@ -3588,6 +3604,9 @@ function turnModelPage(d) { setMpPage(mpPage() + d); }
 function setMpTab(k) {
   if (!MP_TABS.includes(k)) return;
   mpTab = k;
+  // 增强模式是纯文本多模型接力，只在「文本模型」标签下有意义；音频/图视标签直接隐藏该行
+  const er = $("enh-row");
+  if (er) er.hidden = (k !== "text");
   mpQuery = "";                       // 切标签清掉搜索词，避免"搜不到"误判为空列表
   const s = $("model-search"); if (s) s.value = "";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
@@ -3603,7 +3622,7 @@ let modelPickCb = null;
 function openModelPicker() {
   // 每次打开都重置搜索词与页码，避免上次的过滤/页码残留
   mpQuery = "";
-  mpPages = { text: 1, audio: 1, mm: 1 };
+  mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };
   mpTab = "text";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === "text"));
   const s = $("model-search"); if (s) s.value = "";
@@ -3615,6 +3634,7 @@ function openModelPicker() {
 //   mm    = vision / video 能力模型
 //   skill = skill 子系统尚未上线，只给占位提示（标签入口先占住，避免以后改结构）
 function mpItems() {
+  if (mpTab === "skill") return [];   // skill 独立于模型，不从模型池里取
   const want = mpTab === "audio" ? ["stt", "tts"] : mpTab === "mm" ? ["vision", "video"] : ["text"];
   //音频 / 图视标签不限于 chat 渠道（语音、视觉常挂在独立 kind 上），文本标签则只取可用对话渠道
   const pool = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
@@ -3632,6 +3652,17 @@ function mpItems() {
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
+  // skill 标签：skill 是独立于模型对象的表达线（有自己的标题与提示词正文），
+  // 子系统上线前给占位说明，不从模型池里取数据。
+  if (mpTab === "skill") {
+    $("model-list").innerHTML = `<div class="empty">🧩 <b>skill 模型子系统正在开发中</b><br>
+      skill 与模型是两类对象：模型只登记「名字 + 能力」，skill 登记「标题 + 提示词正文」。
+      规划形态：列表只显示<b>标题</b>一行，默认展示<b>使用最频繁的 6 条</b>，第 7 行是「扩展 skill」入口；
+      内置首个 skill 为「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL v1.0）。<br>
+      在此之前，文本模型标签下勾选 ⚡ 增强模式 即为同一套协议的临时入口。</div>`;
+    $("model-pager").hidden = true;
+    return;
+  }
   const usable = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
   // 候选条目：自动 + 各渠道的模型。按**积分倒序**排（分高在前），
   // 「自动」同样参与计分与排序——自动被选中/被使用都会累计积分。
@@ -3954,21 +3985,22 @@ function modelRow(c, m) {
 // 模型管理页顶部的 6 标签（文本/skill/音频/图视/用量/积分榜）。
 // 前4 个切「模型列表」面板（各自独立页码），后 2 个把用量、积分榜面板显出来。
 let mgmtTab = "text";
-const MGMT_TABS = ["text", "mm", "usage", "points"];
+const MGMT_TABS = ["text", "skill", "mm", "usage", "points"];
 const MGMT_TAB_TTL = {
-  text: "文本模型", mm: "多媒体模型（音频 · 图片 · 视频）", usage: "模型用量", points: "模型积分榜",
+  text: "文本模型", skill: "skill 模型", mm: "多媒体模型（音频 · 图片 · 视频）",
+  usage: "模型用量", points: "模型积分榜",
 };
 // 用户要求：列表深度超过 5 个就全部改成分页 —— 每页 5 条，宁可多页也不一拉到底
 const MG_PAGE_SIZE = 5;
-let mgPages = { text: 1, mm: 1 };
+let mgPages = { text: 1, mm: 1 };   // skill 是独立对象，不分页
 function setMgmtTab(k) {
   if (!MGMT_TABS.includes(k)) return;
   mgmtTab = k;
   document.querySelectorAll("#mgmt-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
   // 面板归属：文本/音频/图视三个标签共用「模型列表」面板，skill/用量/积分榜各自一个面板
-  const PANE_OF = { text: "models", mm: "models", usage: "usage", points: "points" };
+  const PANE_OF = { text: "models", skill: "skill", mm: "models", usage: "usage", points: "points" };
   const want = PANE_OF[k];
-  for (const p of ["models", "usage", "points"]) {
+  for (const p of ["models", "skill", "usage", "points"]) {
     const el = $("pane-" + p);
     if (el) el.hidden = (p !== want);
   }

@@ -1,5 +1,50 @@
 # CHANGES
 
+## v0.18.1（2026-10-22）—— 恢复 skill 标签 / 修掉增强模式行的「空框」
+
+用户指令：
+- 「把圈中的标签去了 不是把skill去了 skill是仅此于模型对象的表达线 赶紧恢复了」
+- 附截图：模型选择器里图视标签下方有一块**占满整行的大空框**。
+
+### 我误读了指令
+
+上一轮用户说「模型选择页 这块不是说好去掉吗」，我把它理解成"去掉 skill 标签"，实际用户圈的是**那块撑高的空白面板**。
+用户澄清：**skill 是独立于模型对象的表达线**（模型登记「名字 + 能力」，skill 登记「标题 + 提示词正文」），标签必须留着。
+本版恢复 skill 标签（选择器 4标签、管理页 5 标签），并修掉真正的问题。
+
+### 真正的问题：增强模式行被 flex 撑成空框
+
+- `.enh-row` 是 `display: flex` 的 `<label>`，里面的 `<input type="checkbox">` 只有 `margin-top: 2px`，
+  没有 `flex: none` —— flex 项的 `min-width: auto` 让checkbox **被撑到 290px 宽**（实测），
+  把 ⚡ 与「增强模式」文字全顶到行右侧，整行看起来就是一个空荡荡的大框。
+- 修复：
+  ```css
+  .enh-row input[type="checkbox"] { flex: none; width: 15px; height: 15px; margin: 3px 0 0; }
+  .enh-row .enh-ic { font-size: 14px; flex: none; }
+  .enh-row > span:last-child { flex: 1 1 auto; min-width: 0; }
+  ```
+  实测 checkbox 从 **290px → 15px**，⚡ 与文字回到行首，行高从 73px 降到 46px。
+
+### 顺带：增强模式只在「文本模型」标签下出现
+
+增强模式是纯文本的多模型接力，在音频 / 图视 / skill 标签下没有意义。
+`setMpTab()` 里同步 `enh-row.hidden = (k !== "text")` —— 切到非文本标签时该行整体隐藏，
+顺带也让图视标签的列表上方不再有无关控件。
+
+### skill 标签恢复细节
+
+| 位置 | 恢复内容 |
+|---|---|
+| 模型选择器 | `MP_TABS = ["text","skill","audio","mm"]`；`mpItems()` 里 `if (mpTab === "skill") return []`（skill 不从模型池取数）；`renderModelList` 里的 skill 占位分支 |
+| 模型管理页 | `MGMT_TABS = ["text","skill","mm","usage","points"]`；`PANE_OF.skill = "skill"`；`#pane-skill` 独立面板 |
+
+占位文案同时明确了 skill 与模型的对象差异：模型登记「名字 + 能力」，skill 登记「标题 + 提示词正文」。
+
+### 测试
+
+- e2e **367/367**（+4）：新增 checkbox 不被拉伸、增强模式仅文本标签可见、skill 不从模型池取数、管理页 skill 面板 4 项；同时把上一轮误加的 4 条「无 skill」断言改回正确口径。
+- 浏览器实测：checkbox 290px → 15px、图视标签下 enh-row 已隐藏、选择器 4 标签 / 管理页 5 标签全通、零 pageerror。
+
 ## v0.18.0（2026-10-22）—— 去掉 skill 标签 / 管理页列表两标签 / 会话列表分页 / 屏蔽 error
 
 用户指令（6 项）：
