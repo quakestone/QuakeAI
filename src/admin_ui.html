@@ -425,6 +425,9 @@
   .sk-item .sk-act { flex: none; display: flex; gap: 6px; }
   .sk-item .sk-act button { border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 7px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
   .sk-item .sk-act button:hover { border-color: var(--acc); color: var(--acc); }
+  .sk-item.off { opacity: .45; cursor: not-allowed; }
+  .sk-item.off:hover { border-color: var(--border); }
+  .sk-badge { font-size: 10px; color: var(--acc); border: 1px solid var(--acc); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
 
   /* 管理页 skill 面板 */
   .sk-row { padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; margin-bottom: 8px; min-width: 0; }
@@ -3794,6 +3797,10 @@ let STORE_STATE = "unknown";
 // skill 子系统：与模型完全独立的表达线（标题 + 提示词正文）
 let SKILLS = [];
 let activeSkill = null;   // 当前选中的 skill（composer chip 显示，发送时注入 system 消息）
+// 默认对话 skill：用户「启用」后持久化，新对话自动带上（无需每次手动点选）。
+// 这是真正让「启用」生效的开关——之前 enabled 只是个展示标签，点了对话里也不会带。
+const GW_DEFAULT_SKILL_KEY = "gw_default_skill";
+function defaultSkillId() { try { return localStorage.getItem(GW_DEFAULT_SKILL_KEY) || ""; } catch { return ""; } }
 
 async function loadAll() {
   try {
@@ -3848,6 +3855,13 @@ async function loadSkills() {
   } catch (e) {
     SKILLS = [];
   }
+  // 恢复默认对话 skill：用户在管理面板「启用」后，新对话自动带上，不必每次点选。
+  // 仅在当前没手动选中时才回退到默认，避免覆盖用户当轮临时切的 skill。
+  const def = defaultSkillId();
+  if (!activeSkill && def) {
+    const d = SKILLS.find(x => x.id === def);
+    if (d) { activeSkill = d; renderSkillChip(); }
+  }
   if (mpTab === "skill") renderModelList();
   if (mgmtTab === "skill") renderSkillPane();
 }
@@ -3862,11 +3876,14 @@ function renderSkillPicker() {
     html = `<div class="empty">还没有 skill —— 点下面的「＋ 扩展 skill」登记第一个（标题 + 提示词正文）。<br>内置「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL）会在你首次进入时自动种子化。</div>`;
   } else {
     for (const s of top) {
-      const sel = activeSkill && activeSkill.id === s.id ? " sel" : "";
-      html += `<div class="sk-item${sel}" onclick="selectSkill('${esc(s.id)}')">
+      const isDef = s.id === defaultSkillId();
+      const sel = (activeSkill && activeSkill.id === s.id) || isDef ? " sel" : "";
+      // 已停用（enabled=false）的 skill 在选择器里灰显且不可点 —— 让「启用」成为真正的开关
+      const off = !s.enabled;
+      html += `<div class="sk-item${sel}${off ? " off" : ""}"${off ? "" : ` onclick="selectSkill('${esc(s.id)}')"`}>
         <span class="sk-rank">🧩</span>
         <div class="sk-main">
-          <div class="sk-ttl">${esc(s.title)}</div>
+          <div class="sk-ttl">${esc(s.title)}${isDef ? ' <span class="sk-badge">默认对话</span>' : ""}</div>
           <div class="sk-meta">已用 ${s.used_count} 次${s.enabled ? "" : " · 已停用"}</div>
         </div>
         <div class="sk-act">
@@ -3898,8 +3915,11 @@ function renderSkillPane() {
         <div class="sk-body">${esc(s.prompt)}</div>
         <div class="sk-foot">
           <span>已用 ${s.used_count} 次</span>
-          <span>${s.enabled ? "启用中" : "已停用"}</span>
           <span class="sp"></span>
+          <button type="button" onclick="toggleSkillEnabled('${esc(s.id)}')">${s.enabled ? "停用" : "启用"}</button>
+          ${s.id === defaultSkillId()
+            ? '<button type="button" class="primary" onclick="setDefaultSkill(\'\')">默认对话中 · 点击取消</button>'
+            : `<button type="button" onclick="setDefaultSkill('${esc(s.id)}')">设为默认对话</button>`}
           <button type="button" onclick="openSkillDialog('${esc(s.id)}')">编辑</button>
           <button type="button" class="danger" onclick="deleteSkill('${esc(s.id)}')">删除</button>
         </div>
@@ -3934,6 +3954,44 @@ function renderSkillChip() {
 function clearActiveSkill() {
   activeSkill = null;
   renderSkillChip();
+}
+
+/// 管理面板「设为默认对话」：把某个 skill 固化为默认对话 skill（持久化到本浏览器）。
+/// 设默认后，新对话自动带上该 skill（composer 显示芯片、发送时注入 system 消息），
+/// 这正是「启用就驱动起来」的语义——之前 enabled 只是展示标签，并不会自动应用。
+function setDefaultSkill(id) {
+  if (!id) {
+    // 取消默认：清掉持久化的默认；若当前选中正是它，则同步撤下芯片
+    const old = defaultSkillId();
+    try { localStorage.setItem(GW_DEFAULT_SKILL_KEY, ""); } catch {}
+    if (old && activeSkill && activeSkill.id === old) clearActiveSkill();
+    if (mgmtTab === "skill") renderSkillPane();
+    if (mpTab === "skill") renderModelList();
+    toast("已取消默认对话 skill", "ok");
+    return;
+  }
+  // 设为默认对话 skill：持久化，并立即作为当前表达线生效
+  try { localStorage.setItem(GW_DEFAULT_SKILL_KEY, id); } catch {}
+  const s = SKILLS.find(x => x.id === id);
+  if (s) { activeSkill = s; renderSkillChip(); }
+  if (mgmtTab === "skill") renderSkillPane();
+  if (mpTab === "skill") renderModelList();
+  toast("已设为默认对话 skill（新对话自动带上）", "ok");
+}
+
+/// 切换 skill 的「启用 / 停用」。停用后它在模型选择器里灰显且不可点（真正生效的开关）；
+/// 启用后可选。与「设为默认对话」是两个独立维度：启用=能用，默认=自动带上。
+async function toggleSkillEnabled(id) {
+  const s = SKILLS.find(x => x.id === id);
+  if (!s) return;
+  const next = !s.enabled;
+  try {
+    await api("/skills/" + encodeURIComponent(id), "PUT", { enabled: next });
+    await loadSkills();
+    if (mgmtTab === "skill") renderSkillPane();
+    if (mpTab === "skill") renderModelList();
+    toast(next ? "已启用（选择器可选）" : "已停用（选择器不可选）", "ok");
+  } catch (e) { toast("操作失败：" + e.message, "err"); }
 }
 
 /// 打开 skill 新增/编辑对话框。
