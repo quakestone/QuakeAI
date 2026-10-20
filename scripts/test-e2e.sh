@@ -479,6 +479,91 @@ grep -q 'removed.forEach((rm, k) => IDB.deleteMsg(c.id, j + k))' "$UI"; check "�
 #    （实测缺陷：.toast 单独开 pointer-events:auto，清空会话后马上点发送没反应）
 if grep -A1 '#toast { position: fixed' "$UI" | grep -q 'pointer-events: none' && ! grep '\.toast {' "$UI" | grep -q 'pointer-events: auto'; then check "toast 纯通知不拦截点击（底部区域随时可点）" 0; else check "toast 纯通知不拦截点击（底部区域随时可点）" 1 "toast still intercepts clicks"; fi
 
+echo "== 17. 分享 /s 二级子页 + 微信渠道（v0.10.0：应用分发裂变）=="
+# 用户诉求「分享微信功能线是应用分发裂变很重要途径，做域名二级子页实现」。
+# 微信内分享卡片只能带 URL（不能带正文），故架构：正文压缩进 URL hash，
+# 服务端零存储，二级子域 s.<域名> 独立落地页承接微信浏览器打开。
+UI="$ROOT/src/admin_ui.html"
+SH="$ROOT/src/share_ui.html"
+# ① 路由：GET /s 返回独立分享页（服务端零存储，只发静态 HTML）
+grep -q 'path == "/s" || path == "/s/"' "$ROOT/src/lib.rs" && grep -q 'include_str!("share_ui.html")' "$ROOT/src/lib.rs"; check "GET /s 路由 include 分享页（零存储）" $? "no /s route"
+grep -q 'GET /s (share page)' "$ROOT/src/lib.rs"; check "404 文案含 /s（可发现性）" $? "404 text missing /s"
+# ② 分享页本体：解码 + 渲染 + 微信引导 + 二维码
+grep -q 'function decodePayload' "$SH"; check "分享页 hash 解码（z. 压缩 / p. 明文）" $? "no decodePayload"
+grep -q 'DecompressionStream("deflate-raw")' "$SH"; check "压缩 payload 用 deflate-raw 解压" $? "no inflate"
+grep -q 'id="wx-steps"' "$SH" && grep -q 'MicroMessenger' "$SH"; check "微信内 UA 检测 + 右上角转发引导" $? "no wx steps"
+grep -q 'QRLIB(0, "M")' "$SH"; check "分享页注入 QR 库（M 级纠错，短链场景）" $? "no QRLIB in share page"
+grep -q 'atob(raw.slice(2).replace(/-/g, "+").replace(/_/g, "/"))' "$SH"; check "p. 明文路径 base64url 字母表归一化（v0.10.0 实测 bug：中文必含 -/_）" $? "p. path not normalized"
+# ③ 管理页：生成分享链接（压缩上限保护 + 二级子域推断 + 降级）
+grep -q 'async function buildShareUrl' "$UI" && grep -q 'const SHARE_MAX = 6000' "$UI"; check "buildShareUrl 有压缩上限保护（URL 过长兜底）" $? "no SHARE_MAX"
+grep -q 'function shareOrigin' "$UI" && grep -q 'location.hostname' "$UI" && grep -q '"//s." + root' "$UI"; check "shareOrigin 二级子域推断（www.x.com → s.x.com）" $? "no subdomain inference"
+grep -q 'CompressionStream("deflate-raw")' "$UI"; check "链接生成走 deflate-raw 压缩（体积优先）" $? "no deflate in admin"
+grep -q 'id="share-dlg"' "$UI" && grep -q 'QRLIB(0, "M")' "$UI"; check "分享对话框 + 管理页 QR 生成" $? "no share dialog"
+grep -q 'function fallbackCopyText' "$UI" && grep -q 'navigator.share' "$UI"; check "复制失败降级 execCommand + 系统分享 API" $? "no copy fallback"
+# ④ 真实 HTTP：/s 与 /s/ 均返回分享页（零存储静态 HTML），带 hash 不 404
+SC=$(curl -s -o /tmp/share.html -w '%{http_code}' http://127.0.0.1:8787/s)
+[ "$SC" = "200" ]; check "GET /s 返回 200" $? "code=$SC"
+grep -q 'decodePayload' /tmp/share.html && grep -q 'wx-steps' /tmp/share.html; check "/s 响应体是分享页（含解码器 + 微信引导）" $? "not share page"
+SC2=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/s/)
+[ "$SC2" = "200" ]; check "GET /s/ 尾斜杠同效" $? "code=$SC2"
+SC3=$(curl -s -o /dev/null -w '%{http_code}' 'http://127.0.0.1:8787/s#z.eJyrVspLLtJSSkWSBgYKtKRAK5YAIA')
+[ "$SC3" = "200" ]; check "带 payload hash 打开不 404（hash 服务端不可见，前端解析）" $? "code=$SC3"
+CT=$(curl -s -o /dev/null -D - http://127.0.0.1:8787/s | tr -d '\r' | grep -i '^content-type' || true)
+echo "$CT" | grep -qi 'text/html'; check "/s Content-Type 为 text/html" $? "$CT"
+# ⑤ 纯函数真实往返（node 跑 admin_ui.html 里提取的 b64url/deflate，非 grep 摆设）
+cat > "$ROOT/.share-extract.mjs" <<'EOF'
+// 从 admin_ui.html 提取分享纯函数落盘成模块，import 后真实跑往返（不用 eval：
+// eval + 模板字符串会吃掉正则里的反斜杠，且函数声明提升语义也不同）
+import { readFileSync, writeFileSync } from "node:fs";
+function extract(src, name) {
+  let i = src.indexOf("function " + name + "(");
+  if (i < 0) throw new Error("missing " + name);
+  if (src.slice(i - 6, i) === "async ") i -= 6; // 保住 async 关键字，否则 await 语法错误
+  let d = 0;
+  for (let k = src.indexOf("{", i); k < src.length; k++) {
+    if (src[k] === "{") d++;
+    else if (src[k] === "}" && --d === 0) return src.slice(i, k + 1);
+  }
+  throw new Error("unbalanced " + name);
+}
+// 管理页编码器 + 分享页解码器一起提取，验证两侧互逆（p. 字母表 bug 的回归防线）
+const specs = [
+  [process.argv[2], ["b64urlFromBytes", "b64urlUnicode", "deflateB64url"]],
+  [process.argv[4], ["b64ToBytes", "inflate", "decodePayload"]],
+];
+let out = "";
+for (const [file, names] of specs) {
+  const src = readFileSync(file, "utf8");
+  out += names.map((n) => extract(src, n)).join("\n\n") + "\n\n";
+}
+out += "export { b64urlFromBytes, b64urlUnicode, deflateB64url, b64ToBytes, inflate, decodePayload };\n";
+writeFileSync(process.argv[3], out);
+EOF
+node "$ROOT/.share-extract.mjs" "$UI" "$ROOT/.share-fns.mjs" "$SH" || true
+cat > "$ROOT/.share-roundtrip.mjs" <<'EOF'
+import { b64urlUnicode, deflateB64url, decodePayload } from "./.share-fns.mjs";
+const assert = (c, m) => { if (!c) { console.error("FAIL: " + m); process.exit(1); } };
+// Unicode 编解码往返（中文/emoji/换行/特殊字符）
+for (const s of ["你好世界", "hello world", "emoji 😀 换行\n制表\t", "混合 ABC123!@#"]) {
+  const b64 = b64urlUnicode(s);
+  assert(!/[+/=]/.test(b64), "b64url 字母表无 +/=");
+  assert(decodeURIComponent(escape(atob(b64.replace(/-/g, "+").replace(/_/g, "/")))) === s, "b64urlUnicode 往返: " + s);
+}
+// 跨文件互逆：管理页编码器 → 分享页 decodePayload 解码（z. 压缩 + p. 明文两条路）
+const long = "这是一段足够长的中文回答内容，含 **加粗** 与 `行内代码`。".repeat(50);
+const json = JSON.stringify({ v: 1, t: "标题", c: long, m: "glm-4-flash", ts: 1700000000000 });
+const z = await deflateB64url(json);
+assert(/^[A-Za-z0-9_-]+$/.test(z), "压缩输出为合法 base64url");
+assert(await decodePayload("z." + z) === json, "z. 压缩 payload 管理页→分享页互逆");
+// p. 明文路径：中文内容几乎必含 -/_，atob 前必须做字母表归一化（v0.10.0 实测 bug 回归）
+const p64 = b64urlUnicode(json);
+assert(/[-_]/.test(p64), "测试样本需含 base64url 特有字符（否则回归无意义）");
+assert(await decodePayload("p." + p64) === json, "p. 明文 payload 管理页→分享页互逆");
+console.log("share-roundtrip OK");
+EOF
+node "$ROOT/.share-roundtrip.mjs" >/dev/null 2>&1; check "b64url/deflate 编解码真实往返（中英文/emoji/长文）" $? "roundtrip broken"
+rm -f "$ROOT/.share-extract.mjs" "$ROOT/.share-fns.mjs" "$ROOT/.share-roundtrip.mjs"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

@@ -1176,6 +1176,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if path.starts_with("/admin") {
         return admin::handle_admin(req, &env, &path["/admin".len()..]).await;
     }
+    // 分享二级子页（/s）：内容压缩后放在 URL hash 里，服务端零存储。
+    // 生产环境可把 s.<域名> CNAME 到本 Worker，即得独立的二级子域分享页。
+    if method == Method::Get && (path == "/s" || path == "/s/") {
+        return admin::html_response(include_str!("share_ui.html"));
+    }
     if method == Method::Get && path == "/health" {
         return handle_health();
     }
@@ -1189,7 +1194,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         _ => json_error(
             404,
             "not_found",
-            "routes: GET / (admin UI), GET /health, POST /v1/chat/completions, POST /v1/audio/transcriptions, POST /v1/audio/speech, /admin/api/*",
+            "routes: GET / (admin UI), GET /s (share page), GET /health, POST /v1/chat/completions, POST /v1/audio/transcriptions, POST /v1/audio/speech, /admin/api/*",
         ),
     }
 }
@@ -1205,7 +1210,7 @@ mod tests {
     #[test]
     fn version_single_source_of_truth() {
         assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(crate::admin::VERSION, "0.9.0");
+        assert_eq!(crate::admin::VERSION, "0.10.0");
     }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1

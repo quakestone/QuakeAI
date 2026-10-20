@@ -605,7 +605,7 @@ async fn probe_channel(ch: &Channel) -> (u16, u64, String) {
 // 工具
 // ---------------------------------------------------------------------------
 
-fn html_response(body: &str) -> Result<Response> {
+pub fn html_response(body: &str) -> Result<Response> {
     let headers = web_sys::Headers::new()
         .map_err(|e| Error::RustError(format!("headers: {e:?}")))?;
     headers
