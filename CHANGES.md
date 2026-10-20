@@ -1,6 +1,45 @@
 # CHANGES
 
-## v0.19.6（本版）—— 模型选择状态机（ModelSelFSM）+ 修 openrouter 选了不生效
+## v0.19.7（本版）—— 修「选了 openrouter 没生效」+ 修「徽章撒谎」（两个真根因）
+
+> 用户截图实证：TG 里选了模型，徽章显示 `模型 cohere/north-mini-code:free`（via OpenRouter），
+> 但真正服务的却不是这个；同时「只要 openrouter 的都错，国内模型一切正常」。
+> 本版定位到两个**独立**根因并各自修复，v0.19.6 的 FSM 只解决了"提示"而不是根因。
+
+### 1. 根因一：模型名严格匹配 → 编码后选不中，静默回落自动选路
+- **结构性差异**（正好解释"只有 openrouter 出错"）：国内模型名纯字母数字（`glm-4-flash`），
+  而 OpenRouter 模型名天生带 `/` 与 `:`（`cohere/north-mini-code:free`、`google/gemma-4-31b-it:free`）。
+  客户端或中间层常把这类名字**百分号编码**后再放进请求体的 `model` 字段。
+- `pick_model_attempts` 原用严格 `m.name == rm` 精确匹配，`cohere%2Fnorth-mini-code%3Afree`
+  匹配不上账本原名 → 进自动选路 → 被别的模型顶替，表现为「选了却没应用上」。
+- **修复**：新增 `percent_decode` / `norm_model_name` / `model_name_eq` 三层归一化，
+  匹配改为「先严格相等（快路径），再归一化相等」。入口处先解码再送路由，
+  提示与账本里显示的也都是人读得懂的原名。
+- 回归测试覆盖：编码形态命中原名、不同模型不得互撞、未知模型仍报 `unavailable`。
+
+### 2. 根因二：徽章只报"发出去的模型"，不读回上游"实际服务的模型"
+- `diag_headers` 原用 `att.model`（我们发出去的模型名）填 `x-gateway-model`。
+  但 OpenRouter 的 `:free` 档会在多个 provider 间**换家/降级**——请求发的是 X，实际服务 Y，
+  响应 body 的 `model` 字段才是真相。于是徽章显示 X、实际跑 Y，即用户说的「显示撒谎」。
+- **修复**：新增 `first_chunk_model`——在已读到的**首块**上解析上游自报的 model
+  （非流式取顶层 JSON 字段；流式 SSE 搜第一个 `"model":"…"`，跳过
+  `: OPENROUTER PROCESSING` 注释行）。上游自报优先，读不到才回退 att.model。
+  零额外网络往返、零流缓冲，首块本来就要读。
+
+### 3. 顺带加固：模型名进响应头不再可能 500
+- `x-gateway-model` / `x-zhipu-model` 原用裸字符串 `Headers.set`。OpenRouter 名字是纯 ASCII 无碍，
+  但渠道若配了中文别名（码点 > 255），`Headers.set` 会抛错并让**整个请求** 500。
+  现统一过 `header_safe`（对 `a/b:free` 是 no-op，对中文转 %XX），前端 `decodeHeader` 原样还原。
+
+### 4. 顺手修正一个一直失败的测试- `version_single_source_of_truth` 里硬编码 `assert_eq!(VERSION, "0.19.2")`——v0.19.5 起就没
+  更新过，`cargo test` 一直是红的（上几版只跑了 `--lib` 之外的链路所以没暴露）。
+  改为只断言"单一事实源 = Cargo.toml" + semver 三段式格式，不再有第二事实源。
+
+### 4. 与前端的分工
+- 前端（TG / admin_ui）拿到 `x-gateway-model` 即"实际采用的模型"，配合 v0.19.6 的
+  ModelSelFSM，此时「所选 vs 实际」的对比才真正可信（v0.19.6 时两端其实都是"发出去的"名字）。
+
+## v0.19.6 —— 模型选择状态机（ModelSelFSM）+ 修 openrouter 选了不生效
 
 ### 1. 根因：openrouter「选了却没应用上」
 - 不是序列化错乱（静态链路对 `/`、`:`、`-`、`.` 等保留字符是健壮的：`pick_model_attempts` 对显式所选模型走精确字符串匹配 `m.name == rm`，`header_safe` 百分号编码非 ASCII 但保留 `/` `:`，`decodeHeader` 用 `decodeURIComponent` 还原）。

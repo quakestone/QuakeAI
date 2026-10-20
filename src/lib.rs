@@ -423,6 +423,123 @@ fn header_safe(s: &str) -> String {
     out
 }
 
+/// percent-decode（`%XX` → 原字节），非法转义序列原样保留；非 ASCII 字节按 UTF-8 汇集。
+fn percent_decode(s: &str) -> String {
+    if !s.contains('%') {
+        return s.to_string();
+    }
+    let b = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let hi = (b[i + 1] as char).to_digit(16);
+            let lo = (b[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (hi, lo) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// 模型名归一化：percent-decode → 去首尾空白 → 折叠内部空白 → 转小写。
+///
+/// **为什么需要它**：OpenRouter 的模型名天生带 `/` 与 `:`
+/// （`cohere/north-mini-code:free`、`google/gemma-4-31b-it:free`），而国内模型名
+/// 是纯字母数字（`glm-4-flash`）。客户端（TG 机器人、或任何把模型名塞进 URL
+/// query/path 的中间层）常把这类名字**百分号编码**后再放进请求体的 `model` 字段。
+/// 网关若用严格 `==` 匹配，`cohere%2Fnorth-mini-code%3Afree` 匹配不上账本里的任何
+/// 模型，于是静默回落自动选路——用户表现为「选了却没应用上」，且**只有 openrouter
+/// 出错、国内模型一切正常**，正是这个字符差异导致的。
+fn norm_model_name(s: &str) -> String {
+    percent_decode(s)
+        .trim()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+/// 宽松模型名匹配：先严格相等（快路径），再归一化相等（容忍百分号编码 / 大小写 / 空白差异）。
+fn model_name_eq(a: &str, b: &str) -> bool {
+    a == b || norm_model_name(a) == norm_model_name(b)
+}
+
+/// 从 JS 值里取文本：Uint8Array 按 UTF-8 解，字符串原样返回。
+fn js_string_from_value(v: &JsValue) -> Option<String> {
+    if let Some(arr) = v.dyn_ref::<js_sys::Uint8Array>() {
+        let mut buf = vec![0u8; arr.length() as usize];
+        arr.copy_to(&mut buf);
+        return String::from_utf8(buf).ok();
+    }
+    v.as_string()
+}
+
+/// 从一段文本里取第一个 `"field":"value"` 的 value（够用的最简扫描）。
+/// SSE 注释行（OpenRouter 的 `: OPENROUTER PROCESSING`）自然被跳过。
+fn extract_json_string_field(haystack: &str, field: &str) -> Option<String> {
+    let needle = format!("\"{field}\"");
+    let mut start = 0usize;
+    while let Some(i) = haystack[start..].find(&needle) {
+        let after = start + i + needle.len();
+        if let Some(rest) = haystack[after..].trim_start().strip_prefix(':') {
+            if let Some(rest) = rest.trim_start().strip_prefix('"') {
+                let mut out = String::new();
+                let mut it = rest.chars();
+                while let Some(c) = it.next() {
+                    match c {
+                        '\\' => {
+                            if let Some(n) = it.next() {
+                                out.push(n);
+                            }
+                        }
+                        '"' => {
+                            if !out.trim().is_empty() {
+                                return Some(out);
+                            }
+                            break;
+                        }
+                        _ => out.push(c),
+                    }
+                }
+            }
+        }
+        start = after;
+    }
+    None
+}
+
+/// 从上游响应的首块里读回「真实采用的模型」。
+///
+/// **为什么要读回**：OpenRouter 的 `:free` 档会在多个 provider 间换家/降级，
+/// 请求发出去的是 `X`，实际服务的可能是 `Y`，而响应 body 的 `model` 字段才是真相。
+/// 网关原先只报告"发出去的模型名"（att.model），于是徽章显示 X、实际跑 Y——
+/// 正是用户反馈的「显示层撒谎 / 应用模型还是没对应上」。这里优先采用上游自报的模型名。
+///
+/// 非流式：首块即完整 JSON，取顶层 `model`。
+/// 流式（SSE）：首块里搜第一个 `"model":"…"`；搜不到（上游没回 / 首块是注释）
+/// 返回 None，由调用方回退到 att.model。
+fn first_chunk_model(chunk: &JsValue, stream: bool) -> Option<String> {
+    let text = js_string_from_value(chunk)?;
+    if !stream {
+        // 大响应体的首块可能只是 JSON 的前半段，整段解析会失败；
+        // 失败时退回字段扫描（对截断文本同样有效），仍取不到才回退 att.model。
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            let m = v.get("model").and_then(|m| m.as_str()).unwrap_or("").trim().to_string();
+            if !m.is_empty() {
+                return Some(m);
+            }
+        }
+        return extract_json_string_field(&text, "model");
+    }
+    extract_json_string_field(&text, "model")
+}
+
 /// 给客户端响应统一注入诊断头（兼容旧 x-zhipu-* + 新增 x-gateway-*）。
 /// 所有可能含中文的值（渠道名、attempts 里的渠道 ID）都经 header_safe 编码，
 /// 保证线上响应头是纯 ASCII，前端 decodeURIComponent 还原。
@@ -443,18 +560,21 @@ fn diag_headers(
     // attempts 里只有渠道名，而降权是**模型级**的（同一渠道换个模型可能就好），
     // 客户端要按模型给负分就必须知道具体哪些模型被降权了。
     let degraded_str = header_safe(&degraded.join(","));
+    // 模型名也必须过 header_safe：OpenRouter 的 `a/b:free` 编码后不变（仍是纯 ASCII），
+    // 但渠道别名可能含中文——Headers.set 遇到 >255 的码点会抛错，直接让整次请求 500。
+    let model_safe = header_safe(model);
     for (k, v) in [
         ("x-gateway-version", env!("CARGO_PKG_VERSION").to_string()),
         ("x-gateway-channel", ch_name.clone()),
         ("x-gateway-provider", channel.provider.clone()),
         ("x-gateway-base-url", channel.base_url.clone()),
-        ("x-gateway-model", model.to_string()),
+        ("x-gateway-model", model_safe.clone()),
         ("x-gateway-attempts", ch_attempts.clone()),
         ("x-gateway-degraded", degraded_str),
         ("x-zhipu-gateway", "wasm".to_string()),
         ("x-zhipu-channel", ch_name),
         ("x-zhipu-base-url", channel.base_url.clone()),
-        ("x-zhipu-model", model.to_string()),
+        ("x-zhipu-model", model_safe),
         ("x-zhipu-attempts", ch_attempts),
     ] {
         h.set(k, &v)
@@ -544,7 +664,7 @@ impl ModelAttempt {
         self.ch
             .effective_models()
             .iter()
-            .find(|m| m.name == self.model)
+            .find(|m| model_name_eq(&m.name, &self.model))
             .map(|m| m.priority)
             .unwrap_or(0)
     }
@@ -619,7 +739,7 @@ fn pick_model_attempts(
         // 尊重用户显式选择（例如选了 vision 模型来答纯文本也照用，只有全部失败时再回退）。
         // 来源是 all_usable（仅排除禁用/冷却），而不是只含 kind 匹配项的 pairs。
         let mut primary: Vec<(ModelMeta, &Channel)> =
-            all_usable.iter().filter(|(m, _)| m.name == rm).cloned().collect();
+            all_usable.iter().filter(|(m, _)| model_name_eq(&m.name, rm)).cloned().collect();
         if !primary.is_empty() {
             primary.sort_by(by_priority);
             let mut list: Vec<ModelAttempt> = primary
@@ -628,7 +748,7 @@ fn pick_model_attempts(
                 .collect();
             // 回退：同类其他模型（主选全部失败后再尝试）——实现模型级自动更换
             let mut fallback: Vec<(ModelMeta, &Channel)> =
-                pairs.iter().filter(|(m, _)| m.name != rm).cloned().collect();
+                pairs.iter().filter(|(m, _)| !model_name_eq(&m.name, rm)).cloned().collect();
             fallback.sort_by(by_priority);
             list.extend(
                 fallback
@@ -773,7 +893,6 @@ async fn try_model_attempts(
         }
 
         let content_type = content_type_of(&web_resp);
-        let out_headers = diag_headers(ch, &att.model, &attempts, &degraded, &content_type, stream)?;
 
         // ---- 用量成本采集（不干扰透传）----
         // web_sys::Response::clone() 是 tee：克隆体独立可读，原体照常做流重放。
@@ -801,6 +920,12 @@ async fn try_model_attempts(
             }
             Ok((_, value)) => {
                 attempts.push(format!("{}=ok", ch.name));
+                // 读回上游真实采用的模型（OpenRouter :free 会换家）。上游自报优先，
+                // 读不到才回退到我们发出去的模型名。
+                let applied_model = first_chunk_model(&value, stream)
+                    .unwrap_or_else(|| att.model.clone());
+                let out_headers =
+                    diag_headers(ch, &applied_model, &attempts, &degraded, &content_type, stream)?;
                 let resp = build_restream_response(reader, value, &out_headers)?;
                 // 账本回写：命中 + 延迟（动态渠道）
                 if !ch.id.starts_with("static-") {
@@ -1028,7 +1153,9 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     let requested = if model_missing {
         Some(resolve_default_model(env, &channels, want_kind).await)
     } else {
-        Some(payload["model"].as_str().unwrap().to_string())
+        // 客户端可能把模型名百分号编码后送进来（openrouter 名字带 `/`、`:` 最易被编码）。
+        // 先解码成人读得懂的原名，后续匹配走 model_name_eq 的宽松比较，提示里也显示原名。
+        Some(percent_decode(payload["model"].as_str().unwrap()).trim().to_string())
     };
 
     // ---- 模型选择引擎：跨渠道挑（渠道×模型）候选 ----
@@ -1102,7 +1229,7 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
                 .unwrap_or_default();
             let fell_back = !model_missing
                 && !used.is_empty()
-                && Some(used.as_str()) != requested.as_deref();
+                && !model_name_eq(&used, requested.as_deref().unwrap_or_default());
             if model_unavailable || fell_back {
                 let v = if used.is_empty() { "1".to_string() } else { used };
                 let _ = resp.headers_mut().set("x-gateway-model-unavailable", &v);
@@ -1468,7 +1595,8 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_cost, header_safe, parse_usage_tokens, payload_has_image, resolve_stt_model,
+        compute_cost, extract_json_string_field, header_safe, model_name_eq, norm_model_name,
+        parse_usage_tokens, payload_has_image, percent_decode, resolve_stt_model,
         resolve_tts_model, UsageTokens,
     };
     use crate::channels::{default_deepseek_channels, default_overseas_channels, ModelMeta};
@@ -1477,10 +1605,19 @@ mod tests {
     /// Cargo.toml（编译期注入）。曾经 admin.rs 常量停在 0.7.2 没跟着升级，
     /// 侧栏版本号（取 /admin/api/channels 的 version）一直显示旧版本——
     /// 用户看到「前端版本变成 6.0/7.2」。此断言防止再次分裂。
+    ///
+    /// 注意：这里**不**再硬编码字面版本号（曾写死 "0.19.2"，每次升版都变成
+    /// 一次"明知会失败"的断言，直到有人跑 cargo test 才发现）。单一事实源的
+    /// 含义就是"只有 Cargo.toml 一个地方写着版本"，多写一份反而是第二事实源。
     #[test]
     fn version_single_source_of_truth() {
         assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(crate::admin::VERSION, "0.19.2");
+        // 版本号必须是合法 semver 三段式，防止有人误写成 "v0.19.6" 之类
+        let v = crate::admin::VERSION;
+        assert!(
+            v.split('.').count() == 3 && v.split('.').all(|p| p.parse::<u32>().is_ok()),
+            "版本号应为纯数字三段式 semver，实际 {v}"
+        );
     }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
@@ -1518,6 +1655,179 @@ mod tests {
                 }
             }
             assert_eq!(String::from_utf8(dec).unwrap(), s, "往返必须无损: {s}");
+        }
+    }
+
+    // ---- 模型名宽松匹配（openrouter 选了没生效的根因防线）----
+
+    /// openrouter 模型名带 `/` 与 `:`，客户端（TG 机器人 / 任何把模型名过 URL 的
+    /// 中间层）常百分号编码后再送进请求体的 `model` 字段。严格 `==` 匹配不上账本里
+    /// 的原名 → 静默回落自动选路 → 「选了却没应用上」。归一化后必须能匹上。
+    #[test]
+    fn model_name_eq_matches_percent_encoded_openrouter() {
+        // 客户端编码后送进来的形态
+        for enc in [
+            "cohere%2Fnorth-mini-code%3Afree",
+            "cohere/north-mini-code%3Afree",
+            "cohere%2Fnorth-mini-code%3afree",
+            "  cohere%2Fnorth-mini-code%3Afree  ",
+        ] {
+            assert!(
+                model_name_eq(enc, "cohere/north-mini-code:free"),
+                "编码形态应能匹配原名: {enc}"
+            );
+        }
+        // 另一个 openrouter 模型的编码形态，只应匹配它自己
+        assert!(model_name_eq("google%2Fgemma-4-31b-it%3Afree", "google/gemma-4-31b-it:free"));
+        assert!(model_name_eq("cohere/north-mini-code:free", "cohere%2Fnorth-mini-code%3Afree"));
+        // 国内模型名不含 `/`、`:`，两种写法都等于原名（回归不破坏原快路径）
+        assert!(model_name_eq("glm-4-flash", "glm-4-flash"));
+        assert!(model_name_eq("deepseek-v4-pro", "deepseek-v4-pro"));
+    }
+
+    /// 归一化既不过度宽松（不同模型不得互撞），也不漏掉大小写/空白差异。
+    #[test]
+    fn model_name_eq_rejects_different_models() {
+        // 同渠道不同模型，编码后仍不得互撞
+        assert!(!model_name_eq(
+            "cohere%2Fnorth-mini-code%3Afree",
+            "google/gemma-4-31b-it:free"
+        ));
+        assert!(!model_name_eq("cohere/north-mini-code:free", "cohere/north"));
+        // provider 段不同即不同模型
+        assert!(!model_name_eq(
+            "google%2Fgemma-4-31b-it%3Afree",
+            "nvidia/nemotron-3-super-120b-a12b:free"
+        ));
+    }
+
+    /// 归一化：解码 → 去空白 → 折叠内部空白 → 小写。
+    #[test]
+    fn norm_model_name_canonicalizes() {
+        assert_eq!(norm_model_name("cohere%2Fnorth-mini-code%3Afree"), "cohere/north-mini-code:free");
+        assert_eq!(norm_model_name("  GLM-4-Flash  "), "glm-4-flash");
+        assert_eq!(norm_model_name("a  b\tc"), "a b c");
+        // 纯 ASCII 原名零分配原样返回
+        assert_eq!(norm_model_name("glm-4-flash"), "glm-4-flash");
+    }
+
+    /// percent-decode 对非法转义序列必须宽容（原样保留），不得 panic。
+    #[test]
+    fn percent_decode_is_forgiving() {
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        assert_eq!(percent_decode("%A"), "%A");
+        assert_eq!(percent_decode("a%2Fb%3Ac"), "a/b:c");
+        assert_eq!(percent_decode(""), "");
+        // 结尾正好是 %XX 的边界
+        assert_eq!(percent_decode("x%41"), "xA");
+    }
+
+    /// 端到端：把「用户选了 cohere/north-mini-code:free」经编码传给选路引擎，
+    /// 该模型必须出现在候选首位（而非落入自动选路被别的模型顶替）。
+    #[test]
+    fn pick_model_attempts_accepts_encoded_requested_model() {
+        let ds = default_deepseek_channels("2026-01-01T00:00:00Z");
+        let os = default_overseas_channels("2026-01-01T00:00:00Z");
+        let mut all = ds.clone();
+        all.extend(os);
+        // 海外种子默认 enabled=false 且无 Key（进不了 usable 池），先把 openrouter
+        // 打开并补 Key，模拟用户已登记海外渠道的真实状态。
+        for c in all.iter_mut() {
+            if c.provider == "openrouter" {
+                c.enabled = true;
+                c.api_key = "sk-test-openrouter".to_string();
+            }
+        }
+        let now = 1_700_000_000_000_f64;
+
+        // 直接原名（原有行为，必须仍成立）
+        let (v, _) = super::pick_model_attempts(&all, "text", Some("cohere/north-mini-code:free"), now);
+        assert_eq!(v.first().map(|a| a.model.as_str()), Some("cohere/north-mini-code:free"),
+            "显式所选模型必须排在候选首位");
+
+        // 客户端编码后送进来（本次修复的行为）
+        let (v2, notes2) =
+            super::pick_model_attempts(&all, "text", Some("cohere%2Fnorth-mini-code%3Afree"), now);
+        assert_eq!(v2.first().map(|a| a.model.as_str()), Some("cohere/north-mini-code:free"),
+            "编码后的所选模型也必须命中（不再静默回落自动选路）");
+        assert!(
+            !notes2.iter().any(|n| n.starts_with("requested-model-unavailable")),
+            "命中时不得误报 unavailable，实际 {notes2:?}"
+        );
+
+        // 真正的未知模型仍应提示 unavailable（宽松不放过错名字）
+        let (_, notes3) = super::pick_model_attempts(&all, "text", Some("nope/not-a-model:free"), now);
+        assert!(
+            notes3.iter().any(|n| n.starts_with("requested-model-unavailable")),
+            "未知模型必须仍报 unavailable"
+        );
+    }
+
+    /// 度量：openrouter 的 9 个免费模型名全部含 `/` 或 `:`，国内模型名一概不含
+    /// ——这正是「只有 openrouter 出错」的结构性差异。
+    #[test]
+    fn openrouter_names_are_the_ones_at_risk() {
+        let os = default_overseas_channels("2026-01-01T00:00:00Z");
+        let or_names: Vec<String> = os
+            .iter()
+            .filter(|c| c.provider == "openrouter")
+            .flat_map(|c| c.effective_models().into_iter().map(|m| m.name))
+            .collect();
+        assert!(or_names.len() >= 9, "openrouter 免费模型应 >= 9，实际 {}", or_names.len());
+        for n in &or_names {
+            assert!(n.contains('/') || n.contains(':'), "openrouter 模型名应含 / 或 :，实际 {n}");
+        }
+    }
+
+    // ---- 读回上游真实采用的模型（OpenRouter :free 换家 → 显示层撒谎）----
+
+    /// SSE 首块里取 model：跳过 OpenRouter 的 `: OPENROUTER PROCESSING` 注释行，
+    /// 命中后必须取到真实模型名（这才是用户实际得到的模型）。
+    #[test]
+    fn extract_model_from_sse_first_chunk() {
+        let s = ": OPENROUTER PROCESSING\n\ndata: {\"id\":\"gen-1\",\"model\":\"qwen/qwen3-8b:free\",\"choices\":[]}\n\n";
+        assert_eq!(extract_json_string_field(s, "model"), Some("qwen/qwen3-8b:free".to_string()));
+
+        // 首块不含该字段（注释/纯 role chunk）→ None，调用方回退 att.model
+        let s2 = "data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n";
+        assert_eq!(extract_json_string_field(s2, "model"), None);
+
+        // 必须是带冒号的 JSON 字段，不能把裸词当成值
+        assert_eq!(extract_json_string_field("data: model-ish text", "model"), None);
+        // 空值不算命中
+        assert_eq!(extract_json_string_field("{\"model\":\"\"}", "model"), None);
+        // 多字段时命中 target
+        assert_eq!(
+            extract_json_string_field("{\"system_fingerprint\":\"fp\",\"model\":\"a/b:c\"}", "model"),
+            Some("a/b:c".to_string())
+        );
+        // 其它字段名也应能取到（usage 等后续可复用同一扫描）
+        assert_eq!(extract_json_string_field("{\"id\":\"gen-9\"}", "id"), Some("gen-9".to_string()));
+    }
+
+    /// 非流式首块被 TCP 分片截断时，整段 serde 解析会失败；
+    /// 字段扫描必须仍能取到 model —— 这是 first_chunk_model 的兜底路径。
+    #[test]
+    fn truncated_json_still_yields_model() {
+        let truncated = "{\"id\":\"gen-7\",\"model\":\"qwen/qwen3-8b:free\",\"choices\":[{\"delta\":{\"content\":\"你";
+        assert!(serde_json::from_str::<serde_json::Value>(truncated).is_err(), "前提：确实不是合法 JSON");
+        assert_eq!(
+            extract_json_string_field(truncated, "model"),
+            Some("qwen/qwen3-8b:free".to_string())
+        );
+    }
+
+    /// 模型名里出现 `:free` 等带冒号的值，扫描边界必须正确（不被引号提前截断）。
+    #[test]
+    fn extract_model_handles_colon_suffixed_names() {
+        for m in [
+            "cohere/north-mini-code:free",
+            "google/gemma-4-31b-it:free",
+            "glm-4-flash",
+        ] {
+            let s = format!("{{\"model\":\"{m}\",\"choices\":[]}}");
+            assert_eq!(extract_json_string_field(&s, "model"), Some(m.to_string()), "应取回 {m}");
         }
     }
 
