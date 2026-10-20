@@ -51,12 +51,18 @@
   #scrim.show { opacity: 1; pointer-events: auto; }
   .new-chat { margin: 12px; width: calc(100% - 24px); padding: 10px; border-style: dashed; font-weight: 600; }
   #convo-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; overscroll-behavior: contain; }
-  .convo { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 10px; cursor: pointer; color: var(--txt); margin-bottom: 2px; }
+  .convo { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 10px; cursor: pointer; color: var(--txt); margin-bottom: 2px; flex-wrap: wrap; }
   .convo:hover { background: var(--panel2); }
   .convo.active { background: var(--panel2); border-left: 2px solid var(--acc); }
   .convo .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+  .convo .sub { flex-basis: 100%; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: 2px; }
+  .convo .sub.hit { color: var(--acc); }
   .convo .del { border: none; background: transparent; color: var(--dim); font-size: 14px; padding: 2px 6px; min-height: 0; opacity: 0; }
   .convo:hover .del, .convo .del:focus { opacity: 1; }
+  .convo-search { padding: 0 12px 8px; }
+  .convo-search input { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--txt); }
+  .convo-search input::placeholder { color: var(--dim); }
+  .convo-hit-n { font-size: 11px; color: var(--dim); padding: 4px 2px 0; }
   .sidebar-foot { border-top: 1px solid var(--border); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
   .sidebar-foot button { width: 100%; text-align: left; font-weight: 600; }
   .sidebar-meta { font-size: 11px; color: var(--dim); }
@@ -365,7 +371,10 @@
   .vg-status b { color: var(--txt); }
 
   #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; z-index: 60; width: min(92vw, 420px); pointer-events: none; }
-  .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--acc); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px var(--shadow); animation: tin .18s ease-out; overflow-wrap: anywhere; pointer-events: auto; }
+  /* toast 是纯通知：绝不拦截点击（#toast 容器 pointer-events:none，子元素继承）。
+     曾因 .toast 单独开 pointer-events:auto，底部输入区 4.6s 内点不动——
+     用户视角就是「界面卡了/按钮失灵」。 */
+  .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--acc); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px var(--shadow); animation: tin .18s ease-out; overflow-wrap: anywhere; }
   .toast.ok { border-left-color: var(--ok); }
   .toast.err { border-left-color: var(--bad); }
   @keyframes tin { from { transform: translateY(8px); opacity: 0; } }
@@ -405,9 +414,14 @@
 <div id="view-chat" class="chat-shell">
   <aside id="sidebar">
     <button class="new-chat" onclick="newConvo()">＋ 新对话</button>
+    <div class="convo-search">
+      <input id="convo-search" type="search" placeholder="🔍 搜索会话（标题 / 内容）…" autocomplete="off">
+      <div id="convo-hit-n" class="convo-hit-n" hidden></div>
+    </div>
     <div id="convo-list"></div>
     <div class="sidebar-foot">
       <button onclick="navigate('models')">⚙ 模型管理</button>
+      <button onclick="clearAllConvos()">🗑 清空全部会话</button>
       <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">…</span></div>
     </div>
   </aside>
@@ -569,10 +583,11 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   </div>
 </div>
 
-<!-- 消息长按 / 右键菜单：重发 / 复制 -->
+<!-- 消息长按 / 右键菜单：重发 / 复制 / 删除 -->
 <div id="msg-menu" hidden>
   <button id="mm-copy" type="button" onclick="menuCopy()">复制</button>
   <button id="mm-resend" type="button" onclick="menuResend()">重发</button>
+  <button id="mm-del" type="button" onclick="menuDelete()">删除</button>
 </div>
 
 <!-- ==================== 对话框 ==================== --><dialog id="channel-dlg">
@@ -755,33 +770,108 @@ function applyRoute() {
 function openSidebar() { $("sidebar").classList.add("open"); $("scrim").classList.add("show"); document.body.classList.add("nav-open"); }
 function closeSidebar() { $("sidebar").classList.remove("open"); $("scrim").classList.remove("show"); document.body.classList.remove("nav-open"); }
 
-// ================= 会话存储（localStorage） =================
-function loadConvos() { try { return JSON.parse(localStorage.getItem("gw_convos_v1") || "[]"); } catch { return []; } }
-function saveConvos() {
-  try {
-    // 附件的二进制内容（dataUrl / File）只在内存存活，不落 localStorage：
-    // 图片 base64 动辄数百 KB，会瞬间撑爆 5MB 配额连坐全部会话。
-    const slim = convos.slice(0, 60).map(c => ({
-      ...c,
-      msgs: c.msgs.map(m => {
-        if (!m.attachments || !m.attachments.length) return m;
-        return { ...m, attachments: m.attachments.map(({ dataUrl, file, ...keep }) => keep) };
-      }),
-    }));
-    localStorage.setItem("gw_convos_v1", JSON.stringify(slim));
-  } catch {}
+// ================= 会话存储（IndexedDB） =================
+// v0.9.0：从 localStorage 迁移到 IndexedDB。localStorage 的三个硬伤：
+// ① 5MB 字符串配额——图片 dataUrl（base64 数百 KB）只能剥离、会话 60 条封顶；
+// ② setItem 同步序列化大 JSON，卡主线程（流式期间每次存都掉帧）；
+// ③ 只能整坨读整坨写，做不了消息级增删与跨会话搜索。
+// IDB：磁盘配额按 GB 计（附件原样持久化）、事务异步不卡渲染、
+// convos/msgs 两个 store 支持消息级删除与内容搜索。
+const IDB = {
+  db: null, NAME: "gw_convos", VER: 1,
+  open() {
+    return new Promise((res, rej) => {
+      let r;
+      try { r = indexedDB.open(this.NAME, this.VER); } catch (e) { return rej(e); }
+      r.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains("convos")) {
+          const cs = db.createObjectStore("convos", { keyPath: "id" });
+          cs.createIndex("updated", "updated");
+        }
+        if (!db.objectStoreNames.contains("msgs")) {
+          // 复合主键（convoId, idx）：重发截断后同位置重新入列 = 覆盖，不会重复
+          const ms = db.createObjectStore("msgs", { keyPath: ["convoId", "idx"] });
+          ms.createIndex("by_convo", "convoId");
+        }
+      };
+      r.onsuccess = () => { this.db = r.result; res(this.db); };
+      r.onerror = () => rej(r.error);
+    });
+  },
+  _req(req) { return new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); }); },
+  putConvo(c) {
+    if (!this.db) return Promise.resolve();
+    return this._req(this.db.transaction("convos", "readwrite").objectStore("convos")
+      .put({ id: c.id, title: c.title, model: c.model, updated: c.updated }));
+  },
+  putMsg(convoId, idx, m) {
+    if (!this.db) return Promise.resolve();
+    return this._req(this.db.transaction("msgs", "readwrite").objectStore("msgs")
+      .put({ convoId, idx, role: m.role, content: m.content, reasoning: m.reasoning, ts: m.ts,
+             streaming: !!m.streaming, error: m.error, channel: m.channel, attempts: m.attempts,
+             attachments: (m.attachments || []).map(slimAtt) }));
+  },
+  deleteMsg(convoId, idx) {
+    if (!this.db) return Promise.resolve();
+    return this._req(this.db.transaction("msgs", "readwrite").objectStore("msgs").delete([convoId, idx]));
+  },
+  deleteConvo(id) {
+    if (!this.db) return Promise.resolve();
+    const tx = this.db.transaction(["convos", "msgs"], "readwrite");
+    tx.objectStore("convos").delete(id);
+    tx.objectStore("msgs").index("by_convo").openCursor(IDBKeyRange.only(id)).onsuccess = (e) => {
+      const cur = e.target.result;
+      if (cur) { cur.delete(); cur.continue(); }
+    };
+    return new Promise((res) => { tx.oncomplete = res; tx.onerror = res; });
+  },
+  clearAll() {
+    if (!this.db) return Promise.resolve();
+    const tx = this.db.transaction(["convos", "msgs"], "readwrite");
+    tx.objectStore("convos").clear(); tx.objectStore("msgs").clear();
+    return new Promise((res) => { tx.oncomplete = res; tx.onerror = res; });
+  },
+  allConvos() {
+    if (!this.db) return Promise.resolve([]);
+    return this._req(this.db.transaction("convos", "readonly").objectStore("convos").getAll());
+  },
+  msgsOf(convoId) {
+    if (!this.db) return Promise.resolve([]);
+    return this._req(this.db.transaction("msgs", "readonly").objectStore("msgs").index("by_convo").getAll(convoId))
+      .then(ms => ms.sort((a, b) => a.idx - b.idx));
+  },
+  allMsgs() {
+    if (!this.db) return Promise.resolve([]);
+    return this._req(this.db.transaction("msgs", "readonly").objectStore("msgs").getAll());
+  },
+};
+/// 附件持久化形态：图片存 dataUrl（渲染缩略图）、音频存 Blob（重发转写用）、
+/// 普通文件只存元信息。File/Blob 可被结构化克隆进 IDB。
+function slimAtt(a) {
+  const base = { name: a.name, size: a.size, type: a.type, kind: a.kind };
+  if (a.kind === "image" && a.dataUrl) base.dataUrl = a.dataUrl;
+  if (a.kind === "audio" && a.file) base.file = a.file;
+  return base;
 }
-let convos = loadConvos();
-// 刷新/重开后恢复上次正在看的会话（updated 最新的一个），避免消息区空白
-let currentId = convos.length
-  ? convos.reduce((a, b) => ((b.updated || 0) >= (a.updated || 0) ? b : a)).id
-  : null;
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+let convos = [];            // 内存全量（UI 数据源，按 updated 倒序），IDB 是持久镜像
+let currentId = null;       // null = 新对话（还没落库的空白态）
 let curModel = localStorage.getItem("gw_model") || "";
 let streaming = false, aborter = null;
+let streamGen = 0;          // 流代号：新会话/新发送抢占时，旧流的 finally 只落库不碰 UI
 
 function curConvo() { return convos.find(c => c.id === currentId) || null; }
+/// 新对话：若旧流还在跑，先干净收尾（否则发送键还是旧流的「停止键」，
+/// 新对话里打字发不出去——「新会话没做好」的实际表现）。
 function newConvo() {
+  if (streaming) {
+    streamGen++; // 旧流 finally 检测到代号过期：只把已生成内容落库，不碰全局 UI
+    try { aborter?.abort(); } catch {}
+    streaming = false; aborter = null; updateSendBtn();
+  }
   currentId = null;
+  clearSearch();
   renderConvos(); renderMessages(); updateChatTop();
   closeSidebar();
   setTimeout(() => $("input").focus(), 60);
@@ -791,24 +881,147 @@ function ensureConvo() {
   if (!c) {
     c = { id: "c" + Date.now().toString(36), title: "新对话", model: curModel, msgs: [], updated: Date.now() };
     convos.unshift(c); currentId = c.id;
+    IDB.putConvo(c);
   }
   return c;
 }
 function openConvo(id) { currentId = id; renderConvos(); renderMessages(); updateChatTop(); closeSidebar(); }
-function delConvo(id, ev) {
+async function delConvo(id, ev) {
   ev.stopPropagation();
   convos = convos.filter(c => c.id !== id);
   if (currentId === id) currentId = null;
-  saveConvos(); renderConvos(); renderMessages(); updateChatTop();
+  await IDB.deleteConvo(id);
+  renderConvos(); renderMessages(); updateChatTop();
+}
+/// 全量落库（低频路径：删除/截断后的兜底对齐）。流式期间走 markMsgDirty 细粒度写入。
+function saveConvos() {
+  for (const c of convos) {
+    IDB.putConvo(c);
+    c.msgs.forEach((m, i) => IDB.putMsg(c.id, i, m));
+  }
+}
+// ---- 细粒度持久化：消息级脏集 + 防抖落库 ----
+const dirtyMsgs = new Set(); // "convoId|idx"
+const flushMsgDebounced = debounce((cid, idx) => {
+  const c = convos.find(x => x.id === cid);
+  if (c && c.msgs[idx]) IDB.putMsg(cid, idx, c.msgs[idx]);
+}, 800);
+function markMsgDirty(cid, idx) { dirtyMsgs.add(cid + "|" + idx); flushMsgDebounced(cid, idx); }
+/// 立即冲刷所有挂起的写（页面隐藏/隐藏到后台：iOS 的 pagehide 不一定来，
+/// visibilitychange 兜底——流式期间的 800ms 防抖窗口不能丢）。
+function flushPending() {
+  for (const k of dirtyMsgs) {
+    const [cid, idx] = k.split("|");
+    const c = convos.find(x => x.id === cid);
+    if (c && c.msgs[Number(idx)]) IDB.putMsg(cid, Number(idx), c.msgs[Number(idx)]);
+  }
+  dirtyMsgs.clear();
+  if (currentId) { const c = curConvo(); if (c) IDB.putConvo(c); }
+}
+window.addEventListener("pagehide", flushPending);
+document.addEventListener("visibilitychange", () => { if (document.hidden) flushPending(); });
+
+// ---- 搜索：标题即过滤 + 消息内容跨会话命中 ----
+let searchQuery = "", searchHits = {}; // convoId → { idx: snippet }
+function clearSearch() {
+  searchQuery = ""; searchHits = {};
+  const box = $("convo-search");
+  if (box) box.value = "";
+  $("convo-hit-n").hidden = true;
+}
+async function runSearch(qRaw) {
+  const q = (qRaw || "").trim().toLowerCase();
+  searchQuery = q; searchHits = {};
+  if (!q) { $("convo-hit-n").hidden = true; renderConvos(); return; }
+  renderConvos(); // 标题命中立即呈现（内容命中异步补）
+  const all = await IDB.allMsgs();
+  for (const m of all) {
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    const text = (m.content || "").toLowerCase();
+    const at = text.indexOf(q);
+    if (at >= 0) {
+      const from = Math.max(0, at - 12);
+      (searchHits[m.convoId] || (searchHits[m.convoId] = {}))[m.idx] =
+        (m.role === "user" ? "我：" : "AI：") + (m.content || "").slice(from, at + 36).trim();
+    }
+  }
+  const n = Object.keys(searchHits).length;
+  const hitN = $("convo-hit-n");
+  hitN.hidden = false;
+  hitN.textContent = n ? `内容命中 ${n} 个会话` : "无内容命中（仅按标题匹配）";
+  renderConvos();
 }
 function renderConvos() {
   const el = $("convo-list");
-  if (!convos.length) { el.innerHTML = '<div class="empty" style="padding:16px;font-size:12px">暂无会话</div>'; return; }
-  el.innerHTML = convos.map(c => `
+  let list = convos;
+  if (searchQuery) list = convos.filter(c =>
+    (c.title || "").toLowerCase().includes(searchQuery) || searchHits[c.id]);
+  if (!list.length) {
+    el.innerHTML = searchQuery
+      ? `<div class="empty" style="padding:16px;font-size:12px">没有匹配「${esc(searchQuery)}」的会话</div>`
+      : '<div class="empty" style="padding:16px;font-size:12px">暂无会话</div>';
+    return;
+  }
+  el.innerHTML = list.map(c => {
+    const hits = searchQuery && searchHits[c.id];
+    const first = hits ? hits[Math.min(...Object.keys(hits).map(Number))] : "";
+    const sub = hits
+      ? `<span class="sub hit">…${esc(first)}…</span>`
+      : `<span class="sub">${c.msgs.length} 条消息 · ${fmtRelTime(c.updated)}</span>`;
+    return `
     <div class="convo ${c.id === currentId ? "active" : ""}" onclick="openConvo('${c.id}')">
       <span class="t">${esc(c.title || "新对话")}</span>
+      ${sub}
       <button class="del" onclick="delConvo('${c.id}', event)" aria-label="删除">✕</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
+}
+async function clearAllConvos() {
+  if (!convos.length) { toast("没有会话可清空", ""); return; }
+  if (!confirm(`确定清空全部 ${convos.length} 个会话？此操作不可恢复。`)) return;
+  if (streaming) { try { aborter?.abort(); } catch {} streaming = false; aborter = null; updateSendBtn(); }
+  await IDB.clearAll();
+  convos = []; currentId = null;
+  clearSearch();
+  renderConvos(); renderMessages(); updateChatTop();
+  toast("已清空全部会话", "ok");
+}
+function fmtRelTime(ts) {
+  const d = Date.now() - (ts || 0);
+  if (d < 60000) return "刚刚";
+  if (d < 3600000) return Math.floor(d / 60000) + " 分钟前";
+  if (d < 86400000) return Math.floor(d / 3600000) + " 小时前";
+  const dt = new Date(ts);
+  return (dt.getMonth() + 1) + "/" + dt.getDate();
+}
+/// 启动：开库 →（首用）从 localStorage 迁移 → 全量灌入内存 → 恢复上次会话。
+/// 迁移后旧 key 删除并留标记，避免双数据源。
+async function initConvos() {
+  try { await IDB.open(); } catch (e) { toast("IndexedDB 不可用，会话仅在本页内存中", "err"); }
+  let stored = await IDB.allConvos();
+  if (!stored.length) {
+    const old = localStorage.getItem("gw_convos_v1");
+    if (old) {
+      try {
+        const list = JSON.parse(old) || [];
+        for (const c of list) {
+          await IDB.putConvo({ id: c.id, title: c.title, model: c.model, updated: c.updated });
+          for (let i = 0; i < (c.msgs || []).length; i++) await IDB.putMsg(c.id, i, c.msgs[i]);
+        }
+        stored = await IDB.allConvos();
+      } catch {}
+      localStorage.setItem("gw_convos_v1_migrated", "1");
+      localStorage.removeItem("gw_convos_v1");
+    }
+  }
+  stored.sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  convos = await Promise.all(stored.map(async c => ({ ...c, msgs: await IDB.msgsOf(c.id) })));
+  // 上次异常退出的流式消息：标记中断，避免下次打开还带光标
+  for (const c of convos) for (const m of c.msgs) {
+    if (m.streaming) { m.streaming = false; m.error = m.content ? "（生成中断）" : "（未完成）"; }
+  }
+  currentId = convos.length ? convos[0].id : null;
+  renderConvos(); renderMessages(); updateChatTop();
 }
 
 // ================= 消息渲染 =================
@@ -1037,10 +1250,32 @@ function menuResend() {
     while (j >= 0 && c.msgs[j].role !== "user") j--;
     if (j < 0) { toast("找不到对应的提问", "err"); return; }
     const um = c.msgs[j];
+    const removed = c.msgs.slice(j); // 含该提问本身，重发会原位置重新入列
     c.msgs = c.msgs.slice(0, j);
+    removed.forEach((rm, k) => IDB.deleteMsg(c.id, j + k)); // 截断的部分同步删库
     saveConvos();
     sendWith(um.content || "", clone(um.attachments));
   }
+}
+/// 删除单条消息（长按菜单）。删完更新会话元信息并重渲染。
+async function menuDelete() {
+  const el = menuMsgEl;
+  $("msg-menu").hidden = true;
+  if (!el) return;
+  const c = curConvo();
+  if (!c) return;
+  const idx = Number(el.dataset.idx);
+  if (!c.msgs[idx]) return;
+  if (streaming) { toast("正在生成，稍候再删", ""); return; }
+  c.msgs.splice(idx, 1);
+  c.updated = Date.now();
+  // 位置敏感：后续消息 idx 前移，需要整段重写；原末位记录被前移覆盖后成了
+  // 游离尾巴，按新长度（= 旧末位下标）精确删掉，避免重开后多出一条。
+  await Promise.all(c.msgs.map((m, i) => IDB.putMsg(c.id, i, m)));
+  await IDB.deleteMsg(c.id, c.msgs.length);
+  IDB.putConvo(c);
+  renderConvos(); renderMessages(); updateChatTop();
+  toast("已删除该条消息", "ok");
 }
 function updateChatTop() {
   const c = curConvo();
@@ -1120,14 +1355,20 @@ async function sendWith(text, atts) {
   const fullText = [text, spoken].filter(Boolean).join(" ");
 
   const c = ensureConvo();
+  const convoId = c.id;
+  const userIdx = c.msgs.length;
   c.msgs.push({ role: "user", content: fullText, attachments: atts, ts: Date.now() });
+  const asstIdx = c.msgs.length;
   const asst = { role: "assistant", content: "", reasoning: "", streaming: true, ts: Date.now() };
   c.msgs.push(asst);
   if (!c.title || c.title === "新对话") c.title = (fullText || "[附件]").slice(0, 24);
   c.updated = Date.now();
-  renderConvos(); renderMessages(); saveConvos(); updateChatTop();
+  // 立即可见 + 立即落库（新会话此刻才真正创建，不等防抖）
+  renderConvos(); renderMessages(); updateChatTop();
+  IDB.putConvo(c); IDB.putMsg(convoId, userIdx, c.msgs[userIdx]); IDB.putMsg(convoId, asstIdx, asst);
 
   streaming = true; updateSendBtn();
+  const myGen = ++streamGen;
   aborter = new AbortController();
   // 历史消息：排除占位 assistant 与错误消息；附件消息（可能无文字）也要带上
   const history = c.msgs.slice(0, -1)
@@ -1159,6 +1400,7 @@ async function sendWith(text, atts) {
         buf = buf.slice(idx + 2);
       }
       renderMessages();
+      markMsgDirty(convoId, asstIdx); // 流式期间节流落库：刷新/崩溃不丢已生成部分
     }
     if (buf.trim()) handleSseBlock(buf, asst);
     asst.streaming = false;
@@ -1168,15 +1410,22 @@ async function sendWith(text, atts) {
     else asst.error = "请求失败：" + String((e && e.message) || e);
     asst.streaming = false;
   } finally {
-    streaming = false; aborter = null; updateSendBtn();
-    saveConvos(); renderMessages();
+    // 终态立即落库（不等防抖），并按代号决定是否还由本流掌管全局 UI——
+    // 被新会话/新发送抢占时（myGen !== streamGen），旧流只写库不碰 UI
+    IDB.putMsg(convoId, asstIdx, asst);
+    IDB.putConvo(c);
+    if (myGen === streamGen) {
+      streaming = false; aborter = null; updateSendBtn();
+      renderMessages();
+    }
   }
 }
 
 // ================= 附件（+ 号）：照片 / 视频 / 文件 =================
-// 附件只在内存：图片转 data URL 供 vision parts 与缩略图；音频走转写；
-// 其他文件作为文字说明随消息发送（网关无文档解析端点）。
-// dataUrl / File 不落 localStorage（见 saveConvos 剥离逻辑）。
+// 图片转 data URL 供 vision parts 与缩略图；音频走转写；其他文件作为文字
+// 说明随消息发送（网关无文档解析端点）。
+// v0.9.0 起附件随消息持久化进 IndexedDB（slimAtt）：图片留 dataUrl 供刷新后
+// 渲染缩略图，音频留 Blob 供刷新后重发转写——localStorage 时代的剥离逻辑已删。
 let attachments = []; // { name, size, type, kind: "image"|"audio"|"file", dataUrl?, file }
 
 function pickFiles() { $("file-input").click(); }
@@ -2649,7 +2898,16 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("hashchange", applyRoute);
   applyRoute();
   loadAll();
-  renderConvos(); renderMessages(); updateChatTop();
+  // 会话存储已迁 IndexedDB：异步开库/迁移/灌装完成前消息区是空的，
+  // initConvos 内部会负责首渲染（先 applyRoute 让界面框架就位）。
+  initConvos();
+  // 会话搜索：输入即过滤（标题同步、内容命中异步补）
+  const searchBox = $("convo-search");
+  searchBox.addEventListener("input", debounce((e) => runSearch(e.target.value), 150));
+  searchBox.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { clearSearch(); renderConvos(); searchBox.blur(); }
+    if (e.key === "Enter") { e.preventDefault(); const first = $("convo-list").querySelector(".convo"); if (first) first.click(); }
+  });
 });
 </script>
 </body>

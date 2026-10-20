@@ -440,6 +440,45 @@ grep -q 'id=\"voice-dlg\"' "$UI" && grep -q 'function openVoiceCfg' "$UI"; check
 grep -q 'gw_voice_cfg' "$UI" && grep -q 'VoiceCfg.save' "$UI"; check "语音配置 localStorage 持久化" $? "no cfg persistence"
 grep -q 'speakMsg' "$UI" && grep -q 'await ttsPlaySentence' "$UI"; check "消息播音统一走 ttsPlaySentence（同一条递降链）" $? "speakMsg bypasses chain"
 
+echo "== 16. 聊天记录 IndexedDB 回归（v0.9.0：可删可查 / 联动视图 / 流式持久化 / 新会话）=="
+# 用户诉求「聊天记录进 IndexedDB、可删可查、可联动视图、会话流要适应、
+# 新会话目前没做好」。localStorage 三硬伤：5MB 配额（附件 dataUrl 只能
+# 剥离/60 条封顶）、同步序列化卡主线程、整坨读写做不了消息级增删与搜索。
+UI="$ROOT/src/admin_ui.html"
+# ① IDB 结构：convos/msgs 双 store + 消息复合主键（重发截断同位置覆盖不重复）
+grep -q 'createObjectStore("convos", { keyPath: "id" })' "$UI"; check "IDB convos store（keyPath id）" $? "no convos store"
+grep -q 'createObjectStore("msgs", { keyPath: \["convoId", "idx"\] })' "$UI"; check "IDB msgs store 复合主键（convoId, idx）" $? "no compound key"
+grep -q 'createIndex("by_convo", "convoId")' "$UI"; check "msgs 按会话索引（单会话加载/删除走索引）" $? "no by_convo index"
+# ② 旧数据迁移：localStorage gw_convos_v1 → IDB，迁完删旧 key 留标记（防双数据源）
+grep -q 'localStorage.getItem("gw_convos_v1")' "$UI"; check "启动时读取 localStorage 旧会话数据" $? "no migration read"
+grep -q 'localStorage.setItem("gw_convos_v1_migrated", "1")' "$UI" && grep -q 'localStorage.removeItem("gw_convos_v1")' "$UI"; check "迁移后删旧 key 留标记（无双写）" $? "old key not cleaned"
+if grep -q 'localStorage.setItem("gw_convos_v1"' "$UI"; then check "localStorage 不再作为会话存储（仅迁移读取）" 1 "still writing gw_convos_v1"; else check "localStorage 不再作为会话存储（仅迁移读取）" 0; fi
+# ③ 流式持久化：SSE 循环内节流落库 + 终态立即写 + 防抖窗口有 pagehide/visibility 兜底
+grep -q 'markMsgDirty(convoId, asstIdx); // 流式期间节流落库' "$UI"; check "流式期间消息节流落库（刷新不丢已生成部分）" $? "no streaming persist"
+grep -q 'IDB.putMsg(convoId, asstIdx, asst);' "$UI"; check "流式终态立即落库（不等防抖）" $? "no final write"
+grep -q 'window.addEventListener("pagehide", flushPending)' "$UI" && grep -q 'visibilitychange' "$UI"; check "挂起写有 pagehide + visibilitychange 双兜底冲刷" $? "no flush on hide"
+# ④ 新会话修复：开新对话先收尾旧流（streamGen 抢占），否则发送键还是旧流停止键
+grep -q 'streamGen++' "$UI"; check "newConvo 抢占旧流代号（新对话能正常发送）" $? "no stream preempt"
+grep -q 'if (myGen === streamGen) {' "$UI"; check "旧流 finally 按代号决定是否掌管 UI（不覆盖新会话状态）" $? "no gen guard"
+# ⑤ 可删：会话级 / 消息级 / 全部清空
+grep -q 'await IDB.deleteConvo(id)' "$UI"; check "删除会话同步删库（convos + 全部 msgs）" $? "convo not deleted"
+grep -q 'async function menuDelete' "$UI" && grep -q 'IDB.deleteMsg(c.id, c.msgs.length)' "$UI"; check "消息级删除 + idx 前移后尾部游离记录精确清理" $? "msg delete broken"
+grep -q 'async function clearAllConvos' "$UI" && grep -q 'IDB.clearAll()' "$UI"; check "一键清空全部会话（confirm 防误触）" $? "no clear all"
+# ⑥ 可查：侧栏搜索框，标题即过滤 + 消息内容跨会话命中
+grep -q 'id="convo-search"' "$UI" && grep -q 'async function runSearch' "$UI"; check "侧栏会话搜索（标题 / 内容）" $? "no search"
+grep -q 'searchHits\[m.convoId\]' "$UI"; check "内容命中按会话聚合（侧栏显示片段）" $? "no hit grouping"
+# ⑦ 可联动视图：搜索/删除/打开全部走同一 render 链路；附件随消息持久化
+grep -q 'function renderConvos()' "$UI" && grep -q 'searchHits\[c.id\]' "$UI"; check "搜索态侧栏过滤（命中高亮 + 空态文案）" $? "no filtered render"
+grep -q 'if (a.kind === "image" && a.dataUrl) base.dataUrl = a.dataUrl' "$UI"; check "图片 dataUrl 持久化（刷新后缩略图不丢）" $? "no dataUrl persist"
+grep -q 'if (a.kind === "audio" && a.file) base.file = a.file' "$UI"; check "音频 Blob 持久化（刷新后重发转写仍可用）" $? "no audio persist"
+# ⑧ 流式中断恢复：上次异常退出的流式消息重开标记中断，不再带光标
+grep -q 'm.streaming = false; m.error = m.content ? "（生成中断）" : "（未完成）"' "$UI"; check "异常退出的流式消息重开标记中断" $? "no interrupt recovery"
+# ⑨ 重发截断同步删库（否则重开后旧消息复活）
+grep -q 'removed.forEach((rm, k) => IDB.deleteMsg(c.id, j + k))' "$UI"; check "重新生成截断的消息同步删库" $? "truncated msgs not deleted"
+# ⑩ toast 不得拦截点击：底部输入区在 toast 悬浮的 4.6s 内必须可点
+#    （实测缺陷：.toast 单独开 pointer-events:auto，清空会话后马上点发送没反应）
+if grep -A1 '#toast { position: fixed' "$UI" | grep -q 'pointer-events: none' && ! grep '\.toast {' "$UI" | grep -q 'pointer-events: auto'; then check "toast 纯通知不拦截点击（底部区域随时可点）" 0; else check "toast 纯通知不拦截点击（底部区域随时可点）" 1 "toast still intercepts clicks"; fi
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null
