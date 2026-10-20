@@ -249,6 +249,13 @@
   .mp-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--dim); }
   .mp-pager button { width: 32px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; }
   .mp-pager button:disabled { opacity: .35; }
+  .mp-ctx-toggle { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .mp-ctx-toggle input { margin-top: 2px; flex: none; }
+  .mp-ctx-toggle em { display: block; font-style: normal; font-size: 11px; opacity: .75; margin-top: 2px; }
+  /* 换模型后的上下文边界：把「上面是上一个模型说的」标清楚，避免误读成同一个模型前后矛盾 */
+  .ctx-div { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; font-size: 11px; color: var(--dim); }
+  .ctx-div::before, .ctx-div::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .ctx-div span { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
   /* 输入区左侧：附件 + 语音（长按） */
   #btn-attach, #btn-voice { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--dim); font-size: 16px; display: flex; align-items: center; justify-content: center; padding: 0; margin-bottom: 2px; user-select: none; -webkit-user-select: none; }
   #btn-voice { touch-action: none; }
@@ -1023,6 +1030,10 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <div id="mp-current" class="mp-current"></div>
   <div id="model-list"></div>
   <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button></div>
+  <label class="mp-ctx-toggle" title="换模型时把上下文边界重置，避免新模型照抄上一个模型的回答（例如「我是 ChatGLM」）">
+    <input type="checkbox" id="ctx-reset-toggle" onchange="setCtxReset(this.checked)">
+    <span>换模型时重置上下文<em>防止新模型照抄上一个模型的自我描述</em></span>
+  </label>
   <div class="dlg-actions"><button onclick="modelDlg.close()">关闭</button></div>
 </dialog>
 
@@ -1110,6 +1121,10 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <div style="display:flex;gap:8px">
     <input id="selftest-model" placeholder="cohere/north-mini-code:free" style="flex:1" />
     <button onclick="selftestModel()">自检</button>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:8px">
+    <button onclick="selftestAll()">体检全部可用模型</button>
+    <span class="muted" style="font-size:11px;align-self:center">逐个单轮探测，最多 12 个，会消耗少量额度</span>
   </div>
   <pre id="selftest-body" class="mono" style="background:#0d1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;white-space:pre-wrap;margin-top:8px"></pre>
 
@@ -1396,6 +1411,11 @@ function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTi
 let convos = [];            // 内存全量（UI 数据源，按 updated 倒序），IDB 是持久镜像
 let currentId = null;       // null = 新对话（还没落库的空白态）
 let curModel = localStorage.getItem("gw_model") || "";
+// 换模型是否重置上下文边界。默认开：会话历史里上一个模型说过的话（尤其是
+// 「我是 ChatGLM」这类自我描述）会被新模型整段照抄，表现为「换什么模型都一个答案」。
+const CTX_RESET_KEY = "gw_ctx_reset";
+function ctxResetOn() { try { return localStorage.getItem(CTX_RESET_KEY) !== "0"; } catch { return true; } }
+function setCtxReset(on) { try { localStorage.setItem(CTX_RESET_KEY, on ? "1" : "0"); } catch {} toast(on ? "换模型将重置上下文" : "换模型保留上下文", on ? "ok" : "warn"); }
 let streaming = false, aborter = null;
 let streamGen = 0;          // 流代号：新会话/新发送抢占时，旧流的 finally 只落库不碰 UI
 
@@ -1513,7 +1533,7 @@ function newConvo() {
 function ensureConvo() {
   let c = curConvo();
   if (!c) {
-    c = { id: "c" + Date.now().toString(36), title: "新对话", model: curModel, msgs: [], updated: Date.now() };
+    c = { id: "c" + Date.now().toString(36), title: "新对话", model: curModel, ctxStart: 0, msgs: [], updated: Date.now() };
     convos.unshift(c); currentId = c.id;
     IDB.putConvo(c);
   }
@@ -1762,6 +1782,10 @@ function renderMessages() {
     return;
   }
   col.innerHTML = c.msgs.map((m, i) => {
+    // 上下文边界：只做视觉分隔，不参与消息/请求
+    if (m.role === "divider") {
+      return `<div class="ctx-div" data-idx="${i}"><span>${esc(m.text || "上下文已重置")}</span></div>`;
+    }
     if (m.role === "user") {
       const chips = (m.attachments || []).map(a => {
         if (a.dataUrl) return `<img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">`;
@@ -2150,8 +2174,11 @@ async function sendWith(text, atts) {
   streaming = true; updateSendBtn();
   const myGen = ++streamGen;
   aborter = new AbortController();
-  // 历史消息：排除占位 assistant 与错误消息；附件消息（可能无文字）也要带上
-  const history = c.msgs.slice(0, -1)
+  // 历史消息：从**上下文边界**往后取（换过模型就只剩边界后的消息），
+  // 排除占位 assistant 与错误消息；附件消息（可能无文字）也要带上。
+  // 边界之前的内容仍显示在界面上，只是不再发给上游——避免新模型照抄旧模型的自述。
+  const ctxStart = Math.min(c.ctxStart || 0, Math.max(0, c.msgs.length - 1));
+  const history = c.msgs.slice(ctxStart, -1)
     .filter(m => (m.role === "user" || m.role === "assistant") && !m.error && (m.content || (m.attachments && m.attachments.length)))
     .map(m => ({ role: m.role, content: buildApiContent(m) }));
   // skill 独立表达线：选中 skill 时，把其提示词作为 system 消息注入本轮对话
@@ -2967,6 +2994,8 @@ function openCallModelPicker() {
     modelDlg.close();
     if (callOpen) $("call-status").textContent = "已切换模型：" + (m || "自动") + "，按住按钮继续说话";
   });
+  // 通话页没有"上下文"概念，隐藏聊天页专用的重置开关
+  const ctLabel = $("ctx-reset-toggle")?.closest("label"); if (ctLabel) ctLabel.hidden = true;
   modelDlg.showModal();
 }
 function openCall() {
@@ -3408,6 +3437,8 @@ function openModelPicker() {
   mpTab = "text";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === "text"));
   const s = $("model-search"); if (s) s.value = "";
+  const ct = $("ctx-reset-toggle"); if (ct) ct.checked = ctxResetOn();
+  const ctLabel = ct?.closest("label"); if (ctLabel) ctLabel.hidden = false;
   renderModelList(); modelDlg.showModal();
 }
 // 各标签的候选来源：
@@ -3506,9 +3537,38 @@ function pickModel(m) {
   curModel = m;
   try { localStorage.setItem("gw_model", m); } catch {}
   // 每次模型选择 +1（自动条目同样计分）。只有真正换了模型才算「一次选择」。
-  if (changed) Points.add("sel", m || AUTO_KEY);
+  if (changed) {
+    Points.add("sel", m || AUTO_KEY);
+    markCtxBoundary(m);
+  }
   updateChatTop();
   modelDlg.close();
+}
+
+/// 换模型时在当前会话里打一条上下文边界。
+///
+/// 为什么必须做：网关会把整段 `messages` 原样发给上游，而小模型极易照抄上一条
+/// assistant 的自述。历史里只要有「我的模型名称是 ChatGLM」，新选的模型就会跟着
+/// 说自己是 ChatGLM——用户看到的就是「换什么模型都变成 GLM」。
+/// 打点后请求只带边界之后的消息：用户自己的提问保留，上一个模型说过的话不再喂进去。
+function markCtxBoundary(m) {
+  if (!ctxResetOn()) return;
+  const c = curConvo();
+  if (!c || !c.msgs.length) return;           // 空会话没有可重置的上下文
+  const last = c.msgs[c.msgs.length - 1];
+  // 连续切换同一个模型、或末尾已经是同一模型的边界，不重复打点
+  if (last && last.role === "divider" && (last.model || "") === (m || "")) return;
+  const idx = c.msgs.length;
+  c.msgs.push({
+    role: "divider",
+    model: m || "",
+    text: m ? `已切换到 ${m} · 上下文已重置` : "已切换到自动选路 · 上下文已重置",
+    ts: Date.now(),
+  });
+  c.ctxStart = idx;
+  c.updated = Date.now();
+  IDB.putMsg(c.id, idx, c.msgs[idx]); IDB.putConvo(c);
+  renderMessages(); updateChatTop();
 }
 
 // ================= 模型管理（数据 + 渲染 + 操作） =================
@@ -4620,6 +4680,44 @@ async function showDiag() {
 // 模型自检：单轮空历史探测「能不能用 + 到底谁在回答」。
 // 客户端聊天会把整段历史带上，小模型容易照抄上一条的自我描述（表现为
 // "换什么模型都回答同一个名字"）；这里用空历史问一次，并读回上游自报的 model。
+// 批量体检：把当前「可用渠道」里的模型逐个单轮探测一遍，
+// 直接回答「这么多模型到底哪些能用」。串行执行，避免并发打爆上游限流。
+async function selftestAll() {
+  const seen = new Set();
+  const list = [];
+  for (const c of usableChatChannels()) {
+    for (const m of effModels(c)) {
+      if (m.enabled === false) continue;
+      if (!m.name || seen.has(m.name)) continue;
+      seen.add(m.name); list.push(m.name);
+    }
+  }
+  if (!list.length) { $("selftest-body").textContent = "没有可用渠道（需启用且登记 Key）"; return; }
+  const targets = list.slice(0, 12);
+  const out = [];
+  $("selftest-body").textContent = `体检 ${targets.length} 个模型…`;
+  for (let i = 0; i < targets.length; i++) {
+    const model = targets[i];
+    $("selftest-body").textContent = `体检 ${i + 1}/${targets.length}：${model} …`;
+    try {
+      const j = await api("/models/test", "POST", { model });
+      const r = (j.results || [])[0] || {};
+      const bits = [j.verdict];
+      if (r.http_status) bits.push(`HTTP ${r.http_status}`);
+      if (r.latency_ms != null) bits.push(`${r.latency_ms}ms`);
+      if (r.served_model && !r.served_matches) bits.push(`上游换成 ${r.served_model}`);
+      if (r.note) bits.push(r.note);
+      if (r.error) bits.push(r.error);
+      out.push(`${j.verdict === "ok" ? "✅" : j.verdict === "channel-not-ready" ? "⏸" : "❌"} ${model}  —  ${bits.join(" · ")}`);
+    } catch (e) {
+      out.push(`❌ ${model}  —  ${e.message}`);
+    }
+  }
+  const ok = out.filter(s => s.startsWith("✅")).length;
+  $("selftest-body").textContent = `可用 ${ok}/${targets.length}\n\n` + out.join("\n");
+  toast(`体检完成：${ok}/${targets.length} 个模型可用`, ok ? "ok" : "warn");
+}
+
 async function selftestModel() {
   const model = $("selftest-model").value.trim();
   if (!model) { toast("先填模型名", "warn"); return; }
