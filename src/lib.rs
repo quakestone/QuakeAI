@@ -801,7 +801,10 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // ---- 能力判定：消息里含图片（image_url parts）→ vision，否则 text ----
+    // ---- 能力判定（统一视觉甄别）：消息里含图片/视频（image_url / video_url
+    // parts）→ vision，否则 text。want_kind 只决定"要哪种能力"，真正的
+    // （渠道×模型）候选挑选全部交给下方同一个 pick_model_attempts —— 视觉与
+    // 文本共用同一套排序/兜底/冷却逻辑，不存在两套分支。 ----
     let want_kind = if payload_has_image(&payload) { "vision" } else { "text" };
 
     // ---- 渠道（账本动态优先，回退静态）----
@@ -876,7 +879,10 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     }
 }
 
-/// 请求体里是否含图片（OpenAI vision parts：content 数组中的 image_url 元素）。
+/// 视觉甄别：请求体里是否含图片/视频（OpenAI vision parts：content 数组中的
+/// `image_url` / `video_url` 元素）。任一命中即视为需要视觉能力（want_kind=vision），
+/// 由统一的 pick_model_attempts 路由到带 vision 能力的（渠道×模型）。
+/// 多模态 omni 模型（nemotron-nano-omni / inkling）也能消费 video_url。
 fn payload_has_image(payload: &serde_json::Value) -> bool {
     payload
         .get("messages")
@@ -887,7 +893,10 @@ fn payload_has_image(payload: &serde_json::Value) -> bool {
                     .and_then(|c| c.as_array())
                     .map(|parts| {
                         parts.iter().any(|p| {
-                            p.get("type").and_then(|t| t.as_str()) == Some("image_url")
+                            matches!(
+                                p.get("type").and_then(|t| t.as_str()),
+                                Some("image_url") | Some("video_url")
+                            )
                         })
                     })
                     .unwrap_or(false)
@@ -1201,7 +1210,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
 #[cfg(test)]
 mod tests {
-    use super::{header_safe, resolve_stt_model, resolve_tts_model};
+    use super::{header_safe, payload_has_image, resolve_stt_model, resolve_tts_model};
     use crate::channels::default_overseas_channels;
 
     /// 版本号单一事实源：admin.rs 的 VERSION 与 /health 的字面量都必须来自
@@ -1211,7 +1220,7 @@ mod tests {
     #[test]
     fn version_single_source_of_truth() {
         assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(crate::admin::VERSION, "0.12.0");
+        assert_eq!(crate::admin::VERSION, "0.13.0");
     }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1
@@ -1315,10 +1324,54 @@ mod tests {
             assert!(c.models_meta.iter().any(|m| m.kind == "vision"), "{} 必须至少登记一个视觉模型", c.id);
         }
 
+        // OpenRouter 种子应补齐全部免费视觉/多模态模型（此前只列了 gemma-4-31b）
+        let or = os.iter().find(|c| c.id == "seed-openrouter-chat").unwrap();
+        let or_names: Vec<&str> = or.models_meta.iter().map(|m| m.name.as_str()).collect();
+        for m in [
+            "google/gemma-4-26b-a4b-it:free",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "thinkingmachines/inkling:free",
+            "thinkingmachines/inkling-small:free",
+        ] {
+            assert!(or_names.contains(&m), "OpenRouter 种子漏了免费视觉模型：{m}");
+        }
+        // 此前误标为 text 的两个视觉模型应修正为 vision
+        for m in ["qwen/qwen3.8-27b:free", "openrouter/free"] {
+            let meta = or.models_meta.iter().find(|x| x.name == m).unwrap();
+            assert_eq!(meta.kind, "vision", "{m} 应为视觉能力");
+        }
+
         // 时间戳字段填充
         for c in &os {
             assert_eq!(c.created_at, now);
             assert_eq!(c.updated_at, now);
         }
+    }
+
+    /// 视觉甄别：image_url / video_url 命中→vision；纯文本/畸形→text。
+    #[test]
+    fn payload_vision_detection() {
+        let img = serde_json::json!({
+            "messages": [{"role":"user","content":[
+                {"type":"text","text":"图里是?"},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,AAA"}}
+            ]}]
+        });
+        assert!(payload_has_image(&img), "image_url 应触发 vision");
+
+        let vid = serde_json::json!({
+            "messages": [{"role":"user","content":[
+                {"type":"video_url","video_url":{"url":"data:video/mp4;base64,BBB"}}
+            ]}]
+        });
+        assert!(payload_has_image(&vid), "video_url 应触发 vision（多模态 omni 模型）");
+
+        let txt = serde_json::json!({
+            "messages": [{"role":"user","content":"你好"}]
+        });
+        assert!(!payload_has_image(&txt), "纯文本不应触发 vision");
+
+        let broken = serde_json::json!({});
+        assert!(!payload_has_image(&broken), "畸形体不应触发 vision");
     }
 }

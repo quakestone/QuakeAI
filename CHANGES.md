@@ -1,5 +1,15 @@
 # CHANGES
 
+## v0.13.0（2026-10-20）—— 海外视觉全量对接（免费视觉模型补列 / video_url 甄别 / 统一选择逻辑）
+
+用户指令：「把海外视觉模型全部对接补上」+「视觉模型管理要对接聊天的视觉甄别自动切换视觉模型 与文本模型的选择一个逻辑的」。
+
+- **OpenRouter 免费视觉模型全量补列**：此前海外融合只列了 `gemma-4-31b-it:free` 一个视觉 `:free`，漏了 OpenRouter 免费层其余视觉/多模态模型。本次在 `seed-openrouter-chat` 补齐 `google/gemma-4-26b-a4b-it:free`（MoE 3.8B 激活、图+文+视频）、`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`（图+视频+音频 omni）、`thinkingmachines/inkling:free` 与 `thinkingmachines/inkling-small:free`（1M 上下文、图+音频），共 **7 个免费视觉模型**可轮换防 429。
+- **修正两处误标**：`qwen/qwen3.8-27b:free`（图+文+视频）与 `openrouter/free`（自动路由，含视觉免费模型）由 `text` 改为 `vision`。`openrouter/free` 优先级置顶（100），image_url 直接走自动路由、由 OpenRouter 服务端再选最优免费视觉模型。
+- **视觉甄别增强**：`payload_has_image()` 现同时识别 `video_url`（原仅 `image_url`），视频附件也路由到视觉/多模态渠道，适配 omni 模型。
+- **统一选择逻辑确认**：视觉与文本共用同一引擎——`payload_has_image()` 判定 `want_kind`（vision/text），`pick_model_attempts()` 单一函数处理 text/vision/stt/tts 四类候选排序/兜底/冷却，不存在两套分支。
+- 验证：e2e **208/208**（§19 含海外视觉兜底路由 + 新视觉模型清单 + video_url 甄别实测）+ 单测 **13/13**（`payload_vision_detection` 新增 + `overseas_seed_channels_well_formed` 扩展）。
+
 ## v0.12.0（2026-10-20）—— 海外模型融合（OpenRouter / Groq / NVIDIA NIM 一键载入兜底）
 
 用户指令：「把国外的那几个模型都融和进来」。此前三个海外预设（OpenRouter /

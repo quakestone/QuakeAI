@@ -641,7 +641,7 @@ EOF
 node "$ROOT/.origin-test.mjs" >/dev/null 2>&1; check "shareOrigin 平台域回落/子域推断真实单测（node + location stub）" $? "origin logic broken"
 rm -f "$ROOT/.origin-extract.mjs" "$ROOT/.origin-fns.mjs" "$ROOT/.origin-test.mjs"
 
-echo "== 19. v0.12.0：海外模型融合（一键载入国内+海外 / 兜底路由 / 海外视觉承接）=="
+echo "== 19. v0.13.0：海外视觉全量对接（免费视觉模型补列 / video_url 甄别 / 兜底路由）=="
 stop_workerd
 start_workerd workerd.config.capnp; check "workerd(海外融合) 已就绪" $? "worker not reachable"
 # 19.1 seed 现在载入 6 条（国内 3 + 海外 3），全部 disabled 待登记
@@ -662,7 +662,7 @@ curl -s -X PUT http://127.0.0.1:8787/admin/api/channels/seed-openrouter-chat -H 
   -d '{"enabled":true,"api_key":"test-key-local","base_url":"http://127.0.0.1:8788"}' > /dev/null
 rm -f "$MOCK_LOG"; touch "$MOCK_LOG"
 VIS=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":[{"type":"text","text":"图里是什么"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}]}')
-echo "$VIS" | grep -q 'gemma-4-31b-it:free'; check "海外视觉模型 gemma-4-31b-it:free 承接 image_url（国内全挂时兜底）" $? "$VIS"
+echo "$VIS" | grep -q 'gemma-4-31b-it:free\|openrouter/free'; check "海外视觉模型（gemma-4-31b-it:free / openrouter/free 自动路由）承接 image_url（国内全挂时兜底）" $? "$VIS"
 # 纯文本仍走海外 text 模型（同渠道多能力互不干扰）
 TXT=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"你好"}]}')
 echo "$TXT" | grep -q 'openrouter/free\|nemotron-3-super\|qwen3.8\|cohere'; check "纯文本走海外 text 模型（与视觉互通）" $? "$TXT"
@@ -673,6 +673,18 @@ PJ=$(curl -s http://127.0.0.1:8787/admin/api/channels)
 echo "$PJ" | grep -qF 'openrouter/free'; check "预设 OpenRouter 含现行 :free 自动路由模型" $? "no openrouter/free"
 echo "$PJ" | grep -qF 'llama-3.2-11b-vision-preview'; check "预设 Groq 含视觉模型 llama-3.2-11b-vision-preview" $? "no groq vision"
 echo "$PJ" | grep -qF 'nemotron-3.5-super-vl-120b-a12b'; check "预设 NVIDIA NIM 含视觉模型 nemotron-3.5-super-vl" $? "no nim vision"
+
+# 19.4 OpenRouter 种子已补列全部免费视觉/多模态模型 + 误标修正（qwen3.8、openrouter/free → vision）
+CH=$(curl -s http://127.0.0.1:8787/admin/api/channels | python3 -c 'import json,sys; chs=json.load(sys.stdin)["channels"]; print(json.dumps([c for c in chs if c["id"]=="seed-openrouter-chat"][0]))')
+for m in "google/gemma-4-26b-a4b-it:free" "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" "thinkingmachines/inkling:free" "thinkingmachines/inkling-small:free"; do
+  echo "$CH" | grep -qF "$m"; check "OpenRouter 种子含免费视觉模型 $m" $? "missing $m"
+done
+# 此前误标 text 的 qwen3.8 与 openrouter/free 现应为 vision
+echo "$CH" | python3 -c 'import json,sys; c=json.load(sys.stdin); mm={m["name"]:m["kind"] for m in c["models_meta"]}; ok=mm.get("qwen/qwen3.8-27b:free")=="vision" and mm.get("openrouter/free")=="vision"; sys.exit(0 if ok else 1)'; check "qwen3.8 / openrouter/free 已修正为 vision" $? "$CH"
+
+# 19.5 视觉甄别增强：video_url 同样走 vision 路由（多模态 omni 模型）
+VVIS=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":[{"type":"video_url","video_url":{"url":"data:video/mp4;base64,AAAA"}}]}]}')
+echo "$VVIS" | grep -q 'gemma-4-31b-it:free\|openrouter/free'; check "video_url 也路由到海外视觉模型（omni 兜底）" $? "$VVIS"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

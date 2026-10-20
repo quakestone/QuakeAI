@@ -273,7 +273,7 @@ pub const PRESETS: &[Preset] = &[
     Preset { provider: "spark", name: "讯飞星火 Spark", base_url: "https://spark-api.xf-yun.com/v1", models: &["4.0Ultra"], tier: "T2", kind: "chat", region: "CN", free_tier: "注册赠免费额度", doc: "https://xinghuo.xfyun.cn/" },
     Preset { provider: "zhipu-audio", name: "智谱语音（GLM-ASR / GLM-TTS）", base_url: "https://open.bigmodel.cn/api/paas/v4", models: &["glm-asr-2512", "glm-tts"], tier: "T2", kind: "audio", region: "CN", free_tier: "语音转写 /audio/transcriptions + 播音 /audio/speech", doc: "https://open.bigmodel.cn/" },
     // ---- 海外补充（低优先，边缘部署时启用） ----
-    Preset { provider: "openrouter", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", models: &["openrouter/free", "nvidia/nemotron-3-super-120b-a12b:free", "qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free", "cohere/north-mini-code:free"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "17 个 :free 模型（多数 50/天，部分 1000/天）免卡；避 poolside 10-31 到期", doc: "https://openrouter.ai/" },
+    Preset { provider: "openrouter", name: "OpenRouter", base_url: "https://openrouter.ai/api/v1", models: &["openrouter/free", "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free", "qwen/qwen3.8-27b:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "thinkingmachines/inkling:free", "nvidia/nemotron-3-super-120b-a12b:free", "cohere/north-mini-code:free"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "20+ 个 :free 免卡模型（多数 50/天，部分 1000/天），含 7 个免费视觉/多模态；避 poolside 10-31 到期", doc: "https://openrouter.ai/" },
     Preset { provider: "groq", name: "Groq", base_url: "https://api.groq.com/openai/v1", models: &["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama-3.2-11b-vision-preview"], tier: "T1", kind: "chat", region: "OVERSEAS", free_tier: "免费层 14400 RPD / 30 RPM 免卡", doc: "https://groq.com/" },
     Preset { provider: "nvidia", name: "NVIDIA NIM", base_url: "https://integrate.api.nvidia.com/v1", models: &["nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-super-vl-120b-a12b", "deepseek-ai/deepseek-v4.1-flash", "meta/llama-3.3-70b-instruct"], tier: "T0", kind: "chat", region: "OVERSEAS", free_tier: "约 40 RPM 免卡，100+ 模型", doc: "https://build.nvidia.com/" },
 ];
@@ -374,15 +374,19 @@ pub fn default_overseas_channels(now_iso: &str) -> Vec<Channel> {
     };
     vec![
         mk("openrouter", "OpenRouter（海外兜底）", "https://openrouter.ai/api/v1",
-           &["openrouter/free", "nvidia/nemotron-3-super-120b-a12b:free", "qwen/qwen3.8-27b:free", "google/gemma-4-31b-it:free", "cohere/north-mini-code:free"], "T0", "chat", 40,
-           "海外聚合网关，17 个 :free 免卡模型（多数 50/天，部分 1000/天）。国内全挂时兜底；需 Key + 可能需科学上网。避 poolside 10-31 到期。",
+           &["openrouter/free", "google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free", "qwen/qwen3.8-27b:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "thinkingmachines/inkling:free", "thinkingmachines/inkling-small:free", "nvidia/nemotron-3-super-120b-a12b:free", "cohere/north-mini-code:free"], "T0", "chat", 40,
+           "海外聚合网关，20+ 个 :free 免卡模型（多数 50/天，部分 1000/天），含 7 个免费视觉/多模态模型可轮换防 429。国内全挂时兜底；需 Key + 可能需科学上网。避 poolside 10-31 到期。",
            &["text", "vision"],
            vec![
-               mm("openrouter/free", "text", 100),
-               mm("nvidia/nemotron-3-super-120b-a12b:free", "text", 90),
-               mm("qwen/qwen3.8-27b:free", "text", 80),
-               mm("google/gemma-4-31b-it:free", "vision", 70),
-               mm("cohere/north-mini-code:free", "text", 60),
+               mm("openrouter/free", "vision", 100),
+               mm("google/gemma-4-31b-it:free", "vision", 95),
+               mm("google/gemma-4-26b-a4b-it:free", "vision", 90),
+               mm("qwen/qwen3.8-27b:free", "vision", 85),
+               mm("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "vision", 80),
+               mm("thinkingmachines/inkling:free", "vision", 75),
+               mm("thinkingmachines/inkling-small:free", "vision", 70),
+               mm("nvidia/nemotron-3-super-120b-a12b:free", "text", 60),
+               mm("cohere/north-mini-code:free", "text", 50),
            ]),
         mk("groq", "Groq（海外兜底）", "https://api.groq.com/openai/v1",
            &["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "llama-3.2-11b-vision-preview"], "T1", "chat", 35,
