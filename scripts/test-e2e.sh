@@ -325,6 +325,9 @@ echo "$VIS" | grep -q 'glm-4v-flash'; check "image_url 请求路由到 vision �
 # 纯文本请求：want_kind=text → 应选 glm-4-flash
 TXT=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"你好"}]}')
 echo "$TXT" | grep -q 'glm-4-flash'; check "纯文本请求路由到 text 模型 glm-4-flash" $? "$TXT"
+# 回归：即便 glm-4v-flash(vision) 的 priority(80) 高于 glm-4-flash(text) 的 50，
+# 纯文本也必须选主能力命中的 glm-4-flash —— alt_kind/primary_rank 排序保证。
+# （曾一度用「vision⊃text 一律放宽」实现，导致这里错选 glm-4v-flash 而回归失败。）
 
 echo "== 14.2 跨渠道 Key 复用：音频渠道无 Key，借同 provider 聊天渠道 Key =="
 curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
@@ -697,8 +700,13 @@ echo "$DS" | grep -q 'deepseek-v4-pro'; check "DeepSeek 种子含旗舰 deepseek
 echo "$DS" | grep -qF 'deepseek-v4-flash-vision-exp'; [ $? -ne 0 ]; check "已下线模型 deepseek-v4-flash-vision-exp 已移除" $? "$DS"
 # 单价档案：Flash 命中 0.02 / 未命中 1 / 输出 2（CNY 每百万 token）
 echo "$DS" | python3 -c 'import json,sys; c=json.load(sys.stdin); m={x["name"]:x for x in c["models_meta"]}.get("deepseek-flash") or {}; ok=m.get("price_in_hit")==0.02 and m.get("price_in_miss")==1.0 and m.get("price_out")==2.0 and m.get("currency")=="CNY"; sys.exit(0 if ok else 1)'; check "DeepSeek Flash 单价档案 0.02/1/2 CNY" $? "$DS"
-# 视觉能力必须落在 deepseek-flash（原生支持 image 输入），pro 为纯文本
-echo "$DS" | python3 -c 'import json,sys; c=json.load(sys.stdin); k={x["name"]:x["kind"] for x in c["models_meta"]}; ok=k.get("deepseek-flash")=="vision" and k.get("deepseek-v4-pro")=="text"; sys.exit(0 if ok else 1)'; check "DeepSeek 视觉落在 deepseek-flash、pro 为 text" $? "$DS"
+# deepseek-flash 主能力 text（主力低价模型）+ 次要能力 vision（原生支持 image 输入）；
+# v4-pro 纯 text 无 alt。caps 需含 vision。
+echo "$DS" | python3 -c 'import json,sys
+c=json.load(sys.stdin); m={x["name"]:x for x in c["models_meta"]}
+f=m.get("deepseek-flash") or {}; p=m.get("deepseek-v4-pro") or {}
+ok = f.get("kind")=="text" and f.get("alt_kind")=="vision" and p.get("kind")=="text" and not p.get("alt_kind") and "vision" in c["caps"]
+sys.exit(0 if ok else 1)'; check "deepseek-flash 双能力(text+vision)、pro 纯 text、caps 含 vision" $? "$DS"
 # 渠道默认 disabled + priority 70（低于国内 80~100、高于海外 40/35/30）
 echo "$DS" | python3 -c 'import json,sys; c=json.load(sys.stdin); ok=(c["enabled"] is False) and c["priority"]==70; sys.exit(0 if ok else 1)'; check "DeepSeek 种子默认 disabled、priority 70" $? "$DS"
 echo "$SEED" | python3 -c 'import json,sys; pr={c["id"]:c["priority"] for c in json.load(sys.stdin)["channels"]}; ok=pr["seed-deepseek-chat"]<pr["seed-siliconflow-chat"] and pr["seed-deepseek-chat"]>pr["seed-openrouter-chat"]; sys.exit(0 if ok else 1)'; check "DeepSeek 优先级夹在国内(80/90)与海外(40)之间" $? ""
@@ -720,6 +728,16 @@ echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if
 echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d["totals"]; ok=t["prompt_tokens"]>=14 and t["completion_tokens"]>=18 and t["total_tokens"]>=32 and t["cache_hit_tokens"]>=2; sys.exit(0 if ok else 1)'; check "token 解析正确（prompt/completion/total/cache_hit 累加）" $? "$RAW"
 # 按源分组含 deepseek，按 源×模型 分组含 deepseek|deepseek-flash
 echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=any(o["key"]=="deepseek" for o in d["by_provider"]) and any(o["key"].startswith("deepseek|") for o in d["by_model"]); sys.exit(0 if ok else 1)'; check "聚合含按源 deepseek 与 源×模型 分组" $? "$RAW"
+# 关键回归：纯文本必须命中 deepseek-flash。此前它被标成 kind=vision，纯文本请求
+# 把它整条过滤掉，DeepSeek 流量全落到更贵的 deepseek-v4-pro。修法是 alt_kind。
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); ks=[o["key"] for o in d["by_model"]]; sys.exit(0 if "deepseek|deepseek-flash" in ks else 1)'; check "纯文本命中 deepseek-flash（alt_kind 兜底生效）" $? "$RAW"
+echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); ks=[o["key"] for o in d["by_model"]]; sys.exit(0 if "deepseek|deepseek-v4-pro" not in ks else 1)'; check "纯文本未误用更贵的 deepseek-v4-pro" $? "$RAW"
+# 视觉请求同样命中 deepseek-flash（复用同一引擎的能力筛选）
+rm -f "$MOCK_LOG"; touch "$MOCK_LOG"
+curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":[{"type":"text","text":"图里是什么"},{"type":"image_url","image_url":{"url":"data:image/png;base64,iVBORw0KGgo="}}]}]}' > /dev/null
+sleep 1
+DSV=$(curl -s http://127.0.0.1:8787/admin/api/usage | python3 -c 'import json,sys; d=json.load(sys.stdin); ks=[o["key"] for o in d["by_model"]]; sys.exit(0 if "deepseek|deepseek-flash" in ks else 1)')
+check "视觉请求也命中 deepseek-flash（原生支持 image 输入）" $? "$DSV"
 echo "$RAW" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=len(d["by_day"])>=1 and all(len(o["key"])==10 for o in d["by_day"]); sys.exit(0 if ok else 1)'; check "按自然日分组（YYYY-MM-DD）" $? "$RAW"
 
 # 20.3 成本折算：mock 单次 7/9/16 token、Flash 价 0.02/1/2 CNY 每百万
@@ -739,7 +757,22 @@ HDR=$(sed 's/^\xef\xbb\xbf//' /tmp/us_body | head -1)
 grep -q ',deepseek-' /tmp/us_body; check "CSV 含 deepseek 数据行" $? "$(cat /tmp/us_body)"
 grep -q '^gateway,' /tmp/us_body; check "CSV 数据行以 gateway 标识（本方网关账本）" $? "$(cat /tmp/us_body)"
 
-# 20.5 管理页用量面板已挂载
+# 20.5 管理页 alt_kind 编辑支持（双能力模型可被正确录入与展示）
+UI0=$(curl -s http://127.0.0.1:8787/admin)
+echo "$UI0" | grep -q 'class="mm-alt"'; check "模型行支持次要能力(alt_kind)下拉" $? "no mm-alt"
+echo "$UI0" | grep -q 'r.querySelector(".mm-alt")'; check "保存时读取 alt_kind" $? "no read alt_kind"
+echo "$UI0" | grep -q 'capBadge(m.kind, m.alt_kind)'; check "模型行同时渲染主+次能力徽章" $? "no alt badge"
+echo "$UI0" | grep -q 'cap-badge.alt'; check "次要能力徽章有区分样式（虚线）" $? "no alt style"
+echo "$UI0" | grep -q 'm.alt_kind === modelFilter'; check "能力筛选含 alt_kind 命中" $? "no alt filter"
+# 前端改完跑一遍真实往返：编辑 deepseek-flash 的 alt_kind 并保存，账本应落库
+curl -s -X PUT http://127.0.0.1:8787/admin/api/channels/seed-deepseek-chat -H 'Content-Type: application/json' \
+  -d '{"models_meta":[{"name":"deepseek-flash","kind":"text","alt_kind":"vision","enabled":true,"priority":100,"price_in_hit":0.02,"price_in_miss":1.0,"price_out":2.0,"currency":"CNY"},{"name":"deepseek-v4-pro","kind":"text","alt_kind":"","enabled":true,"priority":90,"price_in_hit":0.025,"price_in_miss":3.0,"price_out":6.0,"currency":"CNY"}]}' > /dev/null
+curl -s http://127.0.0.1:8787/admin/api/channels | python3 -c 'import json,sys
+c=[x for x in json.load(sys.stdin)["channels"] if x["id"]=="seed-deepseek-chat"][0]
+m={x["name"]:x for x in c["models_meta"]}
+sys.exit(0 if m["deepseek-flash"].get("alt_kind")=="vision" and m["deepseek-v4-pro"].get("alt_kind")=="" else 1)'; check "alt_kind 经 API 往返持久化正确" $?
+
+# 20.6 管理页用量面板已挂载
 UI=$(curl -s http://127.0.0.1:8787/admin | grep -c 'usage-tables')
 [ "$UI" -ge 1 ]; check "管理页含用量面板容器" $? "no usage panel"
 curl -s http://127.0.0.1:8787/admin | grep -q '导出对账 CSV'; check "管理页含「导出对账 CSV」按钮" $? "no export button"

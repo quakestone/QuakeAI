@@ -172,20 +172,22 @@ async fn resolve_default_model(env: &Env, channels: &[Channel], want_kind: &str)
             return m;
         }
     }
-    // 按「渠道 priority desc → 模型 priority desc」找该能力的首个模型
-    let mut best: Option<(i64, i64, String)> = None;
+    // 按「主能力优先 → 渠道 priority desc → 模型 priority desc」找该能力的首个模型
+    // 能力放宽与 pick_model_attempts 保持一致：模型主能力不中但 alt_kind 命中时也可选
+    // （多模态模型常常既能看图又能聊天），排序上仍让主能力命中的模型优先。
+    let mut best: Option<(u8, i64, i64, String)> = None;
     for c in channels.iter().filter(|c| c.kind == "chat" || want_kind != "text") {
         for m in c.effective_models() {
-            if m.kind != want_kind || !m.enabled {
+            if !m.serves(want_kind) || !m.enabled {
                 continue;
             }
-            let key = (c.priority, m.priority, m.name.clone());
-            if best.as_ref().map(|b| (key.0, key.1) > (b.0, b.1)).unwrap_or(true) {
+            let key = (m.primary_rank(want_kind), c.priority, m.priority, m.name.clone());
+            if best.as_ref().map(|b| key > *b).unwrap_or(true) {
                 best = Some(key);
             }
         }
     }
-    best.map(|b| b.2).unwrap_or_else(|| {
+    best.map(|b| b.3).unwrap_or_else(|| {
         if want_kind == "stt" {
             DEFAULT_AUDIO_MODEL.to_string()
         } else if want_kind == "tts" {
@@ -561,10 +563,15 @@ fn pick_model_attempts(
         .collect();
 
     // 收集全部可用（渠道×模型）对：渠道提供该能力、模型启用且未冷却。
-    // 能力匹配放宽：tts 允许回落到**音频渠道的 stt 模型**——智谱 glm-4-voice
-    // 等语音模型兼具转写与合成，用户只登记了 stt 时播音也能用。
+    // 能力匹配放宽两条：
+    // ① **alt_kind 兜底**——多模态模型常常「既懂图又能聊天」（DeepSeek deepseek-flash
+    //    原生支持 image 输入同时是主力文本模型，单个 kind 字段表达不了）。这类模型
+    //    通过 `alt_kind` 也进 text 候选池，但排序时 `primary_rank` 靠后（见下），
+    //    所以纯文本请求不会被高优先级的视觉模型抢走流量。
+    // ② tts 允许回落到**音频渠道的 stt 模型**——智谱 glm-4-voice 等语音模型兼具
+    //    转写与合成，用户只登记了 stt 时播音也能用。
     let kind_ok = |c: &Channel, m: &ModelMeta| {
-        m.kind == want_kind || (want_kind == "tts" && m.kind == "stt" && c.kind == "audio")
+        m.serves(want_kind) || (want_kind == "tts" && m.kind == "stt" && c.kind == "audio")
     };
     let mut pairs: Vec<(ModelMeta, &Channel)> = Vec::new();
     for c in &usable {
@@ -574,9 +581,13 @@ fn pick_model_attempts(
             }
         }
     }
+    // 排序：主能力命中优先 → 渠道 priority → 模型 priority → 名称（保证确定性）。
+    // `primary_rank` 是最高优先级键：纯文本请求时，一个 kind=text 的模型永远排在
+    // 靠 alt_kind 兜底的视觉模型前面，即使后者 priority 更高。
     let by_priority = |a: &(ModelMeta, &Channel), b: &(ModelMeta, &Channel)| {
-        b.1.priority
-            .cmp(&a.1.priority)
+        b.0.primary_rank(want_kind)
+            .cmp(&a.0.primary_rank(want_kind))
+            .then(b.1.priority.cmp(&a.1.priority))
             .then(b.0.priority.cmp(&a.0.priority))
             .then(a.0.name.cmp(&b.0.name))
     };
@@ -781,6 +792,7 @@ async fn try_model_attempts(
                         .into_iter()
                         .find(|m| m.name == model2)
                         .unwrap_or_else(|| ModelMeta {
+                            alt_kind: String::new(),
                             name: model2.clone(),
                             kind: "text".into(),
                             enabled: true,
@@ -1578,6 +1590,7 @@ mod tests {
     #[test]
     fn cost_computation() {
         let meta = ModelMeta {
+            alt_kind: String::new(),
             name: "deepseek-flash".into(),
             kind: "text".into(),
             enabled: true,
@@ -1602,6 +1615,7 @@ mod tests {
 
         // 免费模型（无单价档案）→ 成本 0、币种空
         let free = ModelMeta {
+            alt_kind: String::new(),
             name: "free".into(),
             kind: "text".into(),
             enabled: true,
@@ -1636,9 +1650,13 @@ mod tests {
             !names.contains(&"deepseek-chat"),
             "deepseek-chat 已弃用，不应再作默认模型"
         );
-        // 视觉能力标在 deepseek-flash（实测支持 image 输入）
-        let vision = c.models_meta.iter().find(|m| m.kind == "vision").unwrap();
-        assert_eq!(vision.name, "deepseek-flash", "视觉应落在 deepseek-flash");
+        // deepseek-flash 是主力低价模型（主能力 text），实测原生支持 image 输入 →
+        // 次要能力标 vision。纯文本与看图都该命中它。
+        let flash = c.models_meta.iter().find(|m| m.name == "deepseek-flash").unwrap();
+        assert_eq!(flash.kind, "text", "deepseek-flash 主能力应为 text（主力低价模型）");
+        assert_eq!(flash.alt_kind, "vision", "deepseek-flash 次要能力应为 vision（支持 image 输入）");
+        // 渠道 caps 仍需声明 vision，图片请求才可能路由进来
+        assert!(c.caps.iter().any(|x| x == "vision"), "渠道 caps 应含 vision");
         // 单价档案齐全（CNY）
         for m in &c.models_meta {
             assert!(m.priced(), "{} 缺单价档案", m.name);
@@ -1646,5 +1664,55 @@ mod tests {
         }
         assert_eq!(c.created_at, now);
         assert_eq!(c.updated_at, now);
+    }
+
+    /// DeepSeek 主力必须真的能被路由选中——不只是「种子存在」。
+    /// 回归背景：deepseek-flash 起初被标成 kind=vision，纯文本请求把它整条过滤掉，
+    /// DeepSeek 流量全落到更贵的 deepseek-v4-pro。修法是引入 `alt_kind` 表达
+    /// 「既懂图又能聊天」，这里锁死该行为。
+    #[test]
+    fn deepseek_flash_reachable_for_both_text_and_vision() {
+        let now = 1_800_000_000_000f64;
+        let mut ds = default_deepseek_channels("2026-10-20T00:00:00Z");
+        ds[0].enabled = true;
+        ds[0].api_key = "sk-test".into();
+
+        // 纯文本：应命中 deepseek-flash（模型优先级 100 > pro 的 90），
+        // 而不是绕过它去用更贵的 deepseek-v4-pro。
+        let (attempts, notes) = super::pick_model_attempts(&ds, "text", None, now);
+        assert!(!attempts.is_empty(), "DeepSeek 应有 text 候选：{notes:?}");
+        assert_eq!(
+            attempts[0].model, "deepseek-flash",
+            "纯文本应命中 deepseek-flash（vision 是 text 的超集）"
+        );
+
+        // 视觉：仍命中 deepseek-flash
+        let (vis, _) = super::pick_model_attempts(&ds, "vision", None, now);
+        assert!(!vis.is_empty(), "DeepSeek 应有 vision 候选");
+        assert_eq!(vis[0].model, "deepseek-flash", "视觉应命中 deepseek-flash");
+    }
+
+    /// 视觉候选里不能混入纯文本模型（text 接不了图，没有 alt_kind 就不能进 vision 池）。
+    #[test]
+    fn text_only_model_never_serves_vision() {
+        let now = 1_800_000_000_000f64;
+        let mut ds = default_deepseek_channels("2026-10-20T00:00:00Z");
+        ds[0].enabled = true;
+        ds[0].api_key = "sk-test".into();
+
+        // 显式请求 pro + 纯文本 → 正常
+        let (t, _) = super::pick_model_attempts(&ds, "text", Some("deepseek-v4-pro"), now);
+        assert_eq!(t[0].model, "deepseek-v4-pro");
+
+        // 视觉候选里不能只有 pro —— 必须有 flash 兜底
+        let (v, _) = super::pick_model_attempts(&ds, "vision", None, now);
+        assert!(
+            v.iter().any(|a| a.model == "deepseek-flash"),
+            "视觉候选应含 deepseek-flash"
+        );
+        assert!(
+            !v.iter().any(|a| a.model == "deepseek-v4-pro"),
+            "纯文本模型 deepseek-v4-pro 不应进视觉候选"
+        );
     }
 }

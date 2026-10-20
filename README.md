@@ -20,7 +20,7 @@
 | v0.7.0 | **模型选择引擎**：四级能力（text/vision/stt/tts）+ 模型级路由/健康/冷却/自动换模型 + TTS 播音端点（`/v1/audio/speech`）+ 跨渠道 Key 复用（音频渠道借同 provider 主线 Key）；**设备级隔离**：`gw_device_keys` 头 + 本机 Key 卡片 + DO localDisk 持久化（重启不丢 Key）；**前端**：回答复制/分享/播音、最近会话缓存、右上角双向通话、消息长按重发、明暗主题、模型管理模型行/能力徽章/筛选 | ✅ e2e **89/89** + 单测 **7/7** + WASM 编译 0 警告 |
 | v0.7.1 | **三连修**：iOS 键盘弹起 App 消失（visualViewport offsetTop）、STT「不支持当前文件格式」（iOS mp4 → WebAudio 重采样 16kHz WAV）、播音无模型（tts 候选池 chat+audio 双池合并） | ✅ e2e **89/89** + 单测 **7/7** |
 | v0.7.2 | **智谱语音端点模型修正**：STT=glm-asr-2512（+stream=false）、TTS=glm-tts（音色 tongtong）——glm-4-voice 是端到端语音模型，放到转写/合成端点会被上游按 chat 校验（1210/1214）；旧模型名请求时自动改写，老账本零迁移 | ✅ e2e **90/90** + 单测 **7/7** |
-| v0.14.0（本版） | **DeepSeek 渠道对接 + 用量成本账本**（用户指令「这个是DeepSeek的 你也对接下」+ 纠偏「我给你是空白的文件 你也在做」）：① **DeepSeek 种子落库** `seed-deepseek-chat`（`api.deepseek.com/v1`、priority 70 夹在国内 80~100 与海外 40/35/30 之间、默认 disabled、caps text+vision）；现行模型实况化——只保留 `deepseek-flash`（V4.1-Flash、1M 上下文、**原生支持 image 输入**）与 `deepseek-v4-pro`（纯文本旗舰），移除已弃用的 `deepseek-chat`/`deepseek-reasoner` 与已下线的 `deepseek-v4-flash-vision-exp`；**视觉能力标在 deepseek-flash**；② **单价档案** `ModelMeta` 新增 `price_in_hit`/`price_in_miss`/`price_out`/`currency`，实现 DeepSeek 式两段输入计费（缓存命中/未命中分别计价）+ 输出单独计价（Flash 0.02/1/2、Pro 0.025/3/6 CNY 每百万 token）；③ **逐请求用量账本** `UsageRecord` + DO `usage` 键与 `GET/POST/DELETE /usage`，`Response::clone()` tee 旁路采集上游 `usage`（不改动流重放，零回归），兼容顶层与 SSE 末帧；④ `GET /admin/api/usage` 聚合（totals/按源/按 源×模型/按自然日，含 success_rate、cache_hit、mixed_currency 标记、avg_latency）与 `GET /admin/api/usage/export` 对账 CSV（**列名严格对齐官方 `cost-*.csv`** + UTF-8 BOM）；⑤ 管理页新增「用量与成本」面板（6 指标卡 + 三张分组表 + 导出按钮）；⑥ 方案纠偏：用户上传的官方 `usage_data_*.zip` 两个 CSV **只有表头零数据行**，故**放弃 CSV 导入对账**（空转功能），改为网关自身记账 + 导出对齐官方 schema | ✅ e2e **233/233** + 单测 **20/20** |
+| v0.14.0（本版） | **DeepSeek 渠道对接 + 用量成本账本**，含**路由可达性重大修正**（用户反馈「你没把ds的模型对接进来吗」后定位：`deepseek-flash` 被标 `kind=vision` 导致**纯文本请求整条过滤**它、DeepSeek 流量全落更贵的 `deepseek-v4-pro`；第一版「vision⊃text 一律放宽」修法又让高优先级视觉模型抢走纯文本流量（§14.1 回归失败）；**正解是新增 `ModelMeta.alt_kind` 次要能力** —— 候选判定 `serves()` 主或次命中即进池，排序 `primary_rank()` 作最高优先级键保证主能力优先、alt 只兜底，两处能力过滤同步改）。用户指令：「这个是DeepSeek的 你也对接下」+ 纠偏「我给你是空白的文件 你也在做」）：① **DeepSeek 种子落库** `seed-deepseek-chat`（`api.deepseek.com/v1`、priority 70 夹在国内 80~100 与海外 40/35/30 之间、默认 disabled、caps text+vision）；现行模型实况化——只保留 `deepseek-flash`（V4.1-Flash、1M 上下文、**原生支持 image 输入**）与 `deepseek-v4-pro`（纯文本旗舰），移除已弃用的 `deepseek-chat`/`deepseek-reasoner` 与已下线的 `deepseek-v4-flash-vision-exp`；② **单价档案** `ModelMeta` 新增 `price_in_hit`/`price_in_miss`/`price_out`/`currency`，实现 DeepSeek 式两段输入计费（缓存命中/未命中分别计价）+ 输出单独计价（Flash 0.02/1/2、Pro 0.025/3/6 CNY 每百万 token）；③ **逐请求用量账本** `UsageRecord` + DO `usage` 键与 `GET/POST/DELETE /usage`，`Response::clone()` tee 旁路采集上游 `usage`（不改动流重放，零回归），兼容顶层与 SSE 末帧；④ `GET /admin/api/usage` 聚合（totals/按源/按 源×模型/按自然日，含 success_rate、cache_hit、mixed_currency 标记、avg_latency）与 `GET /admin/api/usage/export` 对账 CSV（**列名严格对齐官方 `cost-*.csv`** + UTF-8 BOM）；⑤ 管理页新增「用量与成本」面板（6 指标卡 + 三张分组表 + 导出按钮）；⑥ 方案纠偏：用户上传的官方 `usage_data_*.zip` 两个 CSV **只有表头零数据行**，故**放弃 CSV 导入对账**（空转功能），改为网关自身记账 + 导出对齐官方 schema | ✅ e2e **242/242** + 单测 **22/22** |
 | v0.13.0 | **海外视觉全量对接**（用户指令「把海外视觉模型全部对接补上」）：① OpenRouter 种子补全全部免费视觉/多模态模型——`google/gemma-4-26b-a4b-it:free`、`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`、`thinkingmachines/inkling:free`、`thinkingmachines/inkling-small:free`，共 7 个免费视觉模型可轮换防 429；② 修正两处误标——`qwen/qwen3.8-27b:free` 与 `openrouter/free`（自动路由，含视觉）由 `text` 改为 `vision`；③ **视觉甄别增强**——`payload_has_image` 现识别 `video_url`（不仅 `image_url`），视频附件同样路由到视觉/多模态渠道（适配 omni 模型）；④ 视觉/文本共用**同一**选择逻辑（`payload_has_image`→`want_kind`→`pick_model_attempts` 单一引擎处理 text/vision/stt/tts，无双分支）；⑤ 单测新增 `payload_vision_detection` + `overseas_seed_channels_well_formed` 扩展校验 | ✅ e2e **208/208** + 单测 **13/13** |
 | v0.12.0 | **海外模型融合**（用户指令「把国外的那几个模型都融和进来」）：① 三个海外预设（OpenRouter / Groq / NVIDIA NIM）从「仅登记模板」升级为**网关种子资源**——一键载入即落库 6 条（国内 3 + 海外 3）；② 海外种子 `enabled=false`、优先级 40/35/30 低于国内（100/90/80），作「国内渠道全挂时的兜底」；③ 各家现行免费模型清单实况化（OpenRouter 17 个 `:free`，含 `openrouter/free` 自动路由 + `gemma-4-31b-it` 视觉；Groq 14400 RPD/30 RPM 免卡含 `llama-3.2-11b-vision-preview`；NVIDIA NIM ~40 RPM 免卡含 `nemotron-3.5-super-vl-120b-a12b` 视觉）；④ 海外种子均声明 `text+vision` 能力（各视觉模型入 `models_meta`），国内视觉全挂时 `image_url` 自动落到海外视觉模型兜底；⑤ 预设 vision 推断正则扩展覆盖 gemma/vl；⑥ 单测新增 `overseas_seed_channels_well_formed` | ✅ e2e **202/202** + 单测 **12/12** |
 | v0.11.0 | **测试反馈三修**（用户实测三条）：① **呼叫页播放修复**——iOS/Android 媒体自动播放策略下「按键→识别→流式→合成」链路已离手势数秒，`Audio.play()` 被拒/`speechSynthesis` 不发声；首个 pointerdown 手势内 `unlockMedia()` 预热（AudioContext resume + 0.1s 静音 WAV 换 sticky activation + 空 utterance 唤醒），`openCall()` 显式再调；② **交流模式**——`callMode`（duplex 同时问答默认 / half 一问一答禁抢话），呼叫页 ⇄/↔ 按钮切换 + VoiceCfg 持久化 + 状态文案分化 + TTS 降级 toast 可见提示；③ **分享直通系统面板**（修「没成功」）——`shareMsg()` 优先 `navigator.share()` 不弹二级页，AbortError 安静退出，失败才落级对话框；顺手修 s. 子域 404 实测根因（workers.dev 等 22 个平台域无权配 s. 子域 → PLATFORM_SUFFIXES 回落同源 /s，node 单测 6 用例）；④ **多媒体容器播放**——音频/视频存 Blob 进 IDB，消息渲染 `<audio controls>` / `<video controls playsinline>`，blob: URL WeakMap 缓存，视频 canvas 抽帧首帧 poster 缩略图（输入区 chip + 消息双呈现），刷新后容器仍可播放 | ✅ e2e **183/183** + 单测 **11/11** + Playwright **23 断言三场景**零 JS 错误 |
@@ -145,7 +145,7 @@ OpenAI 兼容 `https://api.siliconflow.cn/v1`）：
 - 其他国内源同理：管理页「+ 登记新资源」或从预设目录点「登记」，粘 Key、启用即可，
   **无需改代码**（OpenAI 兼容管线复用；audio 类走 `/audio/transcriptions` 同路径）。
 
-## 验证结论（mock e2e 233/233 + 单测 20/20 + 分版本浏览器交互实测通过）
+## 验证结论（mock e2e 242/242 + 单测 22/22 + 分版本浏览器交互实测通过）
 
 第 1–11 项（前 32 断言，v0.1/v0.2 既有能力）不变：
 
@@ -203,13 +203,13 @@ v0.6.0 新增验证（浏览器交互回归，puppeteer + Chromium 假音频设�
 | 35 | localStorage 无 base64（dataUrl 不落盘）+ 刷新后附件降级为 `📎 文件名` | ✅ |
 | 36 | 刷新后恢复上次会话（消息不空白）+ 徽章无 Mojibake | ✅ |
 
-v0.14.0 新增验证（e2e §20，26 项断言全绿）：
+v0.14.0 新增验证（e2e §20，35 项断言全绿）：
 
 | # | 验证点 | 结果 |
 | --- | --- | --- |
 | 37 | DeepSeek 种子落库：`api.deepseek.com/v1`、`deepseek-flash` + `deepseek-v4-pro`、已下线模型已移除 | ✅ |
 | 38 | Flash 单价档案 0.02 / 1 / 2 CNY 每百万 token 正确落库 | ✅ |
-| 39 | 视觉能力落在 `deepseek-flash`（原生支持 image）、`v4-pro` 为 text | ✅ |
+| 39 | `deepseek-flash` 双能力（主 text + 次 vision）、`v4-pro` 纯 text、caps 含 vision | ✅ |
 | 40 | 种子默认 disabled、priority 70 夹在国内(80/90)与海外(40)之间 | ✅ |
 | 41 | **非流式 + 流式各记 1 条用量**落 DO（tee 旁路采集，SSE 末帧 usage 同样解析） | ✅ |
 | 42 | token 解析正确（prompt / completion / total / cache_hit 逐项累加） | ✅ |
@@ -217,7 +217,11 @@ v0.14.0 新增验证（e2e §20，26 项断言全绿）：
 | 44 | 成本按单价档案折算 > 0、`priced_requests` 与币种 CNY 正确 | ✅ |
 | 45 | 对账 CSV：`text/csv` + 附件下载 + **UTF-8 BOM**（Excel 不乱码） | ✅ |
 | 46 | CSV 列名**严格等于**官方 `cost-*.csv` schema，数据行以 `gateway` 标识 | ✅ |
-| 47 | 管理页「用量与成本」面板容器 + 导出按钮 + 拉取 `/admin/api/usage` | ✅ |
+| 47 | **纯文本命中 `deepseek-flash`** 且未误用更贵的 `v4-pro`（alt_kind 兜底生效） | ✅ |
+| 48 | **视觉请求同样命中 `deepseek-flash`**（原生支持 image 输入） | ✅ |
+| 49 | **§14.1 视觉/文本隔离无回归**：prio 80 的 `glm-4v-flash` 不抢 prio 50 的 `glm-4-flash` 纯文本流量 | ✅ |
+| 50 | 前端 `alt_kind`：次要能力下拉 + 保存读取 + 双徽章（虚线样式）+ 筛选命中 + API 往返持久化 | ✅ |
+| 51 | 管理页「用量与成本」面板容器 + 导出按钮 + 拉取 `/admin/api/usage` | ✅ |
 
 唯一未测项：**有效 Key 的真实对话/转写响应**（需要你自己的 Key，管理页登记即用）。
 DeepSeek Key 已实测可读模型清单，但 `chat/completions` 返回 `HTTP 402 Insufficient Balance`

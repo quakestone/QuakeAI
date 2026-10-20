@@ -70,6 +70,12 @@ pub struct ModelMeta {
     /// text（文本对话） | stt（语音转写） | vision（图片/视频理解） | tts（语音合成/播音）
     #[serde(default = "default_kind_text")]
     pub kind: String,
+    /// **次要能力**（可空）。多模态模型常常「既懂图又能聊天」——DeepSeek
+    /// `deepseek-flash` 原生支持 image 输入同时是主力文本模型，单个 `kind` 表达不了。
+    /// 填了它，该模型在匹配 `alt_kind` 能力时同样进候选池，但**排序仍以 `kind` 为主**，
+    /// 所以纯文本请求不会因为某视觉模型 priority 高就抢走本该给文本模型的流量。
+    #[serde(default)]
+    pub alt_kind: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// 模型级优先级（同渠道内排序用；跨渠道由渠道 priority 主导）
@@ -100,6 +106,20 @@ impl ModelMeta {
     /// 计价币种（未标注时按"免费"处理，返回空串）。
     pub fn currency(&self) -> &str {
         self.currency.as_str()
+    }
+    /// 是否是该能力的候选（主能力 `kind` 或次要能力 `alt_kind` 命中）。
+    /// **只判"能不能用"**；排序另由 `primary_rank` 区分主/次，避免高优先级视觉模型
+    /// 抢走本该给文本模型的纯文本流量。
+    pub fn serves(&self, want: &str) -> bool {
+        self.kind == want || (!self.alt_kind.is_empty() && self.alt_kind == want)
+    }
+    /// 主能力命中记 1（排序在前），次要能力命中记 0（仅兜底）。
+    pub fn primary_rank(&self, want: &str) -> u8 {
+        if self.kind == want {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -181,6 +201,7 @@ impl Channel {
                 ("glm-4-flash".to_string(), "text".to_string())
             };
             return vec![ModelMeta {
+                alt_kind: String::new(),
                 name,
                 kind,
                 enabled: true,
@@ -209,6 +230,7 @@ impl Channel {
                     "text".to_string()
                 };
                 ModelMeta {
+                    alt_kind: String::new(),
                     name: name.clone(),
                     kind,
                     enabled: true,
@@ -392,6 +414,7 @@ pub fn default_cn_channels(now_iso: &str) -> Vec<Channel> {
         updated_at: now_iso.into(),
     };
     let mm = |name: &str, kind: &str, prio: i64| ModelMeta {
+        alt_kind: String::new(),
         name: name.into(),
         kind: kind.into(),
         enabled: true,
@@ -441,7 +464,8 @@ pub fn default_cn_channels(now_iso: &str) -> Vec<Channel> {
 /// 输出单独计价——网关据此把每次调用折算成成本，再与 DeepSeek 官方账单导出对账。
 /// enabled=false、优先级 70（低于智谱 100 / 硅基流动 90 / 智谱音频 80，高于海外 40/35/30）。
 pub fn default_deepseek_channels(now_iso: &str) -> Vec<Channel> {
-    let mm = |name: &str, kind: &str, prio: i64, hit: f64, miss: f64, out: f64| ModelMeta {
+    let mm = |name: &str, kind: &str, alt: &str, prio: i64, hit: f64, miss: f64, out: f64| ModelMeta {
+        alt_kind: alt.into(),
         name: name.into(),
         kind: kind.into(),
         enabled: true,
@@ -463,11 +487,14 @@ pub fn default_deepseek_channels(now_iso: &str) -> Vec<Channel> {
         tier: "T1".into(),
         priority: 70,
         enabled: false,
-        note: "国内主力付费渠道：1M 上下文、OpenAI 兼容。deepseek-flash 通用/低成本且原生支持 image 输入（视觉自动走它），deepseek-v4-pro 纯文本旗舰。内置单价档案（CNY/百万 token，命中/未命中两段输入计价），每次调用自动折算成本并可导出对齐官方 cost-*.csv 的账单做对账。登记 Key 后启用。".into(),
+        note: "国内主力付费渠道：1M 上下文、OpenAI 兼容。deepseek-flash 为主力低价模型且原生支持 image 输入（text/vision 双能力，纯文本与看图都走它），deepseek-v4-pro 纯文本旗舰。内置单价档案（CNY/百万 token，命中/未命中两段输入计价），每次调用自动折算成本并可导出对齐官方 cost-*.csv 的账单做对账。登记 Key 后启用。".into(),
         caps: vec!["text".into(), "vision".into()],
         models_meta: vec![
-            mm("deepseek-flash", "vision", 100, 0.02, 1.0, 2.0),
-            mm("deepseek-v4-pro", "text", 90, 0.025, 3.0, 6.0),
+            // deepseek-flash 主能力 text（它是 DeepSeek 的主力低价模型，纯文本请求
+            // 首选它），次要能力 vision（实测原生支持 image 输入）——所以图片请求
+            // 也能路由到它，而纯文本请求不会被它的 alt 身份影响排序。
+            mm("deepseek-flash", "text", "vision", 100, 0.02, 1.0, 2.0),
+            mm("deepseek-v4-pro", "text", "", 90, 0.025, 3.0, 6.0),
         ],
         health: Health::default(),
         created_at: now_iso.into(),
@@ -501,6 +528,7 @@ pub fn default_overseas_channels(now_iso: &str) -> Vec<Channel> {
         updated_at: now_iso.into(),
     };
     let mm = |name: &str, kind: &str, prio: i64| ModelMeta {
+        alt_kind: String::new(),
         name: name.into(),
         kind: kind.into(),
         enabled: true,

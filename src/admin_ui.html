@@ -136,6 +136,8 @@
   .cap-badge.vision { border-color: var(--ok); color: var(--ok); }
   .cap-badge.stt { border-color: var(--warn); color: var(--warn); }
   .cap-badge.tts { border-color: var(--acc2); color: var(--acc2); }
+  /* 次要能力（alt_kind）：虚线边框 + 减淡，一眼区分「主能力」与「也能接的活」 */
+  .cap-badge.alt { border-style: dashed; opacity: .72; }
   .ch-models { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
   .m-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--border); font-size: 12px; }
   .m-row .dot { flex: none; }
@@ -2770,7 +2772,8 @@ function addModelMetaRow(m) {
   const kinds = ["text", "vision", "stt", "tts"];
   row.innerHTML = `
     <input class="mm-name" placeholder="模型名" value="${m ? esc(m.name || "") : ""}">
-    <select class="mm-kind">${kinds.map(k => `<option value="${k}" ${m && m.kind === k ? "selected" : ""}>${CAP_LABEL[k]}</option>`).join("")}</select>
+    <select class="mm-kind" title="主能力">${kinds.map(k => `<option value="${k}" ${m && m.kind === k ? "selected" : ""}>${CAP_LABEL[k]}</option>`).join("")}</select>
+    <select class="mm-alt" title="次要能力（可空）：多模态模型常常既懂图又能聊天，如 DeepSeek deepseek-flash 标 text + 视觉。填了它该模型也能承接次要能力的请求，但排序仍以主能力优先。"><option value="">—</option>${kinds.map(k => `<option value="${k}" ${m && m.alt_kind === k ? "selected" : ""}>+${CAP_LABEL[k]}</option>`).join("")}</select>
     <input class="mm-prio" type="number" value="${m ? (m.priority ?? 50) : 50}" title="优先级（大者优先）">
     <label class="mm-en"><input type="checkbox" ${m && m.enabled === false ? "" : "checked"}>启用</label>
     <button type="button" class="mm-del" title="删除该行">✕</button>`;
@@ -2786,6 +2789,7 @@ function readModelsMeta() {
   return modelMetaRows().map(r => ({
     name: r.querySelector(".mm-name").value.trim(),
     kind: r.querySelector(".mm-kind").value,
+    alt_kind: r.querySelector(".mm-alt") ? r.querySelector(".mm-alt").value : "",
     enabled: r.querySelector(".mm-en input").checked,
     priority: parseInt(r.querySelector(".mm-prio").value || "50", 10) || 50,
   })).filter(m => m.name);
@@ -2804,7 +2808,7 @@ function effModels(c) {
   return (c.models || []).map(name => ({
     name,
     kind: c.kind === "audio" ? "stt" : (/glm-4v|glm-4\.1v|-vl|vision/i.test(name) ? "vision" : "text"),
-    enabled: true, priority: 50, health: null,
+    alt_kind: "", enabled: true, priority: 50, health: null,
   }));
 }
 /// 模型级状态：未启用 / 冷却中 Ns / 降权 / 健康 / 故障 / 未知
@@ -2830,8 +2834,9 @@ function setModelFilter(k) {
   document.querySelectorAll("#cap-filter .chip").forEach(b => b.classList.toggle("sel", b.dataset.cap === k));
   renderChannels();
 }
-function capBadge(kind) {
-  return `<span class="cap-badge ${esc(kind)}" title="${esc(CAP_LABEL[kind] || kind)}能力">${esc(CAP_LABEL[kind] || kind)}</span>`;
+function capBadge(kind, alt) {
+  const one = k => `<span class="cap-badge ${esc(k)}" title="${esc(CAP_LABEL[k] || k)}能力">${esc(CAP_LABEL[k] || k)}</span>`;
+  return one(kind) + (alt ? one(alt).replace('class="cap-badge', 'class="cap-badge alt') : "");
 }
 /// 模型行：状态点 + 名称 + 能力徽章 + 优先级 + 启用/停用
 function modelRow(c, m) {
@@ -2844,7 +2849,7 @@ function modelRow(c, m) {
   return `<div class="m-row">
     <span class="dot ${h.dot}"></span>
     <span class="m-name" title="${esc(m.name)}">${esc(m.name)}</span>
-    ${capBadge(m.kind)}
+    ${capBadge(m.kind, m.alt_kind)}
     <span class="m-prio" title="模型优先级（大者优先）">P${m.priority ?? 50}</span>
     <span class="dot-lbl">${h.label}</span>
     ${ops}
@@ -2871,7 +2876,7 @@ function renderChannels() {
   const sorted = CHANNELS.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0));
   const visible = sorted.map(c => {
     const ms = effModels(c);
-    const shown = modelFilter === "all" ? ms : ms.filter(m => m.kind === modelFilter);
+    const shown = modelFilter === "all" ? ms : ms.filter(m => m.kind === modelFilter || m.alt_kind === modelFilter);
     return { c, ms, shown };
   }).filter(x => x.shown.length);
   if (!visible.length) {
@@ -2881,7 +2886,7 @@ function renderChannels() {
   el.innerHTML = visible.map(({ c, shown }) => {
     const h = healthOf(c);
     const rows = shown.map(m => modelRow(c, m)).join("");
-    const caps = [...new Set(effModels(c).map(m => m.kind))].map(capBadge).join("");
+    const caps = [...new Set(effModels(c).flatMap(m => m.alt_kind ? [m.kind, m.alt_kind] : [m.kind]))].map(k => capBadge(k)).join("");
     const lat = c.health && c.health.latency_ms ? `<span>${c.health.latency_ms}ms</span>` : "";
     const err = c.health && c.health.last_error ? `<span style="color:var(--warn)">${esc(c.health.last_error)}</span>` : "";
     return `<div class="ch-card ${c.enabled ? "" : "disabled"}">

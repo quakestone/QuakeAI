@@ -5,6 +5,12 @@
 用户指令：「这个是DeepSeek的 你也对接下」+ 上传 DeepSeek 官方 `usage_data_*.zip`，随后纠偏「我给你是空白的文件 你也在做」。
 
 - **方案纠偏（重要）**：用户上传的 `cost-*.csv` / `amount-*.csv` **只有表头、零数据行**（账户零余额、从未产生调用），拿它做 CSV 导入对账是空转功能。因此**放弃「导入官方 CSV 对账」**，改为：网关自己逐请求记账（跑起来就有真数据）+ **导出**网关账单且列名严格对齐官方 `cost-*.csv` schema，将来官方有数据时两边并排 diff。
+- **重大修正：DeepSeek 模型此前「登记了但路由选不中」**（用户反馈「你没把ds的模型对接进来吗 就做了用量与成本」）：
+  - **根因**：`kind` 是单值字段。`deepseek-flash` 被标成 `kind=vision` 后，**纯文本请求（`want_kind=text`）会把它整条过滤掉**——于是 DeepSeek 的流量 100% 落到更贵的 `deepseek-v4-pro`（¥3/¥6 vs flash 的 ¥1/¥2，实际贵 3 倍）。e2e 当时只断言了「by_model 里含 deepseek 前缀」，所以没抓到。
+  - **第一版修法错了**：直接放宽成「vision 是 text 的超集」，结果 §14.1 回归失败——测试渠道里 `glm-4v-flash`(vision, prio 80) 抢走了本该给 `glm-4-flash`(text, prio 50) 的纯文本流量。
+  - **正确修法**：新增 `ModelMeta.alt_kind`（次要能力）。多模态模型「既懂图又能聊天」用主+次两个字段精确表达：候选判定用 `serves()`（主或次命中即可进池），**排序用 `primary_rank()` 作为最高优先级键**（主能力命中记 1、次要记 0），所以纯文本请求永远优先给主能力命中的模型，alt 只做兜底。`pick_model_attempts` 与 `resolve_*` 两处能力过滤同步修改。
+  - DeepSeek 种子最终形态：`deepseek-flash` = **主 text / 次 vision**（主力低价模型，纯文本与看图都走它，priority 100）；`deepseek-v4-pro` = 纯 text（priority 90）。
+  - **前端**：模型行新增「次要能力」下拉（`+视觉` 等），保存时读 `alt_kind`；模型行渲染主+次两个能力徽章（次要能力用**虚线边框 + 减淡**区分）；渠道 caps 徽章与能力筛选（文本/视觉/STT/播音）均纳入 `alt_kind` 命中。
 - **DeepSeek 渠道对接**（联网核实 2026-10 现行实况 + 真实 Key 实测）：
   - 现行模型仅 2 个：`deepseek-flash`（DeepSeek-V4.1-Flash，1M 上下文，**原生支持 image 输入**）、`deepseek-v4-pro`（纯文本旗舰）。`deepseek-chat`/`deepseek-reasoner` 已于 2026-07-24 弃用，`deepseek-v4-flash-vision-exp` 已下线——三者全部不再出现在预设与种子中。
   - 新增种子 `seed-deepseek-chat`：`https://api.deepseek.com/v1`、priority 70（低于智谱 100/90、硅基 90、智谱音频 80，高于海外 40/35/30）、默认 `enabled=false`、caps `["text","vision"]`。
