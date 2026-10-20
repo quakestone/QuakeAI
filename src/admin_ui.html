@@ -75,7 +75,7 @@
   /* 主聊天区 */
   .chat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); }
   .chat-top { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--topbar); backdrop-filter: blur(8px); }
-  #chat-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 38vw; }
+  #chat-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; max-width: 34vw; }
   /* 首页上的「模型管理」入口按钮：桌面带文字，移动端收缩为图标 */
   .entry-btn { border-radius: 999px; padding: 5px 14px; font-size: 13px; background: var(--panel2); font-weight: 600; flex: none; white-space: nowrap; }
   .entry-btn:hover { border-color: var(--acc); }
@@ -140,6 +140,28 @@
   .tabbar::-webkit-scrollbar { display: none; }
   .tabbar .tab { flex: none; padding: 7px 14px; font-size: 13px; border-radius: 999px; white-space: nowrap; }
   .tabbar .tab.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); font-weight: 600; }
+
+  /* ---- 模型选择器 / 模型管理页 通用分页条（与管理页内层翻页同一套视觉） ---- */
+  .pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+  .pager button { width: 34px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; flex: none; }
+  .pager button:disabled { opacity: .35; }
+  .pager .pg-n { min-width: 0; }
+
+  /* ---- 表格防出界：宽表一律横向滚动，绝不撑破卡片 ---- */
+  .tbl-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; }
+  .tbl-scroll > table { min-width: 520px; }
+  /* 卡片本身也要能收缩，否则内部宽表会把 padding 顶破 */
+  .card, .mgmt-wrap > * { min-width: 0; max-width: 100%; }
+  /* 6 标签切换出来的面板体：给一层最小 0收缩 + 横向滚动壳，彻底断掉出界链路 */
+  .mg-pane-body { min-width: 0; max-width: 100%; overflow: hidden; }
+  .mg-pane-body > * { min-width: 0; max-width: 100%; }
+  .mg-pane-body table { min-width: 520px; }
+
+  /* ---- 首页左上角 logo + 产品名 ---- */
+  .brand { display: flex; align-items: center; gap: 8px; flex: none; min-width: 0; }
+  .brand-logo { width: 26px; height: 26px; border-radius: 8px; flex: none; display: block; box-shadow: 0 2px 8px rgba(79,140,255,.35); }
+  .brand-name { font-size: 14px; font-weight: 700; letter-spacing: .3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30vw; }
+  @media (max-width: 420px) { .brand-name { font-size: 13px; max-width: 26vw; } }
 
   /* 模型行：允许换行 + 内部收缩，否则长模型名会把右侧徽章/按钮顶出卡片 */
   #model-rows { display: flex; flex-direction: column; gap: 6px; }
@@ -585,6 +607,18 @@
   <main class="chat-main">
     <header class="chat-top">
       <button class="icon-btn" id="btn-menu" onclick="openSidebar()" aria-label="菜单" title="侧栏（左缘右滑打开）">☰</button>
+      <!-- 左上角品牌位：logo + 产品名（窄屏由CSS 截断，不挤掉标题） -->
+      <span class="brand" id="brand">
+        <svg class="brand-logo" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+          <defs><linearGradient id="qg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#4f8cff"/><stop offset="1" stop-color="#35d0d6"/>
+          </linearGradient></defs>
+          <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#qg)"/>
+          <path d="M20 40 L32 18 L44 40" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="32" cy="46" r="3.6" fill="#fff"/>
+        </svg>
+        <span class="brand-name">QUAKEAI网关</span>
+      </span>
       <span id="chat-title">新对话</span>
       <div class="spacer"></div>
       <!-- 顶栏右侧：主题 → 通话 → 新建会话。新会话贴最右（最高频操作），月亮挪到最左 -->
@@ -710,25 +744,69 @@
       </div>
     </details>
 
-    <div class="card">
-      <h2>模型列表 <span class="muted" id="model-count"></span></h2>
-      <div class="tabbar" id="model-tabs">
-        <button class="tab sel" data-tab="text" onclick="setModelTab('text')">💬 文本模型</button>
-        <button class="tab" data-tab="audio" onclick="setModelTab('audio')">🎧 音频模型</button>
-        <button class="tab" data-tab="mm" onclick="setModelTab('mm')">🖼 图片 · 视频</button>
+    <!-- 模型视图：顶部 6 标签统一切换「模型列表 / 模型用量 / 模型积分榜」。
+         资源登记、Key、多媒体等通用卡片留在下方常驻，不随标签切换。 -->
+    <div class="card" id="model-view-card">
+      <div class="tabbar" id="mgmt-tabs">
+        <button class="tab sel" data-mtab="text" onclick="setMgmtTab('text')">💬 文本模型</button>
+        <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')">🧩 skill 模型</button>
+        <button class="tab" data-mtab="audio" onclick="setMgmtTab('audio')">🎧 音频模型</button>
+        <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')">🖼 图视模型</button>
+        <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')">📊 模型用量</button>
+        <button class="tab" data-mtab="points" onclick="setMgmtTab('points')">🏆 模型积分榜</button>
       </div>
-      <div id="model-rows"></div>
-    </div>
+      <h2 id="mgmt-view-ttl">模型列表 <span class="muted" id="model-count"></span></h2>
 
-    <div class="card">
-      <h2>已登记资源 <span class="muted" id="channel-count"></span></h2>
-      <div class="ch-grid" id="channel-rows"><div class="empty">加载中…</div></div>
-      <div class="hint">Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。路由规则：priority 大者优先，冷却中的模型/渠道自动跳过；模型出错自动更换同能力模型。</div>
-    </div>
+      <!-- 面板 1：四类模型平铺列表（按标签过滤 + 各自独立翻页） -->
+      <div id="pane-models">
+        <div id="model-rows"></div>
+        <div class="pager" id="model-rows-pager" hidden>
+          <button onclick="turnModelRowsPage(-1)">‹</button>
+          <span class="pg-n" id="model-rows-page-n"></span>
+          <button onclick="turnModelRowsPage(1)">›</button>
+        </div>
+      </div>
 
-    <div class="card" id="points-card">
-      <h2>模型积分榜 <span class="muted" id="points-note">个人使用数据（本机）</span></h2>
-      <div class="hint" style="margin-bottom:10px">
+      <!-- 面板 2：skill 子系统（开发中，先占位） -->
+      <div id="pane-skill" hidden>
+        <div class="empty">🧩 <b>skill 模型子系统正在开发中</b><br>
+          规划形态：skill 以独立对象登记（标题 + 提示词正文），在模型选择器与本页共用同一个 skill 列表；
+          列表只展示<b>标题</b>一行，默认显示<b>使用最频繁的 6 条</b>，第 7 行是「扩展 skill」管理入口；
+          内置首个 skill 为「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL v1.0）。<br>
+          在此之前，聊天页勾选 ⚡ 增强模式 即为同一套协议的临时入口。</div>
+      </div>
+
+      <!-- 面板 3：模型用量（原本独立的用量卡搬进来，随标签切换） -->
+      <div id="pane-usage" hidden>
+<div class="mg-pane-body" id="usage-card-body">
+<div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
+      <div class="stats" style="margin-bottom:12px">
+        <div class="stat"><div class="k">请求数</div><div class="v" id="us-requests">0</div></div>
+        <div class="stat"><div class="k">成功率</div><div class="v" id="us-success">—</div></div>
+        <div class="stat"><div class="k">总 token</div><div class="v" id="us-tokens">0</div></div>
+        <div class="stat"><div class="k">缓存命中</div><div class="v" id="us-cache">0</div></div>
+        <div class="stat"><div class="k">估算成本</div><div class="v" id="us-cost">—</div></div>
+        <div class="stat"><div class="k">平均延迟</div><div class="v" id="us-latency">—</div></div>
+      </div>
+      <div class="toolbar" style="margin-bottom:10px">
+        <button onclick="loadUsage()">刷新用量</button>
+        <a class="btn-link" href="/admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
+        <div class="spacer"></div>
+        <span class="muted" id="us-records"></span>
+      </div>
+      <div id="usage-tables"><div class="empty">加载中…</div></div>
+      <div class="pager" id="usage-pager" hidden>
+        <button onclick="turnUsagePage(-1)">‹</button>
+        <span class="pg-n" id="usage-page-n"></span>
+        <button onclick="turnUsagePage(1)">›</button>
+      </div>
+</div>
+      </div>
+
+      <!-- 面板 4：模型积分榜（原本独立的积分卡搬进来） -->
+      <div id="pane-points" hidden>
+<div class="mg-pane-body" id="points-card-body">
+<div class="hint" style="margin-bottom:10px">
         积分规则：<b>每次模型选择 +1</b> · <b>模型每使用一次 +1</b> · <b>每分享一次 +10</b> · <b>每次模型降权 −20</b>。
         模型选择器按积分<b>倒序</b>排列（分高的排前面），「自动」条目同样计分参与排序。
         数据存在本浏览器 localStorage（个人偏好，不写入共享账本）。
@@ -738,8 +816,23 @@
         <div class="spacer"></div>
         <button onclick="resetPoints()">清空积分</button>
       </div>
-      <div id="points-table"><div class="empty">加载中…</div></div>
+      <div class="tbl-scroll"><div id="points-table"><div class="empty">加载中…</div></div></div>
+      <div class="pager" id="points-pager" hidden>
+        <button onclick="turnPointsPage(-1)">‹</button>
+        <span class="pg-n" id="points-page-n"></span>
+        <button onclick="turnPointsPage(1)">›</button>
+      </div>
+</div>
+      </div>
     </div>
+
+    <div class="card">
+      <h2>已登记资源 <span class="muted" id="channel-count"></span></h2>
+      <div class="ch-grid" id="channel-rows"><div class="empty">加载中…</div></div>
+      <div class="hint">Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。路由规则：priority 大者优先，冷却中的模型/渠道自动跳过；模型出错自动更换同能力模型。</div>
+    </div>
+
+    
 
     <div class="card" id="mm-card">
       <h2>语音与多媒体模型 <span class="muted">音频 / 图片视频 两块独立配置</span></h2>
@@ -773,25 +866,7 @@
       </div>
     </div>
 
-    <div class="card" id="usage-card">
-      <h2>用量与成本 <span class="muted" id="usage-note">网关自身逐请求记账</span></h2>
-      <div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
-      <div class="stats" style="margin-bottom:12px">
-        <div class="stat"><div class="k">请求数</div><div class="v" id="us-requests">0</div></div>
-        <div class="stat"><div class="k">成功率</div><div class="v" id="us-success">—</div></div>
-        <div class="stat"><div class="k">总 token</div><div class="v" id="us-tokens">0</div></div>
-        <div class="stat"><div class="k">缓存命中</div><div class="v" id="us-cache">0</div></div>
-        <div class="stat"><div class="k">估算成本</div><div class="v" id="us-cost">—</div></div>
-        <div class="stat"><div class="k">平均延迟</div><div class="v" id="us-latency">—</div></div>
-      </div>
-      <div class="toolbar" style="margin-bottom:10px">
-        <button onclick="loadUsage()">刷新用量</button>
-        <a class="btn-link" href="/admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
-        <div class="spacer"></div>
-        <span class="muted" id="us-records"></span>
-      </div>
-      <div id="usage-tables"><div class="empty">加载中…</div></div>
-    </div>
+    
 
     <details class="fold" id="events-fold">
       <summary>降权 / 切换事件（最近 50 条环形账本）</summary>
@@ -889,6 +964,12 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <button class="dlg-back" onclick="modelDlg.close()" aria-label="返回" title="返回">←</button>
   <h3>选择模型<button class="icon-btn mp-mgmt" onclick="openModels(); modelDlg.close()" aria-label="模型管理" title="模型管理">⚙</button></h3>
   <input id="model-custom" placeholder="自定义模型名（回车确认）…" style="margin-bottom:10px">
+  <div class="tabbar" id="mp-tabs">
+    <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">💬 文本模型</button>
+    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')">🧩 skill 模型</button>
+    <button class="tab" data-mtab="audio" onclick="setMpTab('audio')">🎧 音频模型</button>
+    <button class="tab" data-mtab="mm" onclick="setMpTab('mm')">🖼 图视模型</button>
+  </div>
   <input id="model-search" type="search" placeholder="🔍 搜索模型名 / 渠道 / 供应商…" autocomplete="off">
   <label class="enh-row" id="enh-row"><input type="checkbox" id="enh-check"><span class="enh-ic">⚡</span><span>增强模式<b class="enh-hint" id="enh-hint"></b></span></label>
   <div id="model-list"></div>
@@ -3056,6 +3137,8 @@ function toggleCallMode() {
   }
 }
 function openCallModelPicker() {
+  // 通话页只能选文本模型：强制回到「文本模型」标签，避免停在音频/图视页选到语音模型
+  if (mpTab !== "text") setMpTab("text");
   renderModelList(callModel, (m) => {
     const changed = callModel !== m;
     callModel = m;
@@ -3472,40 +3555,79 @@ async function chatStream(messages, model, handlers) {
 // 状态变量在此声明（openModelPicker 等函数在更早的位置就会读写它们，
 // 放到函数后面会撞 TDZ）。
 const MP_PAGE_SIZE = 6;
-let mpPage = 1;         // 当前页码（1 起）
+// 四个标签：文本 / skill / 音频 / 图视。每个标签**各自独立页码**，
+// 切标签不会串页（mpPages[标签]），换搜索词才把当前标签重置回第 1 页。
+const MP_TABS = ["text", "skill", "audio", "mm"];
+let mpTab = "text";                    // 当前标签
+let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };  // 各标签独立页码
 let mpQuery = "";       // 模型名 / 渠道 / provider 模糊搜索词
-function turnModelPage(d) {
-  mpPage += d;
+function mpPage() { return mpPages[mpTab] || 1; }
+function setMpPage(p) { mpPages[mpTab] = Math.max(1, p); renderModelList(); }
+function turnModelPage(d) { setMpPage(mpPage() + d); }
+function setMpTab(k) {
+  if (!MP_TABS.includes(k)) return;
+  mpTab = k;
+  mpQuery = "";                       // 切标签清掉搜索词，避免"搜不到"误判为空列表
+  const s = $("model-search"); if (s) s.value = "";
+  document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
   renderModelList();
 }
 function setModelQuery(q) {
   mpQuery = (q || "").trim().toLowerCase();
-  mpPage = 1;           // 换搜索词回到第一页
+  mpPages[mpTab] = 1;     // 换搜索词回到当前标签的第 1 页
   renderModelList();
 }
 
 let modelPickCb = null;
 function openModelPicker() {
   // 每次打开都重置搜索词与页码，避免上次的过滤/页码残留
-  mpQuery = ""; mpPage = 1;
+  mpQuery = "";
+  mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };
+  mpTab = "text";
+  document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === "text"));
   const s = $("model-search"); if (s) s.value = "";
   renderModelList(); modelDlg.showModal();
+}
+// 各标签的候选来源：
+//   text  = 可用 chat 渠道的文本模型（沿用旧口径：effModels，避免只登记 models_meta 的渠道丢模型）
+//   audio = stt / tts 能力模型（不限于 chat 渠道，语音渠道也算）
+//   mm    = vision / video 能力模型
+//   skill = skill 子系统尚未上线，只给占位提示（标签入口先占住，避免以后改结构）
+function mpItems() {
+  if (mpTab === "skill") return null;
+  const want = mpTab === "audio" ? ["stt", "tts"] : mpTab === "mm" ? ["vision", "video"] : ["text"];
+  //音频 / 图视标签不限于 chat 渠道（语音、视觉常挂在独立 kind 上），文本标签则只取可用对话渠道
+  const pool = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
+  const out = [];
+  for (const c of pool) {
+    for (const m of effModels(c)) {
+      if (m.enabled === false) continue;
+      // 主或次要能力命中即算该类；否则文本标签里会混进 tts / vision 模型
+      if (!(want.includes(m.kind) || want.includes(m.alt_kind))) continue;
+      out.push({ c, m });
+    }
+  }
+  return out;
 }
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
-  const usable = usableChatChannels();
+  // skill 标签：子系统开发中（见开发说明），这里只给占位，不塞假数据
+  if (mpTab === "skill") {
+    $("model-list").innerHTML = `<div class="empty">🧩 skill 模型子系统正在开发中 —— 内置首个 skill「三个诸葛亮」，
+      届时将在此以「标题 + 使用频次」双列展示（使用最频繁的 6 条 + 「扩展 skill」入口）。<br>
+      现在先用「文本模型」标签提问，勾选 ⚡ 增强模式即为同一套 PRE-ANSWER DRILL 协议的临时入口。</div>`;
+    $("model-pager").hidden = true;
+    syncEnhanceRow();
+    return;
+  }
+  const usable = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
   // 候选条目：自动 + 各渠道的模型。按**积分倒序**排（分高在前），
   // 「自动」同样参与计分与排序——自动被选中/被使用都会累计积分。
   const items = [{ key: AUTO_KEY, name: "", auto: true }];
-  for (const c of usable) {
-    // 用 effModels 而非 c.models：渠道可能只登记了 models_meta（管理页精细配置），
-    // 此时 c.models 为空，直接读它会让这类模型在选择器里整个消失。
-    for (const m of effModels(c)) {
-      if (m.enabled === false) continue;
-      if (items.some(x => !x.auto && x.name === m.name)) continue; // 同名只列一次
-      items.push({ key: m.name, name: m.name, auto: false, ch: c });
-    }
+  for (const { c, m } of mpItems()) {
+    if (items.some(x => !x.auto && x.name === m.name)) continue; // 同名只列一次
+    items.push({ key: m.name, name: m.name, auto: false, ch: c, kind: m.kind, alt_kind: m.alt_kind || "" });
   }
   items.forEach(it => { it.score = Points.score(it.key); });
   items.sort((a, b) => (b.score - a.score) || (a.auto === b.auto ? 0 : a.auto ? -1 : 1) || String(a.name).localeCompare(String(b.name)));
@@ -3517,10 +3639,11 @@ function renderModelList(sel, onPick) {
   const autoItem = items.find(it => it.auto);
   const rest = items.filter(it => !it.auto).filter(hit);
   const pages = Math.max(1, Math.ceil(rest.length / MP_PAGE_SIZE));
-  if (mpPage > pages) mpPage = pages;
-  if (mpPage < 1) mpPage = 1;
-  const slice = rest.slice((mpPage - 1) * MP_PAGE_SIZE, mpPage * MP_PAGE_SIZE);
-  const shown = autoItem && mpPage === 1 ? [autoItem, ...slice] : slice;  // 「自动」仅在第一页出现
+  if (mpPages[mpTab] > pages) mpPages[mpTab] = pages;
+  if (mpPages[mpTab] < 1) mpPages[mpTab] = 1;
+  const cur = mpPages[mpTab];
+  const slice = rest.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
+  const shown = autoItem && cur === 1 ? [autoItem, ...slice] : slice;  // 「自动」仅在第一页出现
 
   const autoSel = sel ? "" : "sel";
   let html = shown.map(it => {
@@ -3528,19 +3651,22 @@ function renderModelList(sel, onPick) {
       return `<div class="model-opt ${autoSel}" onclick="modelPickCb('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div><span class="p">积分 ${it.score}</span></div>`;
     }
     const c = it.ch;
-    return `<div class="model-opt ${sel === it.name ? "sel" : ""}" onclick="modelPickCb('${esc(it.name)}')"><div><b>${esc(it.name)}</b></div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
+    // 音频 / 图视标签下补能力徽章，用户一眼知道选的是 STT 还是 TTS、视觉还是视频
+    const capBadge2 = it.kind ? `<span class="cap-badge">${capBadge(it.alt_kind && it.alt_kind !== it.kind ? it.kind : it.kind)}</span>` : "";
+    return `<div class="model-opt ${sel === it.name ? "sel" : ""}" onclick="modelPickCb('${esc(it.name)}')"><div><b>${esc(it.name)}</b>${capBadge2}</div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
   }).join("");
   if (!usable.length) html += `<div class="empty">还没有可用渠道 —— 去「模型管理」登记资源并启用</div>`;
   else if (!rest.length && mpQuery) html += `<div class="empty">没有匹配「${esc(mpQuery)}」的模型 —— 换个关键词，或用上方输入框直接指定自定义模型名</div>`;
+  else if (!rest.length) html += `<div class="empty">该分类下还没有登记模型 —— 去「模型管理」对应标签页登记</div>`;
   $("model-list").innerHTML = html;
 
   // 分页条：仅一页时隐藏，避免"1/1"这种无意义控件
   const pager = $("model-pager");
   if (pages > 1) {
     pager.hidden = false;
-    $("model-page-n").textContent = `${mpPage} / ${pages} · 共 ${rest.length} 个`;
-    pager.querySelectorAll("button")[0].disabled = mpPage <= 1;
-    pager.querySelectorAll("button")[1].disabled = mpPage >= pages;
+    $("model-page-n").textContent = `${cur} / ${pages} · 共 ${rest.length} 个`;
+    pager.querySelectorAll("button")[0].disabled = cur <= 1;
+    pager.querySelectorAll("button")[1].disabled = cur >= pages;
   } else {
     pager.hidden = true;
   }
@@ -3812,13 +3938,48 @@ function modelRow(c, m) {
 //   audio = stt / tts
 //   mm    = vision / video
 // 每个模型只在其**主能力**所在页出现一次，次要能力用徽章标注，避免重复计数。
-let modelTab = "text";
-function setModelTab(k) {
-  modelTab = k;
-  document.querySelectorAll("#model-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.tab === k));
+// 模型管理页顶部的 6 标签（文本/skill/音频/图视/用量/积分榜）。
+// 前4 个切「模型列表」面板（各自独立页码），后 2 个把用量、积分榜面板显出来。
+let mgmtTab = "text";
+const MGMT_TABS = ["text", "skill", "audio", "mm", "usage", "points"];
+const MGMT_TAB_TTL = {
+  text: "模型列表 · 文本", skill: "模型列表 · skill", audio: "模型列表 · 音频",
+  mm: "模型列表 · 图视", usage: "模型用量", points: "模型积分榜",
+};
+const MG_PAGE_SIZE = 8;                 // 管理页模型列表每页 8 条
+let mgPages = { text: 1, skill: 1, audio: 1, mm: 1 };
+function setMgmtTab(k) {
+  if (!MGMT_TABS.includes(k)) return;
+  mgmtTab = k;
+  document.querySelectorAll("#mgmt-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
+  // 面板归属：文本/音频/图视三个标签共用「模型列表」面板，skill/用量/积分榜各自一个面板
+  const PANE_OF = { text: "models", audio: "models", mm: "models", skill: "skill", usage: "usage", points: "points" };
+  const want = PANE_OF[k];
+  for (const p of ["models", "skill", "usage", "points"]) {
+    const el = $("pane-" + p);
+    if (el) el.hidden = (p !== want);
+  }
+  const ttl = $("mgmt-view-ttl");
+  if (ttl) ttl.innerHTML = esc(MGMT_TAB_TTL[k] || "模型") + ' <span class="muted" id="model-count"></span>'
+    + (k === "usage" ? ' <span class="muted">网关自身逐请求记账</span>' : k === "points" ? ' <span class="muted" id="points-note">个人使用数据（本机）</span>' : "");
+  // 首次进入用量 / 积分榜面板时才拉数据，避免在别的标签下打无效请求
+  if (k === "usage") loadUsage();
+  if (k === "points") renderPoints();
   renderModelTab();
 }
+function turnModelRowsPage(d) {
+  mgPages[mgmtTab] = Math.max(1, (mgPages[mgmtTab] || 1) + d);
+  renderModelTab();
+}
+// 兼容旧调用点（setModelFilter / 历史锚点）
+function setModelTab(k) { setMgmtTab(k === "video" ? "mm" : (MGMT_TABS.includes(k) ? k : "text")); }
+
 const TAB_CAPS = { text: ["text"], audio: ["stt", "tts"], mm: ["vision", "video"] };
+const MG_EMPTY = {
+  text: "还没有登记文本类模型 —— 去「已登记资源」里点「编辑」给模型配置能力",
+  audio: "还没有登记 STT / 播音类模型 —— 同上，把模型的能力标成 stt 或 tts",
+  mm: "还没有登记视觉 / 视频类模型 —— 同上，把模型的能力标成 vision 或 video",
+};
 function modelsOfTab(k) {
   const caps = TAB_CAPS[k] || [];
   const out = [];
@@ -3838,15 +3999,36 @@ function modelsOfTab(k) {
 function renderModelTab() {
   const el = $("model-rows");
   if (!el) return;
-  const list = modelsOfTab(modelTab);
-  const total = TAB_CAPS[modelTab].reduce((n, cap) =>
-    n + CHANNELS.reduce((k, c) => k + effModels(c).filter(m => m.kind === cap).length, 0), 0);
-  $("model-count").textContent = `（本页 ${list.length} / 该类共 ${total}）`;
-  if (!list.length) {
-    el.innerHTML = `<div class="empty">还没有登记「${esc(CAP_LABEL[TAB_CAPS[modelTab][0]] || modelTab)}」类模型 —— 去「已登记资源」里点「编辑」给模型配置能力</div>`;
+  // 非「模型列表」类标签（skill/用量/积分榜）不渲染模型行
+  if (!(mgmtTab in TAB_CAPS)) { mgSyncPager(0); return; }
+  const list = modelsOfTab(mgmtTab);
+  const total = list.length;
+  const pages = Math.max(1, Math.ceil(total / MG_PAGE_SIZE));
+  if (mgPages[mgmtTab] > pages) mgPages[mgmtTab] = pages;
+  if (mgPages[mgmtTab] < 1) mgPages[mgmtTab] = 1;
+  const cur = mgPages[mgmtTab];
+  const slice = list.slice((cur - 1) * MG_PAGE_SIZE, cur * MG_PAGE_SIZE);
+  const cnt = $("model-count");
+  if (cnt) cnt.textContent = total ? `（第 ${cur} / ${pages} 页 · 本页 ${slice.length} · 该类共 ${total}）` : "";
+  if (!total) {
+    el.innerHTML = `<div class="empty">${esc(MG_EMPTY[mgmtTab] || "该分类下还没有模型")}</div>`;
+    mgSyncPager(0);
     return;
   }
-  el.innerHTML = list.map(({ c, m }) => modelRow(c, m)).join("");
+  el.innerHTML = slice.map(({ c, m }) => modelRow(c, m)).join("");
+  mgSyncPager(total, cur, pages);
+}
+function mgSyncPager(total, cur, pages) {
+  const pg = $("model-rows-pager");
+  if (!pg) return;
+  if (total > MG_PAGE_SIZE && pages > 1) {
+    pg.hidden = false;
+    $("model-rows-page-n").textContent = `${cur} / ${pages} · 共 ${total} 个`;
+    pg.querySelectorAll("button")[0].disabled = cur <= 1;
+    pg.querySelectorAll("button")[1].disabled = cur >= pages;
+  } else {
+    pg.hidden = true;
+  }
 }
 function renderChannels() {
   const el = $("channel-rows");
@@ -3942,12 +4124,29 @@ async function loadUsage() {
 
 /// 模型积分榜：把本地积分账本渲染成表格（倒序 = 选择器里的排序）。
 /// 数据源纯 localStorage，页面刷新后仍在；「清空」后重新从 0 起算。
+const PTS_PAGE_SIZE = 10;
+let ptsPage = 1;
+function turnPointsPage(d) { ptsPage = Math.max(1, ptsPage + d); renderPoints(); }
 function renderPoints() {
   const el = $("points-table");
   if (!el) return;
-  const rows = Points.list();
-  if (!rows.length) {
+  const all = Points.list();
+  const pages = Math.max(1, Math.ceil(all.length / PTS_PAGE_SIZE));
+  if (ptsPage > pages) ptsPage = pages;
+  if (ptsPage < 1) ptsPage = 1;
+  const rows = all.slice((ptsPage - 1) * PTS_PAGE_SIZE, ptsPage * PTS_PAGE_SIZE);
+  const pg = $("points-pager");
+  if (pg) {
+    if (all.length > PTS_PAGE_SIZE) {
+      pg.hidden = false;
+      $("points-page-n").textContent = `${ptsPage} / ${pages} · 共 ${all.length} 个`;
+      pg.querySelectorAll("button")[0].disabled = ptsPage <= 1;
+      pg.querySelectorAll("button")[1].disabled = ptsPage >= pages;
+    } else pg.hidden = true;
+  }
+  if (!all.length) {
     el.innerHTML = `<div class="empty">还没有积分记录 —— 选几次模型、用几次、分享几次就会出现在这里</div>`;
+    if ($("points-note")) $("points-note").textContent = "个人使用数据（本机）· 共 0 个条目";
     return;
   }
   const nameOf = k => (k === AUTO_KEY ? "自动（网关自动选路）" : k);
@@ -3958,13 +4157,13 @@ function renderPoints() {
       <th title="每次分享 +10">分享</th><th title="每次降权 −20">降权</th>
     </tr></thead>
     <tbody>${rows.map((r, i) => `<tr>
-      <td class="pts-rank">${i + 1}</td>
+      <td class="pts-rank">${(ptsPage - 1) * PTS_PAGE_SIZE + i + 1}</td>
       <td class="name">${esc(nameOf(r.key))}</td>
       <td class="pts-score ${r.score < 0 ? "pts-neg" : ""}">${r.score}</td>
       <td>${r.sel || 0}</td><td>${r.use || 0}</td><td>${r.share || 0}</td><td>${r.degrade || 0}</td>
     </tr>`).join("")}</tbody></table>`;
   const note = $("points-note");
-  if (note) note.textContent = `个人使用数据（本机）· 共 ${rows.length} 个条目`;
+  if (note) note.textContent = `个人使用数据（本机）· 共 ${all.length} 个条目`;
 }
 function resetPoints() {
   if (!confirm("清空本机所有模型的积分记录？此操作不可撤销。")) return;
@@ -4054,10 +4253,38 @@ function renderUsage(d) {
   $("us-latency").textContent = t.requests ? (t.avg_latency_ms + "ms") : "—";
   $("us-records").textContent = `${fmtInt(d.records)} 条记录 · ${fmtInt(t.priced_requests)} 条已计价`;
 
-  $("usage-tables").innerHTML =
-    usageTable("按源", d.by_provider, "源") +
-    usageTable("按 源 × 模型", d.by_model, "源|模型") +
-    usageTable("按自然日", d.by_day, "日期");
+  // 三张表共用一个页码切页渲染（切页不再重新打网络请求）
+  US_RAW = { provider: d.by_provider || [], model: d.by_model || [], day: d.by_day || [] };
+  renderUsageTables();
+}
+
+/// 用量三表（按源 / 按源×模型 / 按自然日）共用一个当前页码，按行数切页。
+const US_PAGE_SIZE = 8;
+let usagePage = 1;
+let US_RAW = { provider: [], model: [], day: [] };
+function turnUsagePage(d) { usagePage = Math.max(1, usagePage + d); renderUsageTables(); }
+function renderUsageTables() {
+  const box = $("usage-tables");
+  if (!box) return;
+  const n = Math.max(US_RAW.provider.length, US_RAW.model.length, US_RAW.day.length);
+  const pages = Math.max(1, Math.ceil(n / US_PAGE_SIZE));
+  if (usagePage > pages) usagePage = pages;
+  if (usagePage < 1) usagePage = 1;
+  const cur = usagePage;
+  const sl = arr => (arr || []).slice((cur - 1) * US_PAGE_SIZE, cur * US_PAGE_SIZE);
+  box.innerHTML =
+    usageTable("按源", sl(US_RAW.provider), "源") +
+    usageTable("按 源 × 模型", sl(US_RAW.model), "源|模型") +
+    usageTable("按自然日", sl(US_RAW.day), "日期");
+  const pg = $("usage-pager");
+  if (pg) {
+    if (pages > 1) {
+      pg.hidden = false;
+      $("usage-page-n").textContent = `${cur} / ${pages} · 每页 ${US_PAGE_SIZE} 行`;
+      pg.querySelectorAll("button")[0].disabled = cur <= 1;
+      pg.querySelectorAll("button")[1].disabled = cur >= pages;
+    } else pg.hidden = true;
+  }
 }
 
 function renderEvents(events) {

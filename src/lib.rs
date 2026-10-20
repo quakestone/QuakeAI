@@ -1429,7 +1429,7 @@ mod tests {
     #[test]
     fn version_single_source_of_truth() {
         assert_eq!(crate::admin::VERSION, env!("CARGO_PKG_VERSION"));
-        assert_eq!(crate::admin::VERSION, "0.16.0");
+        assert_eq!(crate::admin::VERSION, "0.17.0");
     }
 
     /// 诊断头只允许 ASCII：中文渠道名必须 percent-encoding（浏览器按 Latin-1

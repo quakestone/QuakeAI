@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>复制 SSH 公钥 · quakeai-gateway</title>
+<style>
+  :root{
+    --bg:#0f1115; --card:#171a21; --bd:#252a34; --fg:#e6e8ee;
+    --dim:#8b93a7; --acc:#4f8cff; --ok:#3ddc97; --warn:#ffb020;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:24px 16px 48px; background:var(--bg); color:var(--fg);
+    font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    display:flex; justify-content:center;
+  }
+  .wrap{width:100%; max-width:760px}
+  h1{font-size:20px; margin:0 0 4px}
+  .sub{color:var(--dim); font-size:13px; margin-bottom:22px}
+  .card{background:var(--card); border:1px solid var(--bd); border-radius:14px; padding:18px; margin-bottom:16px}
+  .label{font-size:12px; color:var(--dim); letter-spacing:.4px; margin-bottom:8px; text-transform:uppercase}
+
+  /* 公钥展示区：整块可点，不依赖文本选区 */
+  .key{
+    font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    background:#0b0d11; border:1px solid var(--bd); border-radius:10px;
+    padding:14px; word-break:break-all; color:#cfe3ff; cursor:pointer;
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+  }
+  .key:active{background:#0e1116}
+
+  button{
+    font:inherit; border-radius:10px; border:1px solid var(--bd);
+    background:#1e222b; color:var(--fg); padding:10px 16px; cursor:pointer;
+  }
+  button:active{transform:translateY(1px)}
+  .primary{background:var(--acc); border-color:var(--acc); color:#fff; font-weight:600}
+  .row{display:flex; gap:10px; flex-wrap:wrap; margin-top:12px}
+
+  ol,ul{margin:8px 0; padding-left:22px}
+  li{margin:6px 0}
+  a{color:var(--acc)}
+  code{background:#0b0d11; border:1px solid var(--bd); border-radius:5px; padding:1px 6px; font-size:12px}
+  .hint{font-size:13px; color:var(--dim)}
+  .ok{color:var(--ok)} .warn{color:var(--warn)}
+
+  /* 复制成功的大反馈 */
+  #flash{
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(15,17,21,.94); font-size:20px; font-weight:700; color:var(--ok);
+    flex-direction:column; gap:10px; z-index:9;
+  }
+  #flash.on{display:flex}
+  #flash .big{font-size:44px}
+
+  textarea{
+    width:100%; margin-top:12px; min-height:88px; padding:12px; border-radius:10px;
+    background:#0b0d11; color:#cfe3ff; border:1px solid var(--bd);
+    font:12px/1.6 ui-monospace,Menlo,Consolas,monospace; resize:vertical;
+  }
+</style>
+</head>
+<body>
+<div id="flash"><div class="big">✓</div><div>已复制到剪贴板</div></div>
+
+<div class="wrap">
+  <h1>复制 SSH 公钥</h1>
+  <div class="sub">仓库 quakeai-gateway · 账号 504178754@qq.com · 生成于本机 <code>~/.ssh/id_ed25519</code></div>
+
+  <div class="card">
+    <div class="label">① 点下面任意位置即可全选复制</div>
+    <div class="key" id="key">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMshtGehMCS9TBlkFdxhqDZh+FfXYm9oIlx22WeltnxF quakeai-gateway@4815ff217b6f</div>
+    <div class="row">
+      <button class="primary" id="copy">📋 一键复制</button>
+      <button id="select">✎ 手动全选（兜底）</button>
+    </div>
+    <textarea id="fallback" placeholder="如果上面按钮没生效，点这里后按 Ctrl/⌘+A 再 Ctrl/⌘+C 手动复制"></textarea>
+  </div>
+
+  <div class="card">
+    <div class="label">② 粘贴到 GitHub</div>
+    <ol class="hint">
+      <li>打开 <a href="https://github.com/settings/ssh/new" target="_blank" rel="noopener">github.com/settings/ssh/new</a>（或 Settings → SSH and GPG keys → New SSH key）</li>
+      <li><b>Title</b> 随便填，比如 <code>sandbox-ed25519</code></li>
+      <li><b>Key</b> 粘贴刚才复制的整行</li>
+      <li>点 <b>Add SSH key</b> 保存</li>
+    </ol>
+    <div class="row">
+      <button class="primary" id="open">↗ 打开 GitHub 添加页</button>
+    </div>
+    <div class="hint" style="margin-top:10px">
+      注意：必须三段齐全 —— 开头的 <code>ssh-ed25519</code>、中间长串 base64、结尾的注释。缺一段 GitHub 会报错。
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">③ 加好后回我一句</div>
+    <div class="hint">
+      我会立刻验证认证 → 把 remote 切到 <code>git@github.com:quakestone/quakeai-gateway.git</code> → 推送 v0.15.0（<code>517cbc4</code>）。<br>
+      不想推就说「先不推」，我只切地址不动代码。
+    </div>
+  </div>
+
+  <div class="card" style="border-color:#4a3a12;background:#1c1710">
+    <div class="label warn">⚠️ 安全提醒</div>
+    <div class="hint">
+      之前发在对话里的两个 PAT（<code>github_pat_11AF…</code>、<code>ghp_mF08…</code>）已泄露，
+      请到 Settings → Developer settings → Personal access tokens 吊销。改用 SSH 后日常推送不再需要 PAT。
+    </div>
+  </div>
+</div>
+
+<script>
+  const KEY = document.getElementById('key').textContent.trim();
+  const flash = document.getElementById('flash');
+
+  function done(){
+    flash.classList.add('on');
+    setTimeout(()=>flash.classList.remove('on'), 900);
+  }
+
+  async function copyText(t){
+    // 优先 Clipboard API（需 https 或 localhost；file:// 下部分浏览器会拒绝）
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(t); return true; } catch(e){}
+    }
+    // 兜底 1：选中文本 + execCommand
+    try {
+      const ta = document.getElementById('fallback');
+      ta.value = t; ta.removeAttribute('readonly');
+      ta.select(); ta.setSelectionRange(0, t.length);
+      const ok = document.execCommand('copy');
+      if (ok) return true;
+    } catch(e){}
+    // 兜底 2：prompt 弹窗，让用户自己长按复制
+    try { window.prompt('请手动复制下面这行（长按全选）：', t); return true; } catch(e){}
+    return false;
+  }
+
+  document.getElementById('copy').addEventListener('click', async ()=>{
+    if (await copyText(KEY)) done();
+  });
+
+  // 点公钥块本身也能复制
+  document.getElementById('key').addEventListener('click', async ()=>{
+    if (await copyText(KEY)) done();
+  });
+
+  document.getElementById('select').addEventListener('click', ()=>{
+    const ta = document.getElementById('fallback');
+    ta.value = KEY; ta.focus(); ta.select(); ta.setSelectionRange(0, KEY.length);
+  });
+
+  document.getElementById('open').addEventListener('click', ()=>{
+    window.open('https://github.com/settings/ssh/new', '_blank', 'noopener');
+  });
+</script>
+</body>
+</html>
