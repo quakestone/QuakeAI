@@ -47,8 +47,11 @@
   /* 侧栏：桌面固定 / 移动端抽屉 */
   #sidebar { position: fixed; inset: 0 auto 0 0; width: var(--side-w); max-width: 84vw; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 40; transform: translateX(-100%); transition: transform .22s ease; }
   #sidebar.open { transform: none; }
-  #sidebar .sidebar-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+  #sidebar .sidebar-top { display: flex; align-items: center; gap: 8px; padding: 10px 12px 4px; }
   #sidebar .sidebar-brand { font-size: 12px; color: var(--dim); font-weight: 600; letter-spacing: .3px; }
+  /* 侧栏顶部：对话首页 / 模型管理 两个图标入口（替代原来底部那排列表按钮） */
+  #sidebar .sidebar-top .icon-btn { width: 30px; height: 30px; min-height: 0; font-size: 15px; border: none; background: transparent; }
+  #sidebar .sidebar-top .icon-btn:hover { background: var(--panel2); }
   #scrim { position: fixed; inset: 0; background: #000a; z-index: 35; opacity: 0; pointer-events: none; transition: opacity .22s; }
   #scrim.show { opacity: 1; pointer-events: auto; }
   .new-chat { margin: 12px; width: calc(100% - 24px); padding: 10px; border-style: dashed; font-weight: 600; }
@@ -131,6 +134,23 @@
   /* 模型管理：能力筛选 / 模型行 / 能力徽章 */  .cap-filter { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 12px; }
   .cap-filter .chip { padding: 5px 12px; font-size: 12px; border-radius: 999px; }
   .cap-filter .chip.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); }
+
+  /* 模型列表三标签页：整行 tab 横向可滚动，绝不换行跑到卡片外 */
+  .tabbar { display: flex; gap: 6px; margin: 4px 0 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
+  .tabbar::-webkit-scrollbar { display: none; }
+  .tabbar .tab { flex: none; padding: 7px 14px; font-size: 13px; border-radius: 999px; white-space: nowrap; }
+  .tabbar .tab.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); font-weight: 600; }
+
+  /* 模型行：允许换行 + 内部收缩，否则长模型名会把右侧徽章/按钮顶出卡片 */
+  #model-rows { display: flex; flex-direction: column; gap: 6px; }
+  .m-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--border); font-size: 12px; flex-wrap: wrap; min-width: 0; }
+  /* 模型名占满剩余空间并截断，永远把「渠道名 + 徽章 + 操作」留在行内 */
+  .m-row .m-name { flex: 1 1 180px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .m-row .m-ch { flex: 0 1 auto; min-width: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 11.5px; }
+  .m-row .cap-badge { flex: none; }
+  .m-row .m-prio { flex: none; }
+  .m-row .dot-lbl { flex: none; }
+  .m-row > button { flex: none; white-space: nowrap; }
   .ch-caps { display: flex; gap: 5px; flex-wrap: wrap; margin: 6px 0 2px; }
   .cap-badge { font-size: 10px; border-radius: 4px; padding: 1px 6px; border: 1px solid var(--border); color: var(--dim); }
   .cap-badge.text { border-color: var(--acc); color: var(--acc); }
@@ -139,12 +159,8 @@
   .cap-badge.tts { border-color: var(--acc2); color: var(--acc2); }
   /* 次要能力（alt_kind）：虚线边框 + 减淡，一眼区分「主能力」与「也能接的活」 */
   .cap-badge.alt { border-style: dashed; opacity: .72; }
-  .ch-models { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
-  .m-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--border); font-size: 12px; }
-  .m-row .dot { flex: none; }
-  .m-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
   .m-prio { font-size: 10px; color: var(--dim); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
-  .m-row .dot-lbl { margin-left: auto; }
+  .m-row .dot { flex: none; }
   .m-row button { font-size: 11px; padding: 2px 8px; min-height: 24px; }
 
   /* 消息长按 / 右键菜单 */
@@ -177,8 +193,76 @@
   .composer-model.active { color: var(--acc); border-color: var(--acc); }
   #composer:focus-within { border-color: var(--acc); }
   #input { background: transparent; border: none; resize: none; max-height: 40dvh; padding: 7px 0; line-height: 1.5; font-size: 16px; }
-  #btn-send { flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: linear-gradient(135deg, var(--acc), #5a8bff); color: #fff; font-size: 17px; display: flex; align-items: center; justify-content: center; padding: 0; }
+  #btn-send { flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: linear-gradient(135deg, var(--acc), #5a8bff); color: #fff; font-size: 17px; display: flex; align-items: center; justify-content: center; padding: 0; position: relative; }
   #btn-send.stop { background: var(--panel); border: 1px solid var(--border); }
+  /* ---- 发送按钮动效：普通生成 vs 增强生成，一眼可辨 ---- */
+  /* 普通生成：青蓝色单环呼吸 */
+  #btn-send.streaming { animation: sendPulse 1.2s ease-in-out infinite; }
+  @keyframes sendPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(79,140,255,.55); }
+    50%      { box-shadow: 0 0 0 9px rgba(79,140,255,0); }
+  }
+  /* 增强生成：紫色外环 + 青色内环反向旋转的双环 */
+  #btn-send.streaming-enhance { background: linear-gradient(135deg, #7b5cff, #35d0d6); animation: enhGlow 1.6s ease-in-out infinite; }
+  #btn-send.streaming-enhance::before,
+  #btn-send.streaming-enhance::after {
+    content: ""; position: absolute; border-radius: 50%; pointer-events: none;
+  }
+  #btn-send.streaming-enhance::before { inset: -5px; border: 2px solid transparent; border-top-color: #a78bfa; border-right-color: #a78bfa; animation: ringSpin 1.1s linear infinite; }
+  #btn-send.streaming-enhance::after  { inset: -9px; border: 2px solid transparent; border-bottom-color: #35d0d6; border-left-color: #35d0d6; animation: ringSpin 1.7s linear infinite reverse; }
+  @keyframes ringSpin { to { transform: rotate(360deg); } }
+  @keyframes enhGlow {
+    0%, 100% { box-shadow: 0 0 10px 1px rgba(123,92,255,.5); }
+    50%      { box-shadow: 0 0 18px 4px rgba(53,208,214,.45); }
+  }
+  /* 增强模式的 3 段进度点（sendBtn 右侧），按完成阶段依次点亮 */
+  .enh-dots { display: flex; align-items: center; gap: 3px; flex: none; }
+  .enh-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--border); display: block; }
+  .enh-dots i.on { background: #a78bfa; box-shadow: 0 0 5px #a78bfa; }
+  /* 尊重系统「减弱动效」偏好：全部退化为静态（仍保留图标与颜色的区分） */
+  @media (prefers-reduced-motion: reduce) {
+    #btn-send.streaming, #btn-send.streaming-enhance,
+    #btn-send.streaming-enhance::before, #btn-send.streaming-enhance::after { animation: none !important; }
+    #btn-send.streaming-enhance::before { border-color: #a78bfa; }
+    #btn-send.streaming-enhance::after  { border-color: #35d0d6; }
+  }
+
+  /* ================= 增强模式：步骤时间线 ================= */
+  .steps { border: 1px solid #3a2f63; background: #14112a; border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
+  .steps-hd { font-size: 11.5px; color: #b4a4f5; font-weight: 700; margin-bottom: 8px; letter-spacing: .3px; }
+  .st { border: 1px solid #2c2750; border-radius: 9px; background: #191634; margin-bottom: 6px; overflow: hidden; }
+  .st:last-child { margin-bottom: 0; }
+  .st > summary { display: flex; align-items: center; gap: 7px; padding: 7px 9px; cursor: pointer; list-style: none; font-size: 12.5px; flex-wrap: wrap; }
+  .st > summary::-webkit-details-marker { display: none; }
+  .st-ic { flex: none; width: 15px; text-align: center; font-size: 12px; }
+  .st-no { flex: none; width: 15px; height: 15px; border-radius: 50%; background: #2c2750; color: #cfc4ff; font-size: 10px; display: flex; align-items: center; justify-content: center; }
+  .st > summary b { font-weight: 600; }
+  .st-model { margin-left: auto; font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
+  .st-body { padding: 0 9px 9px 31px; font-size: 12px; line-height: 1.65; color: #d9d5ee; white-space: pre-wrap; overflow-wrap: anywhere; border-top: 1px solid #241f45; padding-top: 8px; }
+  .st-done .st-ic { color: #3ddc97; }
+  .st-done .st-no { background: #14432f; color: #6ee7b7; }
+  .st-streaming .st-ic { color: #7dd3fc; animation: stSpin 1s linear infinite; display: inline-block; }
+  .st-streaming { border-color: #2f4a6d; }
+  @keyframes stSpin { to { transform: rotate(360deg); } }
+  .st-error .st-ic { color: #ff7a7a; }
+  .st-error .st-no { background: #4a1f24; color: #ff9d9d; }
+  .enh-badge { background: #2b2350; color: #b4a4f5; border: 1px solid #4a3d85; border-radius: 5px; padding: 0 5px; font-size: 10.5px; }
+
+  /* ================= 模型选择器：搜索 / 分页 / 增强开关 ================= */
+  dialog h3 { display: flex; align-items: center; gap: 8px; }
+  dialog h3 .mp-mgmt { margin-left: auto; width: 30px; height: 30px; min-height: 0; font-size: 15px; border: none; background: transparent; }
+  dialog h3 .mp-mgmt:hover { background: var(--panel2); }
+  #model-search { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--txt); margin-bottom: 8px; }
+  #model-search::placeholder { color: var(--dim); }
+  .enh-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid #4a3d85; background: #16122b; border-radius: 9px; font-size: 12.5px; cursor: pointer; }
+  .enh-row input { margin-top: 2px; }
+  .enh-row .enh-ic { font-size: 14px; }
+  .enh-row b.enh-hint { display: block; font-weight: 400; font-size: 11px; color: var(--dim); }
+  /* 不可用时置灰并给出原因（纯文本 >20 字 / 非通话 / 至少 3 个模型） */
+  .enh-row.off { border-color: var(--border); background: var(--panel2); color: var(--dim); cursor: not-allowed; opacity: .72; }
+  .mp-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--dim); }
+  .mp-pager button { width: 32px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; }
+  .mp-pager button:disabled { opacity: .35; }
   /* 输入区左侧：附件 + 语音（长按） */
   #btn-attach, #btn-voice { flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--panel); color: var(--dim); font-size: 16px; display: flex; align-items: center; justify-content: center; padding: 0; margin-bottom: 2px; user-select: none; -webkit-user-select: none; }
   #btn-voice { touch-action: none; }
@@ -294,8 +378,13 @@
   /* ================= 模型管理（首页的二级子页 #/models） ================= */
   #view-models { height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); overflow-y: auto; overscroll-behavior: contain; }
   .mgmt-top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 10px 14px; padding-top: calc(10px + env(safe-area-inset-top, 0px)); border-bottom: 1px solid var(--border); background: rgba(13,19,34,.92); backdrop-filter: blur(8px); }
-  .mgmt-top .ttl { font-weight: 700; font-size: 16px; }
-  .mgmt-top .sub { color: var(--dim); font-size: 12px; }
+  .mgmt-top .ttl { font-weight: 700; font-size: 16px; white-space: nowrap; }
+  .mgmt-top .sub { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* 标题块必须可收缩且 min-width:0 —— 否则 flex 会把它压成「每行一个字」的竖排 */
+  .mgmt-top > .ttl-box { flex: 1 1 auto; min-width: 0; }
+  /* 右侧操作区：不参与收缩，按钮与徽章保持自身宽度（此前被挤到换行/溢出） */
+  .mgmt-top > .icon-btn, .mgmt-top > button:not(.icon-btn), .mgmt-top > .badge { flex: none; }
+  .mgmt-top > button:not(.icon-btn) { white-space: nowrap; padding: 6px 12px; }
   .badge { font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; color: var(--dim); white-space: nowrap; }
   .badge.on { color: var(--ok); border-color: var(--ok); }
   .badge.err { color: var(--bad); border-color: var(--bad); }
@@ -473,8 +562,10 @@
 <!-- ==================== 全局侧栏（所有子页共用） ==================== -->
 <aside id="sidebar">
   <div class="sidebar-top">
-    <button class="icon-btn" onclick="closeSidebar()" aria-label="关闭侧栏" title="关闭侧栏（也可用左滑手势）">✕</button>
-    <span class="sidebar-brand">WASM 网关</span>
+    <span class="sidebar-brand">QUAKEAI网关</span>
+    <div class="spacer"></div>
+    <button class="icon-btn side-home" onclick="navigate('chat'); closeSidebar()" aria-label="对话首页" title="对话首页">💬</button>
+    <button class="icon-btn" onclick="openModels()" aria-label="模型管理" title="模型管理">⚙</button>
   </div>
   <button class="new-chat" onclick="newConvo()">＋ 新对话</button>
   <div class="convo-search">
@@ -483,11 +574,8 @@
   </div>
   <div id="convo-list"></div>
   <div class="sidebar-foot">
-    <button onclick="navigate('chat')">💬 对话首页</button>
-    <button onclick="navigate('models')">⚙ 模型管理</button>
-    <button onclick="openVoiceCfg()">🎛 语音与多媒体设置</button>
     <button onclick="clearAllConvos()">🗑 清空全部会话</button>
-    <div class="sidebar-meta">WASM AI 聚合网关 · <span id="side-version">…</span></div>
+    <div class="sidebar-meta">QUAKEAI 聚合网关 · <span id="side-version">…</span></div>
   </div>
 </aside>
 <div id="scrim" onclick="closeSidebar()"></div>
@@ -499,10 +587,10 @@
       <button class="icon-btn" id="btn-menu" onclick="openSidebar()" aria-label="菜单" title="侧栏（左缘右滑打开）">☰</button>
       <span id="chat-title">新对话</span>
       <div class="spacer"></div>
-      <!-- 顶栏只留「新建会话」+ 通话 + 主题；模型选择与模型/语音设置都下沉到输入区与侧栏 -->
-      <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新建会话" title="新建会话">＋</button>
-      <button class="icon-btn" id="btn-call" onclick="openCall()" aria-label="语音通话" title="语音通话（按住说话，AI 语音回答）">📞</button>
+      <!-- 顶栏右侧：主题 → 通话 → 新建会话。新会话贴最右（最高频操作），月亮挪到最左 -->
       <button class="icon-btn" id="btn-theme" onclick="toggleTheme()" aria-label="切换明暗主题" title="明暗切换">🌙</button>
+      <button class="icon-btn" id="btn-call" onclick="openCall()" aria-label="语音通话" title="语音通话（按住说话，AI 语音回答）">📞</button>
+      <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新建会话" title="新建会话">＋</button>
     </header>
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
     <div class="composer-wrap">
@@ -513,6 +601,7 @@
         <button id="btn-model" class="composer-model" onclick="openModelPicker()" aria-label="选择模型" title="选择模型（按积分排序）">⋯</button>
         <textarea id="input" rows="1" placeholder="给 AI 发消息…（Enter 发送 / Shift+Enter 换行）"></textarea>
         <button id="btn-send" onclick="sendOrStop()" aria-label="发送">↑</button>
+        <span class="enh-dots" aria-hidden="true"></span>
       </div>
       <input type="file" id="file-input" multiple hidden accept="image/*,video/*,audio/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xlsx,.zip">
       <div class="composer-hint" id="route-hint">模型请求由网关自动路由到最优免费渠道 · 降权自动切换</div>
@@ -569,7 +658,7 @@
   <header class="mgmt-top">
     <button class="icon-btn" onclick="navigate('chat')" aria-label="返回上一页" title="返回上一页">←</button>
     <button class="icon-btn" onclick="openSidebar()" aria-label="侧栏" title="侧栏（左缘右滑打开）">☰</button>
-    <div>
+    <div class="ttl-box">
       <div class="ttl">模型管理</div>
       <div class="sub">资源管理 · 智能路由 · 国内优先</div>
     </div>
@@ -622,14 +711,17 @@
     </details>
 
     <div class="card">
-      <h2>已登记资源 <span class="muted" id="channel-count"></span></h2>
-      <div id="cap-filter" class="cap-filter">
-        <button class="chip sel" data-cap="all" onclick="setModelFilter('all')">全部</button>
-        <button class="chip" data-cap="text" onclick="setModelFilter('text')">文本</button>
-        <button class="chip" data-cap="vision" onclick="setModelFilter('vision')">视觉</button>
-        <button class="chip" data-cap="stt" onclick="setModelFilter('stt')">STT</button>
-        <button class="chip" data-cap="tts" onclick="setModelFilter('tts')">播音</button>
+      <h2>模型列表 <span class="muted" id="model-count"></span></h2>
+      <div class="tabbar" id="model-tabs">
+        <button class="tab sel" data-tab="text" onclick="setModelTab('text')">💬 文本模型</button>
+        <button class="tab" data-tab="audio" onclick="setModelTab('audio')">🎧 音频模型</button>
+        <button class="tab" data-tab="mm" onclick="setModelTab('mm')">🖼 图片 · 视频</button>
       </div>
+      <div id="model-rows"></div>
+    </div>
+
+    <div class="card">
+      <h2>已登记资源 <span class="muted" id="channel-count"></span></h2>
       <div class="ch-grid" id="channel-rows"><div class="empty">加载中…</div></div>
       <div class="hint">Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。路由规则：priority 大者优先，冷却中的模型/渠道自动跳过；模型出错自动更换同能力模型。</div>
     </div>
@@ -795,9 +887,12 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 
 <dialog id="model-dlg">
   <button class="dlg-back" onclick="modelDlg.close()" aria-label="返回" title="返回">←</button>
-  <h3>选择模型</h3>
+  <h3>选择模型<button class="icon-btn mp-mgmt" onclick="openModels(); modelDlg.close()" aria-label="模型管理" title="模型管理">⚙</button></h3>
   <input id="model-custom" placeholder="自定义模型名（回车确认）…" style="margin-bottom:10px">
+  <input id="model-search" type="search" placeholder="🔍 搜索模型名 / 渠道 / 供应商…" autocomplete="off">
+  <label class="enh-row" id="enh-row"><input type="checkbox" id="enh-check"><span class="enh-ic">⚡</span><span>增强模式<b class="enh-hint" id="enh-hint"></b></span></label>
   <div id="model-list"></div>
+  <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button></div>
   <div class="dlg-actions"><button onclick="modelDlg.close()">关闭</button></div>
 </dialog>
 
@@ -1501,15 +1596,39 @@ function renderMessages() {
     }
     if (m.error && !m.content) return `<div class="msg error" data-idx="${i}"><div class="avatar">⚠</div><div class="msg-body"><div class="content">${esc(m.error)}</div><div class="msg-meta">${fmtTime(m.ts)}</div></div></div>`;
     const think = m.reasoning ? `<details class="think"><summary>思考过程</summary><div class="think-body">${esc(m.reasoning)}</div></details>` : "";
-    const body = (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
+    // ⚡ 增强模式：正文之上渲染「步骤时间线」，让用户看到每个模型接力到哪一步了，
+    // 而不是对着一个空白的回答死等。默认折叠、标题行常驻。
+    const steps = (m.steps && m.steps.length) ? renderSteps(m.steps) : "";
+    const body = (m.content ? md(m.content) : "") + (m.streaming && !steps ? '<span class="cursor"></span>' : "");
     const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
-    const badges = (m.channel ? `<span class="ch-badge">via ${esc(m.channel)}</span>` : "")
+    const badges = (m.enhanced ? `<span class="enh-badge">⚡ 增强模式</span>` : "")
+      + (m.channel ? `<span class="ch-badge">via ${esc(m.channel)}</span>` : "")
       + (m.attempts && m.attempts.split(";").length > 1
         ? `<span class="switch-badge" title="${esc(m.attempts)}">⤻ 已自动切换</span>` : "");
     const acts = m.streaming ? "" : `<button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button><button class="act-btn" onclick="shareMsg(this)" title="分享本条回答">分享</button><button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button>`;
-    return `<div class="msg assistant" data-idx="${i}"><div class="avatar">AI</div><div class="msg-body">${think}<div class="content">${body}</div>${errLine}<div class="msg-meta">${badges}${fmtTime(m.ts)}${acts}</div></div></div>`;
+    return `<div class="msg assistant" data-idx="${i}"><div class="avatar">AI</div><div class="msg-body">${steps}${think}<div class="content">${body}</div>${errLine}<div class="msg-meta">${badges}${fmtTime(m.ts)}${acts}</div></div></div>`;
   }).join("");
   requestAnimationFrame(() => { const box = $("messages"); box.scrollTop = box.scrollHeight; });
+}
+/// 增强模式的步骤时间线（借鉴 agent 类产品的 step chain 观感）。
+/// 每行：序号 + 阶段名 + 承担模型 + 状态点；点击展开该步全文。
+/// 状态：pending 灰 / streaming 蓝旋转 / done 绿 / error 红。
+const STEP_TITLES = { drill: "自我钻取", summarize: "总结归纳", answer: "最终作答" };
+const DRILL_LABELS = ["理解问题", "质疑理解", "验证任务"];
+function renderSteps(steps) {
+  const rows = steps.map((s, i) => {
+    const sub = s.stage === "drill" ? ` · DRILL ${s.round} ${DRILL_LABELS[s.round - 1] || ""}` : "";
+    const ic = s.state === "done" ? "✓" : s.state === "error" ? "✕" : s.state === "streaming" ? "◐" : "○";
+    const inner = s.content
+      ? `<div class="st-body">${esc(s.content)}</div>`
+      : `<div class="st-body muted">${s.state === "streaming" ? "生成中…" : "（无输出）"}</div>`;
+    return `<details class="st st-${s.state}" ${s.state === "streaming" ? "open" : ""}>
+      <summary><span class="st-ic">${ic}</span><span class="st-no">${i + 1}</span><b>${STEP_TITLES[s.stage] || s.stage}${sub}</b><span class="st-model" title="${esc(s.model || "")}">${esc(s.model || "")}</span></summary>
+      ${inner}
+    </details>`;
+  }).join("");
+  const models = [...new Set(steps.map(s => s.model).filter(Boolean))];
+  return `<div class="steps"><div class="steps-hd">⚡ 增强模式 · ${models.length} 个模型接力</div>${rows}</div>`;
 }
 /// 取消息正文纯文本（复制 / 分享 / 播音共用）
 function msgTextOf(el) {
@@ -1783,8 +1902,22 @@ function updateChatTop() {
 }
 function updateSendBtn() {
   const b = $("btn-send");
-  b.textContent = streaming ? "■" : "↑";
-  b.classList.toggle("stop", streaming);
+  // 增强模式与普通生成要**一眼可辨**：图标不同（⚡ / ↑ / ■）+ 光环动效不同。
+  const enh = streaming && enhanceOn;
+  b.textContent = streaming ? (enh ? "⚡" : "■") : "↑";
+  b.classList.toggle("stop", streaming && !enh);
+  b.classList.toggle("streaming", streaming && !enh);
+  b.classList.toggle("streaming-enhance", !!enh);
+  b.setAttribute("aria-label", streaming ? (enh ? "停止增强生成" : "停止生成") : "发送");
+  // 步骤进度点：增强模式下按已完成的阶段数点亮（3 段：drill / summarize / answer）
+  const dots = b.parentElement && b.parentElement.querySelector(".enh-dots");
+  if (dots) {
+    if (!enh) { dots.innerHTML = ""; }
+    else {
+      const done = (window.enhStageDone || 0);
+      dots.innerHTML = [0, 1, 2].map(i => `<i class="${i < done ? "on" : ""}"></i>`).join("");
+    }
+  }
 }
 function autoGrow() {
   const t = $("input");
@@ -1822,10 +1955,20 @@ async function sendOrStop() {
   const text = input.value.trim();
   const atts = attachments.slice();
   if (!text && !atts.length) return;
+  // 增强开关状态在发送瞬间冻结：发送中用户再去模型选择器改它，不影响这一轮
+  const useEnh = enhanceOn && enhanceAvailable(text, atts);
+  const wasEnh = enhanceOn;
+  enhanceOn = useEnh;
+  window.enhStageDone = 0;
+  updateSendBtn();
   try {
     await sendWith(text, atts);
   } catch (e) {
     return; // 转写失败等：保留输入与附件，用户可修改后重发（不必重输）
+  } finally {
+    enhanceOn = wasEnh;   // 这一轮结束，恢复用户原本的勾选
+    window.enhStageDone = 0;
+    updateSendBtn();
   }
   input.value = ""; autoGrow();
   attachments = []; renderAttachments();
@@ -1880,6 +2023,30 @@ async function sendWith(text, atts) {
   const mmModel = pickMmModel(attHasMedia(atts) || historyHasMedia(history));
   if (mmModel) body.model = mmModel;
 
+  // ⚡ 增强模式：满足条件（纯文本 / 非通话 / >20 字 / 至少 3 个模型）且用户勾选时，
+  // 改走三段式接力（第三名 drill 3 遍 → 第二名总结 → 第一名作答），逐步上屏。
+  if ($("enh-check") && $("enh-check").checked && enhanceAvailable(fullText, atts)) {
+    try {
+      await runEnhanced(c, history, fullText, asst);
+      asst.enhanced = true;
+      asst.model = (asst.steps.find(s => s.stage === "answer") || {}).model || curModel;
+      asst.streaming = false;
+      if (!asst.content) asst.error = "（增强模式未产出最终回答）";
+    } catch (e) {
+      if (e && e.name === "AbortError") asst.error = asst.content ? "已停止生成" : "已取消";
+      else asst.error = "增强模式失败：" + String((e && e.message) || e);
+      asst.streaming = false;
+    } finally {
+      IDB.putMsg(convoId, asstIdx, asst);
+      IDB.putConvo(c);
+      if (myGen === streamGen) {
+        streaming = false; aborter = null; updateSendBtn();
+        renderMessages();
+      }
+    }
+    return;
+  }
+
   try {
     const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
     const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: aborter.signal });
@@ -1927,12 +2094,247 @@ async function sendWith(text, atts) {
   }
 }
 
+// ================= 模型增强模式（⚡ 三段式接力） =================
+let enhanceOn = false;         // 用户是否勾选了 ⚡ 增强模式（发送按钮据此切图标/动效）
+let enhancePendingAtts = null;  // 附件钩子：附件在发送时才最终确定，这里供选择器预估
+window.enhStageDone = 0;       // 已完成的增强阶段数（3 段），驱动发送按钮进度点
+// 用户要求：
+//   「问题让积分第三的模型自我 drill 3 遍后，带上上下文给积分第二的模型总结，
+//     把问题说清楚来，最后给模型第一的问题回答」
+//   生效条件：**非音频问答的纯文本模式**，且**提问文本长度超过 20**。
+//
+// 为什么自己发起 3 次请求而不是让一个模型内部转三圈：
+//   每一段用的是**不同模型**（积分第三 / 第二 / 第一），跨模型才能真正带来
+//   视角差异 —— 同模型自问自答容易在同一个思路上打转。
+const DRILL_PROMPT = `PRE-ANSWER DRILL PROTOCOL v1.0
+
+角色
+
+你是一个回答问题前的任务理解与质量校验引擎。你的首要任务不是立即回答，而是先准确确定用户真正需要解决的问题。
+
+强制规则
+
+在回答任何实质性问题之前，必须完成以下三轮 DRILL。三轮各自承担不同任务，不得合并，不得跳过，不得仅重复相同内容。
+
+DRILL 1：理解问题
+
+分析并提取：
+
+1. 用户明确要求完成什么？
+2. 用户真正想实现的目标是什么？
+3. 有哪些明确约束、背景条件和输出要求？
+4. 哪些关键词可能存在歧义？
+5. 解决问题所需的关键信息是否齐全？
+
+形成第一版任务定义。
+
+DRILL 2：质疑理解
+
+暂时假设第一版任务定义存在错误，主动检查：
+
+1. 是否把用户的手段误认为最终目标？
+2. 是否遗漏了重要条件、上下文或限制？
+3. 是否存在其他合理解释？
+4. 按照第一版理解回答，是否可能答非所问？
+5. 是否存在事实错误、逻辑漏洞、未经证实的假设或不切实际的方案？
+
+发现问题时，必须明确修正第一版任务定义，而不是只罗列风险。
+
+DRILL 3：验证任务
+
+对修正后的任务定义进行最终检查：
+
+1. 它是否准确回应用户的核心意图？
+2. 它是否覆盖所有明确要求？
+3. 是否与已有上下文一致？
+4. 是否需要外部证据、计算、工具调用或进一步澄清？
+5. 什么样的答案才算真正解决了用户的问题？
+
+形成最终任务定义，并据此组织答案。
+
+最终回答规则
+
+* 三轮 DRILL 必须先于实质性回答完成。
+* 不得声称已经核实实际上没有核实的事实。
+* 不得将猜测当作事实；对重要假设应明确标注。
+* 如果缺少的信息会显著改变答案，且无法合理假设，则先提出最关键的澄清问题。
+* 如果信息足够，则直接回答，不要为了展示思考过程而增加冗长内容。
+* 简单问题可以快速完成三轮；复杂问题必须增加必要的拆解、验证和证据检查。
+* 用户要求的格式、语言、长度和其他约束必须保留。
+* 不得为了完成 DRILL 而强行制造歧义、风险或额外问题。
+
+内部完成标准
+
+只有在以下条件同时满足时，才允许进入最终回答：
+
+A. 核心意图明确；
+B. 关键约束已提取；
+C. 主要歧义已处理；
+D. 第一版理解已经过反向审查；
+E. 最终任务定义与用户请求一致。
+
+如果任一条件不满足，则针对缺失项补充分析或向用户澄清。`;
+
+// 增强模式生效条件：非音频问答的纯文本 + 提问文本长度 > 20。
+// 返回 null 表示可用；否则返回不可用的原因（用于置灰提示）。
+function enhanceBlockReason(text, atts) {
+  if (callOpen) return "通话（音频问答）模式下不可用";
+  if (atts && atts.length) return "带附件的提问不走增强模式";
+  if (!text || !text.trim()) return "";
+  if (text.trim().length <= 20) return "纯文本提问超过 20 字才可启用";
+  return null;
+}
+function enhanceAvailable(text, atts) {
+  return enhanceBlockReason(text, atts) === null;
+}
+/// 增强模式要用的三个模型：积分第三（drill）/ 第二（总结）/ 第一（最终回答）。
+/// 积分榜不足 3 个时，用当前选中模型补齐；仍不足则返回 null（前端置灰）。
+function enhanceModels() {
+  const ranked = Points.list().filter(x => x.key && x.key !== AUTO_KEY);
+  const fallback = curModel || "";
+  const pick = (i) => ranked[i] && ranked[i].key || fallback;
+  const uniq = [...new Set([pick(2), pick(1), pick(0)])].filter(Boolean);
+  // 去重后不足 3 个 → 无法真正做"三个模型接力"，判为不可用
+  return uniq.length >= 3 ? { drill: pick(2), summary: pick(1), answer: pick(0) } : null;
+}
+/// 同步模型选择器里的增强开关可用状态（每次渲染都调，保证提示语实时准确）。
+function syncEnhanceRow() {
+  const row = $("enh-row"), hint = $("enh-hint"), ck = $("enh-check");
+  if (!row || !hint || !ck) return;
+  const inp = $("input");
+  const reason = enhanceBlockReason(inp ? inp.value : "", enhancePendingAtts || []);
+  const em = reason ? null : enhanceModels();
+  let why = "";
+  if (reason) why = reason;
+  else if (!em) why = "至少需要 3 个可用模型（当前不足）";
+  row.classList.toggle("off", !!why);
+  ck.disabled = !!why;
+  hint.textContent = why ? "（" + why + "）" : "（第三名自我钻取 3 遍 → 第二名总结 → 第一名作答）";
+}
+
+/// 单次流式请求（增强模式专用）。
+/// 与 chatStream 的区别：后者按句切分给 TTS 准实时播报，这里只要"边流边显示"。
+function streamOnce(messages, model, onDelta) {
+  const body = { messages, stream: true };
+  if (model) body.model = model;
+  const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
+  return fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: aborter.signal })
+    .then(async (resp) => {
+      applyRoutePoints(resp, model);   // 积分照常记账：使用 +1 / 降权 −20
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        throw new Error(j.error?.message || ("HTTP " + resp.status));
+      }
+      if (!resp.body) throw new Error("响应无内容流");
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      const sink = { content: "", reasoning: "" };
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          feedSseBlock(buf.slice(0, i), sink);
+          buf = buf.slice(i + 2);
+          onDelta(sink);
+        }
+      }
+      if (buf.trim()) feedSseBlock(buf, sink);
+      return sink;
+    });
+}
+
+/// 增强模式主流程：三段（或 1+3+1 = 5 步）接力，逐步把内容渲染到步骤时间线。
+/// asst.steps 里每一步 { stage, round, model, content, state }，UI 按 state 上色。
+async function runEnhanced(c, history, userText, asst) {
+  const em = enhanceModels();
+  if (!em) throw new Error("增强模式需要至少 3 个可用模型（按积分排名）");
+  const steps = [];
+  asst.steps = steps;
+  const push = (st) => {
+    steps.push(st);
+    // 阶段推进时点亮发送按钮的进度点（3 段：drill / summarize / answer）
+    window.enhStageDone = steps.filter(s => s.state === "done").length;
+    updateSendBtn();
+    return st;
+  };
+  const repaint = () => {
+    markMsgDirty(c.id, c.msgs.indexOf(asst));
+    renderMessages();
+  };
+  // 阶段标题（时间线上展示用）
+  const DRILL_TITLE = ["理解问题", "质疑理解", "验证任务"];
+
+  // ---- 第 1 段：积分第三的模型自我 drill 3 遍 ----
+  // 同一模型连跑三轮，每轮把上一轮产出并入上下文 → 真正的"自我迭代"修正，
+  // 而不是三次互不相干的独立回答。
+  let prev = "";
+  for (let r = 1; r <= 3; r++) {
+    const st = push({ stage: "drill", round: r, model: em.drill, content: "", state: "streaming" });
+    repaint();
+    const ask = r === 1
+      ? `以下是用户的原始提问：\n\n${userText}\n\n请执行 DRILL 1（理解问题）：按协议清单逐条分析，最后给出「第一版任务定义」。不要回答问题本身。`
+      : `你在 DRILL ${r - 1} 的产出：\n\n${prev}\n\n原始提问：\n\n${userText}\n\n请执行 DRILL ${r}（${DRILL_TITLE[r - 1]}）：按协议清单逐条检查，发现问题必须明确修正任务定义（不要只罗列风险，也不要回答问题本身）。`;
+    const sink = await streamOnce(
+      [{ role: "system", content: DRILL_PROMPT }, { role: "user", content: ask }],
+      em.drill,
+      (s) => { st.content = s.content || s.reasoning || ""; repaint(); },
+    );
+    st.content = sink.content || sink.reasoning || "";
+    st.state = "done";
+    prev = st.content;
+    repaint();
+  }
+
+  // ---- 第 2 段：积分第二的模型总结三份 drill 产物 ----
+  const sumSt = push({ stage: "summarize", model: em.summary, content: "", state: "streaming" });
+  repaint();
+  const drills = steps.filter(s => s.stage === "drill")
+    .map(s => `【DRILL ${s.round} · ${DRILL_TITLE[s.round - 1]}】\n${s.content}`).join("\n\n");
+  const sumSink = await streamOnce([
+    { role: "system", content: "你是任务定义总结器。用户给了你一个模型的三轮 DRILL 产物与原始提问。请合并歧义、指出事实错误与未经证实的假设，输出一份**最终任务定义**（可直接交给作答模型执行）。不要回答用户问题本身。" },
+    { role: "user", content: `原始提问：\n\n${userText}\n\n三轮 DRILL 产物：\n\n${drills}` },
+  ], em.summary, (s) => { sumSt.content = s.content || ""; repaint(); });
+  sumSt.content = sumSink.content || "";
+  sumSt.state = "done";
+  repaint();
+
+  // ---- 第 3 段：积分第一的模型给用户最终回答 ----
+  const ansSt = push({ stage: "answer", model: em.answer, content: "", state: "streaming" });
+  repaint();
+  const ansSink = await streamOnce([
+    ...history,
+    { role: "system", content: "你是最终作答模型。请依据下面的最终任务定义回答用户问题，不要展示思考过程，也不要复述任务定义本身。" },
+    { role: "user", content: `最终任务定义：\n\n${sumSt.content}\n\n---\n\n请据此回答这个提问：\n\n${userText}` },
+  ], em.answer, (s) => { asst.content = s.content || ""; repaint(); });
+  asst.content = ansSink.content || "";
+  ansSt.content = ansSink.content || "";
+  ansSt.state = "done";
+  // 任何一步抛错时把仍在 streaming 的步骤标为 error，UI 才能显示"哪一步挂了"
+  steps.forEach(s => { if (s.state === "streaming") s.state = "error"; });
+  repaint();
+  return asst;
+}
+
 // ================= 附件（+ 号）：照片 / 视频 / 文件 =================
 // 图片转 data URL 供 vision parts 与缩略图；音频走转写；其他文件作为文字
 // 说明随消息发送（网关无文档解析端点）。
 // v0.9.0 起附件随消息持久化进 IndexedDB（slimAtt）：图片留 dataUrl 供刷新后
 // 渲染缩略图，音频留 Blob 供刷新后重发转写——localStorage 时代的剥离逻辑已删。
 let attachments = []; // { name, size, type, kind: "image"|"audio"|"file", dataUrl?, file }
+
+// ================= 增强模式开关（全局状态） =================
+// 状态变量声明见「模型增强模式」一节；此处只做事件绑定。
+$("enh-check").addEventListener("change", (e) => {
+  enhanceOn = e.target.checked;
+  updateSendBtn();
+});
+// 输入框内容变化时刷新增强开关的可用性与提示（长度阈值 20 字）
+$("input").addEventListener("input", () => { if (modelDlg.open) renderModelList(); });
+// 模型搜索框：模糊过滤（模型名 / 渠道 / provider），换词回到第 1 页
+$("model-search").addEventListener("input", (e) => setModelQuery(e.target.value));
 
 function pickFiles() { $("file-input").click(); }
 function fmtSize(b) {
@@ -3063,10 +3465,32 @@ async function chatStream(messages, model, handlers) {
   return sink.content;
 }
 
-// ================= 模型选择器 =================
-// sel/onPick 参数化：聊天页用 curModel + pickModel；通话页用 callModel + 自己的回调。
+// ================= 模型选择器：分页 + 模糊搜索 =================
+// sel/onPick 参数化：聊天页用 curModel + pickModel；通话页用 callModel + 自己的回调（两者共用同一份渲染与分页）。
+// 每页最多 6 条（硬性上限，MP_PAGE_SIZE）。「自动」是"不指定模型"这个语义选项，
+// 固定钉在列表顶部、不参与分页切割；其余条目按积分倒序后再分页。
+// 状态变量在此声明（openModelPicker 等函数在更早的位置就会读写它们，
+// 放到函数后面会撞 TDZ）。
+const MP_PAGE_SIZE = 6;
+let mpPage = 1;         // 当前页码（1 起）
+let mpQuery = "";       // 模型名 / 渠道 / provider 模糊搜索词
+function turnModelPage(d) {
+  mpPage += d;
+  renderModelList();
+}
+function setModelQuery(q) {
+  mpQuery = (q || "").trim().toLowerCase();
+  mpPage = 1;           // 换搜索词回到第一页
+  renderModelList();
+}
+
 let modelPickCb = null;
-function openModelPicker() { renderModelList(); modelDlg.showModal(); }
+function openModelPicker() {
+  // 每次打开都重置搜索词与页码，避免上次的过滤/页码残留
+  mpQuery = ""; mpPage = 1;
+  const s = $("model-search"); if (s) s.value = "";
+  renderModelList(); modelDlg.showModal();
+}
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
@@ -3085,8 +3509,21 @@ function renderModelList(sel, onPick) {
   }
   items.forEach(it => { it.score = Points.score(it.key); });
   items.sort((a, b) => (b.score - a.score) || (a.auto === b.auto ? 0 : a.auto ? -1 : 1) || String(a.name).localeCompare(String(b.name)));
+  // 模糊搜索：模型名 / 渠道名 / provider 任一命中即保留（「自动」始终保留，它是兜底选项）
+  const hit = it => it.auto || !mpQuery
+    || it.name.toLowerCase().includes(mpQuery)
+    || String(it.ch && it.ch.name || "").toLowerCase().includes(mpQuery)
+    || String(it.ch && it.ch.provider || "").toLowerCase().includes(mpQuery);
+  const autoItem = items.find(it => it.auto);
+  const rest = items.filter(it => !it.auto).filter(hit);
+  const pages = Math.max(1, Math.ceil(rest.length / MP_PAGE_SIZE));
+  if (mpPage > pages) mpPage = pages;
+  if (mpPage < 1) mpPage = 1;
+  const slice = rest.slice((mpPage - 1) * MP_PAGE_SIZE, mpPage * MP_PAGE_SIZE);
+  const shown = autoItem && mpPage === 1 ? [autoItem, ...slice] : slice;  // 「自动」仅在第一页出现
+
   const autoSel = sel ? "" : "sel";
-  let html = items.map(it => {
+  let html = shown.map(it => {
     if (it.auto) {
       return `<div class="model-opt ${autoSel}" onclick="modelPickCb('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div><span class="p">积分 ${it.score}</span></div>`;
     }
@@ -3094,7 +3531,20 @@ function renderModelList(sel, onPick) {
     return `<div class="model-opt ${sel === it.name ? "sel" : ""}" onclick="modelPickCb('${esc(it.name)}')"><div><b>${esc(it.name)}</b></div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
   }).join("");
   if (!usable.length) html += `<div class="empty">还没有可用渠道 —— 去「模型管理」登记资源并启用</div>`;
+  else if (!rest.length && mpQuery) html += `<div class="empty">没有匹配「${esc(mpQuery)}」的模型 —— 换个关键词，或用上方输入框直接指定自定义模型名</div>`;
   $("model-list").innerHTML = html;
+
+  // 分页条：仅一页时隐藏，避免"1/1"这种无意义控件
+  const pager = $("model-pager");
+  if (pages > 1) {
+    pager.hidden = false;
+    $("model-page-n").textContent = `${mpPage} / ${pages} · 共 ${rest.length} 个`;
+    pager.querySelectorAll("button")[0].disabled = mpPage <= 1;
+    pager.querySelectorAll("button")[1].disabled = mpPage >= pages;
+  } else {
+    pager.hidden = true;
+  }
+  syncEnhanceRow();
 }
 function pickModel(m) {
   const changed = curModel !== m;
@@ -3324,11 +3774,13 @@ function modelHealth(m) {
     default: return { dot: "off", label: "未知" };
   }
 }
-let modelFilter = "all";
+/// 旧的能力筛选（cap-filter）已换成三标签页（文本 / 音频 / 图片·视频）。
+/// 保留此函数只为兼容历史调用与外部书签：把旧 cap 名映射到新标签。
 function setModelFilter(k) {
-  modelFilter = k;
-  document.querySelectorAll("#cap-filter .chip").forEach(b => b.classList.toggle("sel", b.dataset.cap === k));
-  renderChannels();
+  if (k === "text") return setModelTab("text");
+  if (k === "stt" || k === "tts") return setModelTab("audio");
+  if (k === "vision") return setModelTab("mm");
+  toast("能力筛选已改为「模型列表」的三标签页", "");
 }
 function capBadge(kind, alt) {
   const one = k => `<span class="cap-badge ${esc(k)}" title="${esc(CAP_LABEL[k] || k)}能力">${esc(CAP_LABEL[k] || k)}</span>`;
@@ -3345,44 +3797,70 @@ function modelRow(c, m) {
   return `<div class="m-row">
     <span class="dot ${h.dot}"></span>
     <span class="m-name" title="${esc(m.name)}">${esc(m.name)}</span>
+    <span class="m-ch" title="${esc(c.name)} · ${esc(c.provider)}">${esc(c.name)}</span>
     ${capBadge(m.kind, m.alt_kind)}
     <span class="m-prio" title="模型优先级（大者优先）">P${m.priority ?? 50}</span>
     <span class="dot-lbl">${h.label}</span>
     ${ops}
   </div>`;
 }
-async function toggleModel(cid, idx, enable) {
-  const c = CHANNELS.find(x => x.id === cid);
-  if (!c || !c.models_meta || !c.models_meta[idx]) return;
-  const meta = c.models_meta.map((m, i) => i === idx ? { ...m, enabled: enable } : m);
-  try {
-    await api("/channels/" + encodeURIComponent(cid), "PUT", { models_meta: meta });
-    toast(enable ? "已启用该模型" : "已停用该模型", "ok");
-    loadAll();
-  } catch (e) { toast("操作失败：" + e.message, "err"); }
-}
 
+// ================= 模型列表：三个标签页（文本 / 音频 / 图片·视频） =================
+// 此前模型行是嵌在每个渠道卡内部（ch-models），渠道一多就变成瀑布、且徽章会溢出卡片。
+// 现在抽成独立的平铺列表，按能力分三页：
+//   text  = text（主或次要能力命中）
+//   audio = stt / tts
+//   mm    = vision / video
+// 每个模型只在其**主能力**所在页出现一次，次要能力用徽章标注，避免重复计数。
+let modelTab = "text";
+function setModelTab(k) {
+  modelTab = k;
+  document.querySelectorAll("#model-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.tab === k));
+  renderModelTab();
+}
+const TAB_CAPS = { text: ["text"], audio: ["stt", "tts"], mm: ["vision", "video"] };
+function modelsOfTab(k) {
+  const caps = TAB_CAPS[k] || [];
+  const out = [];
+  for (const c of CHANNELS) {
+    for (const m of effModels(c)) {
+      if (m.enabled === false) continue;
+      if (!caps.includes(m.kind)) continue;   // 只按主能力归页，避免同一模型在两页重复出现
+      out.push({ c, m });
+    }
+  }
+  // 同名模型跨渠道并存时都列出来（各自 priority/health 可能不同），按渠道优先级 + 模型优先级排序
+  out.sort((a, b) => ((b.c.priority || 0) - (a.c.priority || 0))
+    || ((b.m.priority ?? 50) - (a.m.priority ?? 50))
+    || String(a.m.name).localeCompare(String(b.m.name)));
+  return out;
+}
+function renderModelTab() {
+  const el = $("model-rows");
+  if (!el) return;
+  const list = modelsOfTab(modelTab);
+  const total = TAB_CAPS[modelTab].reduce((n, cap) =>
+    n + CHANNELS.reduce((k, c) => k + effModels(c).filter(m => m.kind === cap).length, 0), 0);
+  $("model-count").textContent = `（本页 ${list.length} / 该类共 ${total}）`;
+  if (!list.length) {
+    el.innerHTML = `<div class="empty">还没有登记「${esc(CAP_LABEL[TAB_CAPS[modelTab][0]] || modelTab)}」类模型 —— 去「已登记资源」里点「编辑」给模型配置能力</div>`;
+    return;
+  }
+  el.innerHTML = list.map(({ c, m }) => modelRow(c, m)).join("");
+}
 function renderChannels() {
   const el = $("channel-rows");
   $("channel-count").textContent = `（${CHANNELS.length}）`;
+  renderModelTab();   // 模型列表与渠道列表同源，一次渲染两处
   if (!CHANNELS.length) {
     el.innerHTML = `<div class="empty">还没有登记任何资源 —— 点上方「＋ 登记新资源」，或从预设目录一键登记</div>`;
     return;
   }
   const sorted = CHANNELS.slice().sort((a, b) => (b.priority || 0) - (a.priority || 0));
-  const visible = sorted.map(c => {
-    const ms = effModels(c);
-    const shown = modelFilter === "all" ? ms : ms.filter(m => m.kind === modelFilter || m.alt_kind === modelFilter);
-    return { c, ms, shown };
-  }).filter(x => x.shown.length);
-  if (!visible.length) {
-    el.innerHTML = `<div class="empty">没有包含「${esc(CAP_LABEL[modelFilter] || modelFilter)}」能力模型的渠道 —— 换个筛选，或去「编辑」给模型配置能力</div>`;
-    return;
-  }
-  el.innerHTML = visible.map(({ c, shown }) => {
+  el.innerHTML = sorted.map(c => {
     const h = healthOf(c);
-    const rows = shown.map(m => modelRow(c, m)).join("");
-    const caps = [...new Set(effModels(c).flatMap(m => m.alt_kind ? [m.kind, m.alt_kind] : [m.kind]))].map(k => capBadge(k)).join("");
+    const ms = effModels(c);
+    const caps = [...new Set(ms.flatMap(m => m.alt_kind ? [m.kind, m.alt_kind] : [m.kind]))].map(k => capBadge(k)).join("");
     const lat = c.health && c.health.latency_ms ? `<span>${c.health.latency_ms}ms</span>` : "";
     const err = c.health && c.health.last_error ? `<span style="color:var(--warn)">${esc(c.health.last_error)}</span>` : "";
     return `<div class="ch-card ${c.enabled ? "" : "disabled"}">
@@ -3397,7 +3875,6 @@ function renderChannels() {
       </div>
       <div class="ch-sub" title="${esc(c.base_url)}">${esc(c.base_url)}</div>
       ${caps ? `<div class="ch-caps">${caps}</div>` : ""}
-      <div class="ch-models">${rows}</div>
       <div class="ch-meta">
         <span class="mask">${esc(c.api_key_masked || "未登记")}</span>
         <span class="prio"><button onclick="bumpPriority('${esc(c.id)}',-10)" title="降优先级">▼</button>${c.priority ?? 0}<button onclick="bumpPriority('${esc(c.id)}',10)" title="升优先级">▲</button></span>
@@ -3413,6 +3890,23 @@ function renderChannels() {
       </div>
     </div>`;
   }).join("");
+}
+async function toggleModel(cid, idx, enable) {
+  const c = CHANNELS.find(x => x.id === cid);
+  if (!c || !c.models_meta || !c.models_meta[idx]) return;
+  const meta = c.models_meta.map((m, i) => i === idx ? { ...m, enabled: enable } : m);
+  try {
+    await api("/channels/" + encodeURIComponent(cid), "PUT", { models_meta: meta });
+    toast(enable ? "已启用该模型" : "已停用该模型", "ok");
+    loadAll();
+  } catch (e) { toast("操作失败：" + e.message, "err"); }
+}
+
+
+/// 侧栏顶部的 ⚙ 入口：进模型管理页并顺手把侧栏收起（移动端抽屉挡着内容）。
+function openModels() {
+  navigate("models");
+  closeSidebar();
 }
 
 function renderPresets(filter) {

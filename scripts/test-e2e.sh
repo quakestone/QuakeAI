@@ -763,7 +763,9 @@ echo "$UI0" | grep -q 'class="mm-alt"'; check "模型行支持次要能力(alt_k
 echo "$UI0" | grep -q 'r.querySelector(".mm-alt")'; check "保存时读取 alt_kind" $? "no read alt_kind"
 echo "$UI0" | grep -q 'capBadge(m.kind, m.alt_kind)'; check "模型行同时渲染主+次能力徽章" $? "no alt badge"
 echo "$UI0" | grep -q 'cap-badge.alt'; check "次要能力徽章有区分样式（虚线）" $? "no alt style"
-echo "$UI0" | grep -q 'm.alt_kind === modelFilter'; check "能力筛选含 alt_kind 命中" $? "no alt filter"
+# 原「能力筛选」chip 已被三标签页（文本/音频/图片·视频）取代，改为断言标签页按能力映射；
+# alt_kind 的命中改由 TAB_CAPS + capBadge(主, 次) 覆盖（见 §22）。
+echo "$UI0" | grep -q 'TAB_CAPS'; check "标签页按能力映射（取代原能力筛选）" $? "no TAB_CAPS"
 # 前端改完跑一遍真实往返：编辑 deepseek-flash 的 alt_kind 并保存，账本应落库
 curl -s -X PUT http://127.0.0.1:8787/admin/api/channels/seed-deepseek-chat -H 'Content-Type: application/json' \
   -d '{"models_meta":[{"name":"deepseek-flash","kind":"text","alt_kind":"vision","enabled":true,"priority":100,"price_in_hit":0.02,"price_in_miss":1.0,"price_out":2.0,"currency":"CNY"},{"name":"deepseek-v4-pro","kind":"text","alt_kind":"","enabled":true,"priority":90,"price_in_hit":0.025,"price_in_miss":3.0,"price_out":6.0,"currency":"CNY"}]}' > /dev/null
@@ -847,6 +849,64 @@ echo "$UI" | grep -q 'function playViaWebAudio(buf, mime)'; check "TTS 播放修
 SHARE=$(curl -s http://127.0.0.1:8787/s)
 echo "$SHARE" | grep -q 'id="back-btn"'; check "分享落地页有回退按钮" $? "no share back btn"
 
+
+echo
+echo "== 22. v0.16.0 模型选择器分页/搜索 + 增强模式三段接力 =="
+echo "$UI" | grep -q 'const MP_PAGE_SIZE = 6'; check "模型列表每页上限 6 条" $? "no page size"
+echo "$UI" | grep -q 'id="model-pager"'; check "模型选择器有分页控件" $? "no pager"
+echo "$UI" | grep -q 'id="model-page-n"'; check "分页显示页码与总数" $? "no page num"
+echo "$UI" | grep -q 'function turnModelPage(d)'; check "翻页函数已实现" $? "no turnPage"
+echo "$UI" | grep -q 'pages > 1'; check "仅一页时隐藏分页条" $? "pager always shown"
+echo "$UI" | grep -q 'id="model-search"'; check "模型选择器有搜索框" $? "no search box"
+echo "$UI" | grep -q 'function setModelQuery(q)'; check "模糊查询函数已实现" $? "no setQuery"
+echo "$UI" | grep -q 'it.name.toLowerCase().includes(mpQuery)'; check "搜索匹配模型名" $? "not match name"
+echo "$UI" | grep -q 'it.ch && it.ch.provider'; check "搜索同时匹配渠道名与供应商" $? "not match ch"
+echo "$UI" | grep -q 'mpPage = 1;           // 换搜索词回到第一页'; check "换搜索词回到第 1 页" $? "no reset page"
+echo "$UI" | grep -q 'class="icon-btn mp-mgmt"'; check "模型管理入口在选择页右上角" $? "no mgmt entry"
+echo "$UI" | grep -q 'onclick="openModels(); modelDlg.close()"'; check "右上角入口可跳转模型管理" $? "entry not wired"
+echo "$UI" | grep -q 'const DRILL_PROMPT = `PRE-ANSWER DRILL PROTOCOL v1.0'; check "已内置 PRE-ANSWER DRILL PROTOCOL v1.0" $? "no drill prompt"
+echo "$UI" | grep -q 'DRILL 3：验证任务'; check "DRILL 提示词含三轮清单" $? "incomplete protocol"
+echo "$UI" | grep -q 'function enhanceBlockReason(text, atts)'; check "增强模式生效条件函数" $? "no guard"
+echo "$UI" | grep -q 'if (callOpen) return "通话（音频问答）模式下不可用"'; check "增强模式排除音频问答" $? "no audio guard"
+echo "$UI" | grep -q 'text.trim().length <= 20'; check "增强模式要求文本超过 20 字" $? "no length guard"
+echo "$UI" | grep -q 'if (atts && atts.length) return "带附件的提问不走增强模式"'; check "增强模式排除附件提问" $? "no att guard"
+echo "$UI" | grep -q 'function enhanceModels()'; check "增强模式按积分取三个模型" $? "no enhanceModels"
+echo "$UI" | grep -q 'const pick = (i) => ranked\[i\] && ranked\[i\].key || fallback'; check "增强取积分第三/第二/第一" $? "wrong rank pick"
+echo "$UI" | grep -q 'for (let r = 1; r <= 3; r++)'; check "第 1 段：同一模型 drill 3 遍" $? "not 3 rounds"
+echo "$UI" | grep -q 'stage: "summarize"'; check "第 2 段：总结归纳" $? "no summarize stage"
+echo "$UI" | grep -q 'stage: "answer"'; check "第 3 段：最终作答" $? "no answer stage"
+echo "$UI" | grep -q 'function streamOnce(messages, model, onDelta)'; check "增强模式流式请求已实现" $? "no streamOnce"
+echo "$UI" | grep -q 'function renderSteps(steps)'; check "步骤时间线渲染已实现" $? "no renderSteps"
+echo "$UI" | grep -q 'class="steps-hd">⚡ 增强模式'; check "步骤区有增强模式标识" $? "no steps header"
+echo "$UI" | grep -q 'STEP_TITLES = { drill: "自我钻取"'; check "步骤标题含自我钻取" $? "no drill title"
+echo "$UI" | grep -q 'class="enh-badge">⚡ 增强模式'; check "增强回答带专属徽章" $? "no badge"
+echo "$UI" | grep -q 'asst.enhanced = true'; check "增强模式标记已落库" $? "not persisted"
+echo "$UI" | grep -q 'id="enh-check"'; check "模型选择器有增强开关" $? "no enh switch"
+echo "$UI" | grep -q 'function syncEnhanceRow()'; check "增强开关可用性实时同步" $? "no sync"
+echo "$UI" | grep -q '#btn-send.streaming { animation: sendPulse'; check "发送按钮普通生成动效" $? "no sendPulse"
+echo "$UI" | grep -q '@keyframes ringSpin'; check "增强生成双环旋转动效" $? "no ringSpin"
+echo "$UI" | grep -q 'b.classList.toggle("streaming-enhance"'; check "普通/增强动效状态可切换" $? "no toggle"
+echo "$UI" | grep -q 'class="enh-dots"'; check "增强模式有阶段进度点" $? "no dots"
+echo "$UI" | grep -q '@media (prefers-reduced-motion: reduce)'; check "动效尊重系统减弱偏好" $? "no reduced motion"
+python3 - <<'PYX'
+import re,sys
+s=open('src/admin_ui.html',encoding='utf-8').read()
+top=re.search(r'<header class="chat-top">(.*?)</header>', s, re.S)
+body=top.group(1) if top else ''
+# 顶栏右侧顺序：主题 → 通话 → 新建会话
+i_theme=body.find('id="btn-theme"'); i_call=body.find('id="btn-call"'); i_new=body.find('id="btn-newchat"')
+sys.exit(0 if -1<i_theme<i_call<i_new else 1)
+PYX
+check "顶栏右侧顺序：主题 → 通话 → 新建会话" $? "wrong topbar order"
+echo "$UI" | grep -q 'id="model-tabs"'; check "模型管理有独立标签页容器" $? "no model tabs"
+echo "$UI" | grep -q 'data-tab="audio"'; check "模型管理含音频模型标签" $? "no audio tab"
+echo "$UI" | grep -q 'data-tab="mm"'; check "模型管理含图片视频标签" $? "no mm tab"
+echo "$UI" | grep -q 'const TAB_CAPS = { text: \["text"\], audio: \["stt", "tts"\], mm: \["vision", "video"\] }'; check "标签页按能力映射" $? "bad tab caps"
+echo "$UI" | grep -q 'let modelTab = "text"'; check "标签页默认文本" $? "no default tab"
+echo "$UI" | grep -q 'ttl-box'; check "模型管理页头有可收缩标题块" $? "no ttl-box"
+echo "$UI" | grep -q '\.mgmt-top > \.icon-btn, \.mgmt-top > button:not(\.icon-btn)'; check "模型管理页头按钮不参与收缩" $? "header squeezes"
+echo "$UI" | grep -q 'tabbar'; check "标签栏样式存在（横向滚动不换行）" $? "no tabbar css"
+echo "$UI" | grep -q 'flex-wrap: wrap; min-width: 0; }'; check "模型行允许换行防溢出" $? "m-row overflow"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
