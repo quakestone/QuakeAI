@@ -1,6 +1,6 @@
 [package]
 name = "zhipu-wasm-gateway"
-version = "0.19.16"
+version = "0.19.17"
 edition = "2021"
 description = "WASM AI 聚合网关：资源管理 + 智能路由（Rust → Cloudflare Workers）"
 
