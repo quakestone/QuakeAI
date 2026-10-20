@@ -145,7 +145,10 @@
   .pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
   .pager button { width: 34px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; flex: none; }
   .pager button:disabled { opacity: .35; }
-  .pager .pg-n { min-width: 0; }
+.pager .pg-n { min-width: 0; }
+  /* 侧栏内的会话分页条：更紧凑，贴着列表底部 */
+  .convo-pager { margin: 0 8px 8px; padding-top: 6px; border-top: 1px solid var(--border); }
+  .convo-pager button { width: 30px; height: 26px; font-size: 14px; }
 
   /* ---- 表格防出界：宽表一律横向滚动，绝不撑破卡片 ---- */
   .tbl-scroll { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 8px; }
@@ -595,6 +598,11 @@
     <div id="convo-hit-n" class="convo-hit-n" hidden></div>
   </div>
   <div id="convo-list"></div>
+  <div class="pager convo-pager" id="convo-pager" hidden>
+    <button onclick="turnConvoPage(-1)">‹</button>
+    <span class="pg-n" id="convo-page-n"></span>
+    <button onclick="turnConvoPage(1)">›</button>
+  </div>
   <div class="sidebar-foot">
     <button onclick="clearAllConvos()">🗑 清空全部会话</button>
     <div class="sidebar-meta">QUAKEAI 聚合网关 · <span id="side-version">…</span></div>
@@ -697,9 +705,8 @@
       <div class="sub">资源管理 · 智能路由 · 国内优先</div>
     </div>
     <div class="spacer"></div>
-    <button class="icon-btn" onclick="openVoiceCfg()" aria-label="语音与多媒体设置" title="语音与多媒体设置（音频模型 / 图片视频模型）">🎛</button>
     <span class="badge" id="store-badge">store: -</span>
-    <button onclick="loadAll()">刷新</button>
+    <button class="primary" onclick="openDrawer()">＋ 登记资源</button>
   </header>
 
   <div class="mgmt-wrap">
@@ -744,20 +751,18 @@
       </div>
     </details>
 
-    <!-- 模型视图：顶部 6 标签统一切换「模型列表 / 模型用量 / 模型积分榜」。
+    <!-- 模型视图：顶部 4 标签统一切换「文本模型 / 多媒体模型 / 模型用量 / 模型积分榜」。
          资源登记、Key、多媒体等通用卡片留在下方常驻，不随标签切换。 -->
     <div class="card" id="model-view-card">
       <div class="tabbar" id="mgmt-tabs">
         <button class="tab sel" data-mtab="text" onclick="setMgmtTab('text')">💬 文本模型</button>
-        <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')">🧩 skill 模型</button>
-        <button class="tab" data-mtab="audio" onclick="setMgmtTab('audio')">🎧 音频模型</button>
-        <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')">🖼 图视模型</button>
+        <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')">🎬 多媒体模型</button>
         <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')">📊 模型用量</button>
         <button class="tab" data-mtab="points" onclick="setMgmtTab('points')">🏆 模型积分榜</button>
       </div>
       <h2 id="mgmt-view-ttl">模型列表 <span class="muted" id="model-count"></span></h2>
 
-      <!-- 面板 1：四类模型平铺列表（按标签过滤 + 各自独立翻页） -->
+      <!-- 面板 1：模型平铺列表（文本 / 多媒体两类，各自独立翻页，超过 5 条必分页） -->
       <div id="pane-models">
         <div id="model-rows"></div>
         <div class="pager" id="model-rows-pager" hidden>
@@ -767,16 +772,7 @@
         </div>
       </div>
 
-      <!-- 面板 2：skill 子系统（开发中，先占位） -->
-      <div id="pane-skill" hidden>
-        <div class="empty">🧩 <b>skill 模型子系统正在开发中</b><br>
-          规划形态：skill 以独立对象登记（标题 + 提示词正文），在模型选择器与本页共用同一个 skill 列表；
-          列表只展示<b>标题</b>一行，默认显示<b>使用最频繁的 6 条</b>，第 7 行是「扩展 skill」管理入口；
-          内置首个 skill 为「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL v1.0）。<br>
-          在此之前，聊天页勾选 ⚡ 增强模式 即为同一套协议的临时入口。</div>
-      </div>
-
-      <!-- 面板 3：模型用量（原本独立的用量卡搬进来，随标签切换） -->
+      <!-- 面板 3：模型用量 -->
       <div id="pane-usage" hidden>
 <div class="mg-pane-body" id="usage-card-body">
 <div class="hint" style="margin-bottom:10px">每次转发成功后从上游响应的 <code>usage</code> 字段取 token，按模型内置单价档案（命中/未命中两段输入计价）折算成本并落 Durable Object。仅登记了单价档案的渠道会计价，免费海外模型记 0。<b>导出 CSV 的列名对齐 DeepSeek 官方 usage_data 的 <code>cost-*.csv</code></b>，可与官方账单并排 diff 对账。</div>
@@ -803,7 +799,7 @@
 </div>
       </div>
 
-      <!-- 面板 4：模型积分榜（原本独立的积分卡搬进来） -->
+      <!-- 面板 4：模型积分榜 -->
       <div id="pane-points" hidden>
 <div class="mg-pane-body" id="points-card-body">
 <div class="hint" style="margin-bottom:10px">
@@ -966,7 +962,6 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <input id="model-custom" placeholder="自定义模型名（回车确认）…" style="margin-bottom:10px">
   <div class="tabbar" id="mp-tabs">
     <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">💬 文本模型</button>
-    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')">🧩 skill 模型</button>
     <button class="tab" data-mtab="audio" onclick="setMpTab('audio')">🎧 音频模型</button>
     <button class="tab" data-mtab="mm" onclick="setMpTab('mm')">🖼 图视模型</button>
   </div>
@@ -1433,6 +1428,7 @@ function newConvo() {
   }
   currentId = null;
   clearSearch();
+  convoPage = 1;              // 新会话排在最前，回第 1 页才能立刻看到自己那条
   renderConvos(); renderMessages(); updateChatTop();
   closeSidebar();
   setTimeout(() => $("input").focus(), 60);
@@ -1446,13 +1442,19 @@ function ensureConvo() {
   }
   return c;
 }
-function openConvo(id) { currentId = id; renderConvos(); renderMessages(); updateChatTop(); closeSidebar(); }
+function openConvo(id) {
+  currentId = id;
+  // 跳到该会话所在页，否则从别的页点进来会看不到自己选中项
+  const i = convos.findIndex(c => c.id === id);
+  if (i >= 0) convoPage = Math.floor(i / CONVO_PAGE_SIZE) + 1;
+  renderConvos(); renderMessages(); updateChatTop(); closeSidebar();
+}
 async function delConvo(id, ev) {
   ev.stopPropagation();
   convos = convos.filter(c => c.id !== id);
   if (currentId === id) currentId = null;
   await IDB.deleteConvo(id);
-  renderConvos(); renderMessages(); updateChatTop();
+  renderConvos();   // 页码越界时 renderConvos 内部会自动回落到最后一页 renderMessages(); updateChatTop();
 }
 /// 全量落库（低频路径：删除/截断后的兜底对齐）。流式期间走 markMsgDirty 细粒度写入。
 function saveConvos() {
@@ -1512,18 +1514,37 @@ async function runSearch(qRaw) {
   hitN.textContent = n ? `内容命中 ${n} 个会话` : "无内容命中（仅按标题匹配）";
   renderConvos();
 }
+// 历史会话分页：用户要求「该翻页一定翻页，不要一拉到底」。
+// 每页 CONVO_PAGE_SIZE 条；翻页只切内存数组，不重新读 IndexedDB。
+const CONVO_PAGE_SIZE = 8;
+let convoPage = 1;
+function turnConvoPage(d) { convoPage += d; renderConvos(); }
 function renderConvos() {
   const el = $("convo-list");
   let list = convos;
   if (searchQuery) list = convos.filter(c =>
     (c.title || "").toLowerCase().includes(searchQuery) || searchHits[c.id]);
+  const pg = $("convo-pager");
   if (!list.length) {
     el.innerHTML = searchQuery
       ? `<div class="empty" style="padding:16px;font-size:12px">没有匹配「${esc(searchQuery)}」的会话</div>`
       : '<div class="empty" style="padding:16px;font-size:12px">暂无会话</div>';
+    if (pg) pg.hidden = true;
     return;
   }
-  el.innerHTML = list.map(c => {
+  const pages = Math.max(1, Math.ceil(list.length / CONVO_PAGE_SIZE));
+  if (convoPage > pages) convoPage = pages;
+  if (convoPage < 1) convoPage = 1;
+  const slice = list.slice((convoPage - 1) * CONVO_PAGE_SIZE, convoPage * CONVO_PAGE_SIZE);
+  if (pg) {
+    if (pages > 1) {
+      pg.hidden = false;
+      $("convo-page-n").textContent = `${convoPage} / ${pages} · 共 ${list.length} 个会话`;
+      pg.querySelectorAll("button")[0].disabled = convoPage <= 1;
+      pg.querySelectorAll("button")[1].disabled = convoPage >= pages;
+    } else pg.hidden = true;
+  }
+  el.innerHTML = slice.map(c => {
     const hits = searchQuery && searchHits[c.id];
     const first = hits ? hits[Math.min(...Object.keys(hits).map(Number))] : "";
     const sub = hits
@@ -3557,9 +3578,9 @@ async function chatStream(messages, model, handlers) {
 const MP_PAGE_SIZE = 6;
 // 四个标签：文本 / skill / 音频 / 图视。每个标签**各自独立页码**，
 // 切标签不会串页（mpPages[标签]），换搜索词才把当前标签重置回第 1 页。
-const MP_TABS = ["text", "skill", "audio", "mm"];
+const MP_TABS = ["text", "audio", "mm"];
 let mpTab = "text";                    // 当前标签
-let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };  // 各标签独立页码
+let mpPages = { text: 1, audio: 1, mm: 1 };  // 各标签独立页码
 let mpQuery = "";       // 模型名 / 渠道 / provider 模糊搜索词
 function mpPage() { return mpPages[mpTab] || 1; }
 function setMpPage(p) { mpPages[mpTab] = Math.max(1, p); renderModelList(); }
@@ -3582,7 +3603,7 @@ let modelPickCb = null;
 function openModelPicker() {
   // 每次打开都重置搜索词与页码，避免上次的过滤/页码残留
   mpQuery = "";
-  mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };
+  mpPages = { text: 1, audio: 1, mm: 1 };
   mpTab = "text";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === "text"));
   const s = $("model-search"); if (s) s.value = "";
@@ -3594,7 +3615,6 @@ function openModelPicker() {
 //   mm    = vision / video 能力模型
 //   skill = skill 子系统尚未上线，只给占位提示（标签入口先占住，避免以后改结构）
 function mpItems() {
-  if (mpTab === "skill") return null;
   const want = mpTab === "audio" ? ["stt", "tts"] : mpTab === "mm" ? ["vision", "video"] : ["text"];
   //音频 / 图视标签不限于 chat 渠道（语音、视觉常挂在独立 kind 上），文本标签则只取可用对话渠道
   const pool = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
@@ -3612,15 +3632,6 @@ function mpItems() {
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
-  // skill 标签：子系统开发中（见开发说明），这里只给占位，不塞假数据
-  if (mpTab === "skill") {
-    $("model-list").innerHTML = `<div class="empty">🧩 skill 模型子系统正在开发中 —— 内置首个 skill「三个诸葛亮」，
-      届时将在此以「标题 + 使用频次」双列展示（使用最频繁的 6 条 + 「扩展 skill」入口）。<br>
-      现在先用「文本模型」标签提问，勾选 ⚡ 增强模式即为同一套 PRE-ANSWER DRILL 协议的临时入口。</div>`;
-    $("model-pager").hidden = true;
-    syncEnhanceRow();
-    return;
-  }
   const usable = mpTab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
   // 候选条目：自动 + 各渠道的模型。按**积分倒序**排（分高在前），
   // 「自动」同样参与计分与排序——自动被选中/被使用都会累计积分。
@@ -3702,8 +3713,9 @@ async function loadAll() {
     renderMgmtMm();       // 音频 / 图片视频 两块的多媒体设置
     if (data.version) $("side-version").textContent = "v" + data.version;
   } catch (e) {
-    $("store-badge").textContent = "store: error";
-    $("store-badge").className = "badge err";
+    // 账本异常不再往顶栏糊红标（用户要求屏蔽 error 展示），详情仍见页面顶部 store-banner
+    $("store-badge").textContent = "store: —";
+    $("store-badge").className = "badge";
     toast("加载失败：" + e.message, "err");
     refreshVersion(); // /channels 挂了也尽量显示真实版本（/health 兜底）
   }
@@ -3730,8 +3742,9 @@ function renderStore(data) {
   const ok = data.store === "durable-object";
   $("store-banner").hidden = ok;
   if (!ok) $("store-error").textContent = data.store_error || "未知";
-  $("store-badge").textContent = "store: " + (data.store || "unknown");
-  $("store-badge").className = "badge " + (ok ? "on" : "err");
+  // 只在账本可用时点亮；不可用不报红（用户要求屏蔽 error 展示）
+  $("store-badge").textContent = ok ? "store: " + (data.store || "ok") : "store: —";
+  $("store-badge").className = "badge" + (ok ? " on" : "");
 }
 
 function renderStats(s) {
@@ -3904,7 +3917,7 @@ function modelHealth(m) {
 /// 保留此函数只为兼容历史调用与外部书签：把旧 cap 名映射到新标签。
 function setModelFilter(k) {
   if (k === "text") return setModelTab("text");
-  if (k === "stt" || k === "tts") return setModelTab("audio");
+  if (k === "stt" || k === "tts") return setModelTab("mm");
   if (k === "vision") return setModelTab("mm");
   toast("能力筛选已改为「模型列表」的三标签页", "");
 }
@@ -3941,21 +3954,21 @@ function modelRow(c, m) {
 // 模型管理页顶部的 6 标签（文本/skill/音频/图视/用量/积分榜）。
 // 前4 个切「模型列表」面板（各自独立页码），后 2 个把用量、积分榜面板显出来。
 let mgmtTab = "text";
-const MGMT_TABS = ["text", "skill", "audio", "mm", "usage", "points"];
+const MGMT_TABS = ["text", "mm", "usage", "points"];
 const MGMT_TAB_TTL = {
-  text: "模型列表 · 文本", skill: "模型列表 · skill", audio: "模型列表 · 音频",
-  mm: "模型列表 · 图视", usage: "模型用量", points: "模型积分榜",
+  text: "文本模型", mm: "多媒体模型（音频 · 图片 · 视频）", usage: "模型用量", points: "模型积分榜",
 };
-const MG_PAGE_SIZE = 8;                 // 管理页模型列表每页 8 条
-let mgPages = { text: 1, skill: 1, audio: 1, mm: 1 };
+// 用户要求：列表深度超过 5 个就全部改成分页 —— 每页 5 条，宁可多页也不一拉到底
+const MG_PAGE_SIZE = 5;
+let mgPages = { text: 1, mm: 1 };
 function setMgmtTab(k) {
   if (!MGMT_TABS.includes(k)) return;
   mgmtTab = k;
   document.querySelectorAll("#mgmt-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
   // 面板归属：文本/音频/图视三个标签共用「模型列表」面板，skill/用量/积分榜各自一个面板
-  const PANE_OF = { text: "models", audio: "models", mm: "models", skill: "skill", usage: "usage", points: "points" };
+  const PANE_OF = { text: "models", mm: "models", usage: "usage", points: "points" };
   const want = PANE_OF[k];
-  for (const p of ["models", "skill", "usage", "points"]) {
+  for (const p of ["models", "usage", "points"]) {
     const el = $("pane-" + p);
     if (el) el.hidden = (p !== want);
   }
@@ -3972,13 +3985,13 @@ function turnModelRowsPage(d) {
   renderModelTab();
 }
 // 兼容旧调用点（setModelFilter / 历史锚点）
-function setModelTab(k) { setMgmtTab(k === "video" ? "mm" : (MGMT_TABS.includes(k) ? k : "text")); }
+function setModelTab(k) { setMgmtTab(MGMT_TABS.includes(k) ? k : (k === "video" || k === "audio" ? "mm" : "text")); }
 
-const TAB_CAPS = { text: ["text"], audio: ["stt", "tts"], mm: ["vision", "video"] };
+// 多媒体标签一网打尽：STT / 播音 / 视觉 / 视频都归到「多媒体模型」
+const TAB_CAPS = { text: ["text"], mm: ["stt", "tts", "vision", "video"] };
 const MG_EMPTY = {
   text: "还没有登记文本类模型 —— 去「已登记资源」里点「编辑」给模型配置能力",
-  audio: "还没有登记 STT / 播音类模型 —— 同上，把模型的能力标成 stt 或 tts",
-  mm: "还没有登记视觉 / 视频类模型 —— 同上，把模型的能力标成 vision 或 video",
+  mm: "还没有登记多媒体类模型（音频 / 图片 / 视频）—— 同上，把模型的能力标成 stt / tts / vision / video",
 };
 function modelsOfTab(k) {
   const caps = TAB_CAPS[k] || [];
