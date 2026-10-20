@@ -133,6 +133,8 @@
   .msg-meta .act-btn { border: none; background: none; color: var(--dim); font-size: 11px; padding: 1px 6px; min-height: 0; border-radius: 5px; cursor: pointer; line-height: 1.7; white-space: nowrap; }
   .msg-meta .act-btn:hover { color: var(--fg); background: var(--panel2); }
   .msg-meta .act-btn:disabled { opacity: .5; cursor: default; }
+  /* 操作按钮成组：窄屏整组换行，不把「复制 分享」和「播音」拆到两行 */
+  .msg-meta .acts { display: inline-flex; align-items: center; gap: 2px; flex: none; white-space: nowrap; }
   .msg-meta .act-btn.speaking { color: var(--acc2); }
   /* 助手「…」推到 meta 行最右，不遮挡正文 */
   .msg-meta .more-inline { margin-left: auto; font-size: 14px; line-height: 1; padding: 1px 8px; }
@@ -227,8 +229,19 @@
   #msg-menu[hidden] { display: none; }
   #msg-menu button { border: none; background: none; color: var(--txt); font-size: 13px; padding: 8px 12px; text-align: left; border-radius: 6px; min-height: 0; cursor: pointer; }
   #msg-menu button:hover { background: var(--bg3); }
-  .cursor { display: inline-block; width: 7px; height: 14px; background: var(--acc2); vertical-align: -2px; margin-left: 2px; animation: blink 1s step-end infinite; }
+  /* 流式光标：细竖线，跟在最后一个字后面。节点是单例、只移动不重建，
+     所以闪烁动画不会每帧被重置（旧实现每帧重建 → 看起来像常亮） */
+  .cursor { display: inline-block; width: 2px; height: 1.05em; background: var(--acc2); vertical-align: -0.16em; margin-left: 2px; border-radius: 1px; animation: blink 1.1s step-end infinite; }
   @keyframes blink { 50% { opacity: 0; } }
+  /* 流式分层：稳定区只追加、尾段每帧重画，文字从光标处长出来 */
+  .md-stable, .md-tail, .md-seg { display: block; }
+  .md-tail:empty { display: none; }
+  /* 首字未到：三点呼吸，避免一大片空白 */
+  .typing { display: inline-flex; gap: 4px; align-items: center; padding: 5px 0; }
+  .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--dim); animation: typing 1.2s ease-in-out infinite; }
+  .typing i:nth-child(2) { animation-delay: .15s; }
+  .typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes typing { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-2px); } }
 
   /* markdown-lite */
   .content pre { background: var(--bg3); border: 1px solid var(--border); border-radius: 10px; padding: 12px; overflow-x: auto; margin: 8px 0; font-size: 12.5px; }
@@ -1942,38 +1955,81 @@ let followBottom = true;
 
 const SSE_SEP = /\r?\n\r?\n/;   // 兼容 \n\n 与 \r\n\r\n
 
+// ---- 流式呈现：把「到达节奏」和「呈现节奏」拆开 ----
+//
+// 上游给的是到达节奏：有时一次几十字，有时停两秒，块间隔毫无规律。
+// 屏幕需要的是呈现节奏：匀速、不断流、不瞬出。两者之间放一个缓冲队列：
+//
+//   target  已到达全文（缓冲池）
+//   shown   已呈现到的字符位置（游标，浮点，按时间累积）
+//
+// 每帧按「积压量 ÷ 目标滞后」反推速率：上游快就快、上游慢就慢，
+// 但始终慢半拍，这半拍就是拿来填断顿的。断顿时主动降速，把缓冲摊开用，
+// 所以视觉上不会出现空白期。接包完成后不再逐字，全文一次渲出来。
+const TYPE = {
+  minRate: 14,     // 字/秒：断顿时的最低速度（再低就像卡住）
+  burstMax: 900,   // 字/秒：一次来几千字也按这个上限追，1~2s 内追平
+  lagMin: 700,     // ms：缓冲深度下限
+  lagMax: 2600,    // ms：上限（慢模型给更深缓冲，才扛得住断顿）
+  starve: 380,     // ms：超过这么久没新内容就判定断顿
+  primeChars: 10,  // 首字到达后先攒这么多字再开口（慢流也有初始缓冲）
+  primeMs: 320,    // 攒不够就等这么久，别让用户干等
+};
+
 const STREAM = {
   gen: 0, convoId: null, idx: -1, msg: null,
   target: "", shown: 0,
+  started: false, firstArrival: 0,
+  lastTs: 0, lastArrival: 0, gaps: [], lag: 1000,
   raf: 0,
-  headKey: null, headHtml: "",
+  stableLen: 0, stableEl: null, tailEl: null, cursorEl: null,
 };
 
-/// 流式 markdown：把内容按「已闭合的段落」切开，头部结果缓存复用，只重解析尾巴。
-/// 长回答（几千字）下，每帧成本从 O(全文) 降到 O(尾段)。
-function mdStream(src) {
-  const s = String(src ?? "");
-  if (s.length < 600) { STREAM.headKey = null; return md(s); }   // 短文本不值得分段
-  // 未闭合的代码围栏之后都算「不稳定区」，从围栏起点重解析
-  let stableEnd = s.length;
-  if ((s.split("```").length - 1) % 2 === 1) {
-    const f = s.lastIndexOf("```");
-    if (f > 0) stableEnd = f;
+/// 已闭合的稳定前缀：最后一个「代码围栏外的空行」之后。
+/// 这段内容不会再变，渲染一次就够；之后每帧只重画尾段。
+function stableCut(src) {
+  let inFence = false, cut = 0, fenceStart = -1, fenceEnd = -1, i = 0;
+  const n = src.length;
+  while (i < n) {
+    const nl = src.indexOf("\n", i);
+    const end = nl < 0 ? n : nl;
+    const line = src.slice(i, end);
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+      if (inFence) fenceStart = i;
+      else fenceEnd = end + 1;
+    } else if (!inFence && line.trim() === "") {
+      cut = end + 1;
+    }
+    if (nl < 0) break;
+    i = nl + 1;
   }
-  let cut = s.lastIndexOf("\n\n", stableEnd);
-  if (cut < 0) cut = 0;
-  // 尾段过大（整段没有空行）时向后切，保证每帧解析量有上限
-  if (s.length - cut > 1200) {
-    const c2 = s.lastIndexOf("\n", s.length - 1200);
-    if (c2 > cut) cut = c2;
+  // 未闭合的围栏整段都"还会变"，从围栏起点算尾段
+  if (inFence && fenceStart >= 0) return fenceStart;
+  // 兜底：一整段几千字没有空行时，尾段会一直很大、每帧都要重解析。
+  // 超过 1600 字就按行切一刀（会把段落拆成两段，只在超长段落时发生）。
+  // back > fenceEnd 保证不会切进已闭合的代码块。
+  if (src.length - cut > 1600) {
+    const back = src.lastIndexOf("\n", src.length - 1200);
+    if (back > cut && back > fenceEnd) cut = back + 1;
   }
-  const head = s.slice(0, cut);
-  const tail = s.slice(cut);
-  if (head !== STREAM.headKey) {
-    STREAM.headKey = head;
-    STREAM.headHtml = head ? md(head) : "";
+  return cut;
+}
+
+/// 按空行切段，但保留代码围栏内部的空行（否则会把代码块切碎）
+function splitSegs(s) {
+  const out = [];
+  let buf = [], inFence = false;
+  for (const line of s.split("\n")) {
+    if (/^\s*```/.test(line)) inFence = !inFence;
+    if (!inFence && line.trim() === "") {
+      if (buf.length) { out.push(buf.join("\n")); buf = []; }
+      continue;
+    }
+    buf.push(line);
   }
-  return STREAM.headHtml + (tail ? md(tail) : "");
+  if (buf.length) out.push(buf.join("\n"));
+  return out;
 }
 
 function streamBegin(convoId, idx, msg, gen) {
@@ -1984,27 +2040,67 @@ function streamBegin(convoId, idx, msg, gen) {
   STREAM.msg = msg;
   STREAM.target = (msg && msg.content) || "";
   STREAM.shown = 0;
-  STREAM.headKey = null; STREAM.headHtml = "";
+  STREAM.started = false;
+  STREAM.firstArrival = 0;
+  STREAM.lastTs = 0;
+  STREAM.lastArrival = 0;
+  STREAM.gaps = [];
+  STREAM.lag = 1000;
+  STREAM.stableLen = 0;
+  STREAM.stableEl = null; STREAM.tailEl = null; STREAM.cursorEl = null;
 }
 
-/// 只登记目标文本，实际绘制交给 rAF —— 一帧内来十个 chunk 也只画一次
+/// 只登记目标文本，实际推进交给 rAF —— 一帧内来十个 chunk 也只画一次
 function streamPush(msg, gen) {
   if (!msg || (gen != null && gen !== STREAM.gen)) return;
+  const now = performance.now();
+  const next = msg.content || "";
+  if (next.length > STREAM.target.length) {
+    if (!STREAM.firstArrival) STREAM.firstArrival = now;
+    // 用块间隔估缓冲深度：慢模型（块间隔大）给更深的缓冲，
+    // 这样它断顿两秒时屏幕上还有字可吐。
+    if (STREAM.lastArrival) {
+      const gap = now - STREAM.lastArrival;
+      if (gap > 20 && gap < 8000) {
+        STREAM.gaps.push(gap);
+        if (STREAM.gaps.length > 5) STREAM.gaps.shift();
+        const s = STREAM.gaps.slice().sort((a, b) => a - b);
+        STREAM.lag = Math.max(TYPE.lagMin, Math.min(TYPE.lagMax, s[s.length >> 1] * 2.2));
+      }
+    }
+    STREAM.lastArrival = now;
+  }
   STREAM.msg = msg;
-  STREAM.target = msg.content || "";
+  STREAM.target = next;
   if (!STREAM.raf) STREAM.raf = requestAnimationFrame(streamFrame);
 }
 
-function streamFrame() {
+function streamFrame(ts) {
   STREAM.raf = 0;
-  const msg = STREAM.msg;
-  if (!msg) return;
+  if (!STREAM.msg) return;
+  const now = ts || performance.now();
+  if (!STREAM.lastTs) STREAM.lastTs = now;
+  // 后台标签页回来时 dt 会很大：钳到 120ms，避免整段瞬间蹦出来
+  const dt = Math.min(120, Math.max(0, now - STREAM.lastTs)) / 1000;
+  STREAM.lastTs = now;
+
+  // 首字到达后先攒一小段再开口：逐字慢流也能有初始缓冲，
+  // 否则"到达即显示"，一样是一顿一顿的。
+  if (!STREAM.started) {
+    const primed = STREAM.target.length >= TYPE.primeChars
+      || (STREAM.firstArrival && now - STREAM.firstArrival >= TYPE.primeMs);
+    if (!primed) { paintStream(false); STREAM.raf = requestAnimationFrame(streamFrame); return; }
+    STREAM.started = true;
+  }
+
   const backlog = STREAM.target.length - STREAM.shown;
   if (backlog <= 0) { STREAM.shown = STREAM.target.length; paintStream(false); return; }
-  // 积压越多吐得越快：正常流约 8 帧追平（≈130ms 延迟），巨量积压 6 帧内展开
-  const step = backlog > 1200 ? Math.ceil(backlog / 6)
-                              : Math.max(1, Math.min(40, Math.ceil(backlog / 8)));
-  STREAM.shown = Math.min(STREAM.target.length, STREAM.shown + step);
+
+  let rate = backlog / (STREAM.lag / 1000);
+  if (now - STREAM.lastArrival > TYPE.starve) rate = Math.min(rate, TYPE.minRate * 2);
+  rate = Math.max(TYPE.minRate, Math.min(TYPE.burstMax, rate));
+
+  STREAM.shown = Math.min(STREAM.target.length, STREAM.shown + rate * dt);
   paintStream(false);
   if (STREAM.shown < STREAM.target.length) STREAM.raf = requestAnimationFrame(streamFrame);
 }
@@ -2013,18 +2109,16 @@ function streamFrame() {
 function paintStream(final) {
   const msg = STREAM.msg;
   if (!msg) return;
+  // 切到别的会话了：把游标追上，别再空转 rAF；切回来由 renderMessages 全量补上
+  if (STREAM.convoId && currentId && STREAM.convoId !== currentId) {
+    STREAM.shown = STREAM.target.length;
+    return;
+  }
   const col = $("msg-col");
   const el = col && col.querySelector(`.msg.assistant[data-idx="${STREAM.idx}"]`);
-  if (!el) return;   // 切了会话或列表被重绘：交给下一次 renderMessages
-  const shown = STREAM.target.slice(0, STREAM.shown);
+  if (!el) return;   // 列表被重绘：交给下一次 renderMessages
   const content = el.querySelector(".content");
-  if (content) {
-    const key = STREAM.shown + (final ? "f" : "s");
-    if (content.dataset.k !== key) {
-      content.innerHTML = (shown ? mdStream(shown) : "") + (final ? "" : '<span class="cursor"></span>');
-      content.dataset.k = key;
-    }
-  }
+  if (content) paintContent(content, STREAM.target.slice(0, Math.floor(STREAM.shown)), final);
   // 思考过程：流式追加，不重建 <details>（否则用户展开的状态每帧被收起）
   if (msg.reasoning) {
     let think = el.querySelector(".think");
@@ -2052,14 +2146,94 @@ function paintStream(final) {
   if (followBottom) stickBottom();
 }
 
-/// 收尾：flush 剩余文字 + 补上操作按钮。gen 不匹配（已被新流接管）时什么都不做。
+/// 稳定区只追加、尾段每帧重画、光标单例只移动 ——
+/// 这样文字是从光标处一个个长出来的，不是整块重排。
+function paintContent(content, shown, final) {
+  // 终态：直接全量渲染，保证与刷新后的样子逐字一致
+  if (final) {
+    const html = shown ? md(shown) : "";
+    if (content.dataset.final !== "1" || content.dataset.fh !== html) {
+      content.innerHTML = html;
+      content.dataset.fh = html;
+      content.dataset.final = "1";
+    }
+    delete content.dataset.typing;
+    delete content.dataset.th;
+    STREAM.stableEl = STREAM.tailEl = null;
+    STREAM.stableLen = 0;
+    return;
+  }
+  delete content.dataset.final;
+
+  // 首字未到：三点呼吸，别让屏幕上只有一片空白
+  if (!shown) {
+    if (content.dataset.typing !== "1") {
+      content.innerHTML = '<div class="typing" aria-label="正在生成"><i></i><i></i><i></i></div>';
+      content.dataset.typing = "1";
+      STREAM.stableEl = STREAM.tailEl = null;
+      STREAM.stableLen = 0;
+    }
+    return;
+  }
+  if (content.dataset.typing === "1") {
+    delete content.dataset.typing;
+    content.innerHTML = "";
+    STREAM.stableEl = STREAM.tailEl = null;
+    STREAM.stableLen = 0;
+  }
+
+  let stable = content.querySelector(".md-stable");
+  let tail = content.querySelector(".md-tail");
+  if (!stable || !tail) {
+    content.innerHTML = '<div class="md-stable"></div><div class="md-tail"></div>';
+    stable = content.firstElementChild;
+    tail = content.lastElementChild;
+    STREAM.stableEl = stable; STREAM.tailEl = tail;
+    STREAM.stableLen = 0;
+  } else if (stable !== STREAM.stableEl) {
+    // 被外部重绘过（切会话回来）：稳定区要重铺
+    STREAM.stableEl = stable; STREAM.tailEl = tail;
+    STREAM.stableLen = 0;
+  }
+
+  const cut = stableCut(shown);
+  if (cut > STREAM.stableLen) {
+    for (const seg of splitSegs(shown.slice(STREAM.stableLen, cut))) {
+      if (!seg.trim()) continue;
+      const box = document.createElement("div");
+      box.className = "md-seg";
+      box.innerHTML = md(seg);
+      stable.appendChild(box);
+    }
+    STREAM.stableLen = cut;
+  }
+
+  const tailSrc = shown.slice(cut);
+  const tailHtml = tailSrc ? md(tailSrc) : "";
+  const cur = STREAM.cursorEl
+    || (STREAM.cursorEl = Object.assign(document.createElement("span"), { className: "cursor" }));
+  if (cur.parentNode) cur.remove();   // 先摘出来：innerHTML 重写不会销毁它，闪烁动画不重启
+  if (tail.dataset.th !== tailHtml) { tail.innerHTML = tailHtml; tail.dataset.th = tailHtml; }
+
+  let host = tail.lastElementChild || stable.lastElementChild || tail;
+  while (host && host.lastElementChild) host = host.lastElementChild;
+  if (host) host.appendChild(cur);
+}
+
+/// 收尾：接包完成，剩下的不再逐字吐，全文一次渲出来。
+/// gen 不匹配（已被新流接管）时什么都不做。
 function streamEnd(gen) {
   if (gen != null && gen !== STREAM.gen) return;
   if (STREAM.raf) { cancelAnimationFrame(STREAM.raf); STREAM.raf = 0; }
-  if (STREAM.msg) { STREAM.shown = STREAM.target.length; paintStream(true); }
+  if (STREAM.msg) {
+    STREAM.shown = STREAM.target.length;
+    paintStream(true);
+  }
   STREAM.msg = null; STREAM.idx = -1; STREAM.convoId = null;
   STREAM.target = ""; STREAM.shown = 0;
-  STREAM.headKey = null; STREAM.headHtml = "";
+  STREAM.started = false; STREAM.firstArrival = 0;
+  STREAM.lastTs = 0; STREAM.lastArrival = 0; STREAM.gaps = []; STREAM.lag = 1000;
+  STREAM.stableLen = 0; STREAM.stableEl = null; STREAM.tailEl = null; STREAM.cursorEl = null;
 }
 
 // ---- 滚动跟随：用户往上翻时不抢滚动条 ----
@@ -2097,7 +2271,11 @@ function msgHtml(m, i) {
   }
   if (m.error && !m.content) return `<div class="msg error" data-idx="${i}"><div class="avatar">⚠</div><div class="msg-body"><div class="content">${esc(m.error)}</div><div class="msg-meta">${fmtTime(m.ts)}<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button></div></div></div>`;
   const think = m.reasoning ? `<details class="think"><summary>思考过程</summary><div class="think-body">${esc(m.reasoning)}</div></details>` : "";
-  const body = (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
+  // 流式期间（切会话回来）首字未到：三点呼吸；已有内容则整段渲染 + 光标。
+  // 下一帧 paintContent 会把它换成"稳定区 + 尾段"的分层结构继续打字。
+  const body = m.streaming && !m.content
+    ? '<div class="typing" aria-label="正在生成"><i></i><i></i><i></i></div>'
+    : (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
   const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
   return `<div class="msg assistant" data-idx="${i}"><div class="avatar">AI</div><div class="msg-body">${think}<div class="content">${body}</div>${errLine}<div class="msg-meta"><span class="meta-badges">${badgesHtml(m)}</span>${fmtTime(m.ts)}${actsHtml(m)}</div></div></div>`;
 }
@@ -2117,11 +2295,12 @@ function badgesHtml(m) {
 /// 重新生成/删除留在「…」里。播音必须行内——它有播放中的状态反馈。
 function actsHtml(m) {
   if (m.streaming) return "";
-  if (m.error && !m.content) return `<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button>`;
-  return `<button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button>`
+  // 包一层 .acts：窄屏下整组一起换行，不会出现「复制 分享 / 🔊 播音」被拆散
+  if (m.error && !m.content) return `<span class="acts"><button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button></span>`;
+  return `<span class="acts"><button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button>`
     + `<button class="act-btn" onclick="shareMsg(this)" title="分享本条回答">分享</button>`
     + `<button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button>`
-    + `<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button>`;
+    + `<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button></span>`;
 }
 
 function renderMessages() {

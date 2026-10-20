@@ -917,10 +917,14 @@ sys.exit(0 if ok else 1)
 PYX
 check "输入框无提示词 / 顶栏中间留白 / 发送即清空" $? "composer placeholder or clear-order wrong"
 
-# v0.19.15：实时流引擎
+# v0.19.15 / v0.19.16：实时流引擎
 grep -qF 'const SSE_SEP = /\r?\n\r?\n/;' "$UI"; check "SSE 分隔兼容 CRLF（\\r\\n\\r\\n）" $? "no CRLF separator"
 grep -qF 'function paintStream(final)' "$UI"; check "流式增量绘制（只动当前条 DOM）" $? "no paintStream"
-grep -qF 'function mdStream(src)' "$UI"; check "流式 markdown 分段缓存" $? "no mdStream"
+grep -qF 'function stableCut(src)' "$UI"; check "稳定前缀切分（段落级增量）" $? "no stableCut"
+grep -qF 'function splitSegs(s)' "$UI"; check "按段切分且保留代码围栏内空行" $? "no splitSegs"
+grep -qF 'function paintContent(content, shown, final)' "$UI"; check "稳定区只追加 / 尾段每帧重画" $? "no paintContent"
+grep -qF 'minRate: 14' "$UI"; check "呈现速率有下限（断顿也继续吐字）" $? "no minRate"
+grep -qF 'const primed = STREAM.target.length >= TYPE.primeChars' "$UI"; check "首字先攒缓冲再开口" $? "no prime"
 grep -qF 'requestAnimationFrame(streamFrame)' "$UI"; check "rAF 合并绘制（一帧只画一次）" $? "no rAF merge"
 grep -qF 'if (followBottom) stickBottom()' "$UI"; check "上翻阅读时不抢滚动条" $? "scroll steal"
 grep -qF 'id="to-bottom"' "$UI"; check "有「回到最新」按钮" $? "no to-bottom"
