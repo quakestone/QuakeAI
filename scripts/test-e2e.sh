@@ -901,7 +901,21 @@ echo "$UI" | grep -q 'function turnUsagePage(d)'; check "用量表翻页函数" 
 echo "$UI" | grep -q '\.tbl-scroll'; check "宽表包横向滚动壳（防出界）" $? "no tbl-scroll"
 echo "$UI" | grep -q '\.mg-pane-body'; check "标签面板体可收缩（防出界）" $? "no pane body"
 echo "$UI" | grep -q 'class="brand-logo"'; check "首页左上角有 logo" $? "no brand logo"
-echo "$UI" | grep -q '<span class="brand-name">QUAKEAI网关</span>'; check "首页左上角列出产品名" $? "no brand name"
+echo "$UI" | grep -q '<span class="brand-name">QuakeAI</span>'; check "首页左上角列出产品名 QuakeAI" $? "no brand name"
+# v0.19.14：输入框无 placeholder、顶栏中间留白、发送即清空
+python3 - <<'PYX'
+import re, sys
+s = open('src/admin_ui.html', encoding='utf-8').read()
+ta = re.search(r'<textarea id="input"[^>]*>', s)
+ct = re.search(r'<span id="chat-title"[^>]*>(.*?)</span>', s, re.S)
+so = s[s.index("async function sendOrStop"):]
+so = so[:so.index("\n}\n")]
+ok = bool(ta) and 'placeholder' not in ta.group(0) \
+     and bool(ct) and ct.group(1).strip() == "" \
+     and so.index('input.value = ""') < so.index("await sendWith(text")
+sys.exit(0 if ok else 1)
+PYX
+check "输入框无提示词 / 顶栏中间留白 / 发送即清空" $? "composer placeholder or clear-order wrong"
 echo "$UI" | grep -q 'id="mp-tabs"'; check "模型选择页有 4 标签栏" $? "no mp tabs"
 
 echo "$UI" | grep -q 'const MP_TABS = \["text", "skill", "audio", "mm"\]'; check "选择页共 4 个标签" $? "bad MP_TABS"

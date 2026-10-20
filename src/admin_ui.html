@@ -679,7 +679,7 @@
 <!-- ==================== 全局侧栏（所有子页共用） ==================== -->
 <aside id="sidebar">
   <div class="sidebar-top">
-    <span class="sidebar-brand">QUAKEAI网关</span>
+    <span class="sidebar-brand">QuakeAI</span>
     <div class="spacer"></div>
     <button class="icon-btn side-home" onclick="navigate('chat'); closeSidebar()" aria-label="对话首页" title="对话首页">💬</button>
     <button class="icon-btn" onclick="openModels()" aria-label="模型管理" title="模型管理">⚙</button>
@@ -718,9 +718,10 @@
           <path d="M20 40 L32 18 L44 40" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
           <circle cx="32" cy="46" r="3.6" fill="#fff"/>
         </svg>
-        <span class="brand-name">QUAKEAI网关</span>
+        <span class="brand-name">QuakeAI</span>
       </span>
-      <span id="chat-title">新对话</span>
+      <!-- 顶栏中间留白：元素保留（撑住布局、右侧按钮仍靠右），但不显示会话标题 -->
+      <span id="chat-title" aria-hidden="true"></span>
       <div class="spacer"></div>
       <!-- 顶栏右侧：主题 → 通话 → 新建会话。新会话贴最右（最高频操作），月亮挪到最左 -->
       <button class="icon-btn" id="btn-theme" onclick="toggleTheme()" aria-label="切换明暗主题" title="明暗切换">🌙</button>
@@ -743,7 +744,7 @@
       <div id="composer">
         <button id="btn-attach" type="button" onclick="pickFiles()" aria-label="添加附件" title="照片 / 视频 / 文件">+</button>
         <button id="btn-model" class="composer-model" onclick="openModelPicker()" aria-label="选择模型" title="选择模型（按积分排序）">⋯</button>
-        <textarea id="input" rows="1" placeholder="给 AI 发消息…" title="Enter 发送 / Shift+Enter 换行"></textarea>
+        <textarea id="input" rows="1" title="Enter 发送 / Shift+Enter 换行"></textarea>
         <button id="btn-voice" type="button" aria-label="长按发语音" title="长按发语音">🎙</button>
         <button id="btn-send" onclick="sendOrStop()" aria-label="发送">↑</button>
       </div>
@@ -2333,8 +2334,8 @@ async function menuDelete() {
   toast("已删除该条消息", "ok");
 }
 function updateChatTop() {
-  const c = curConvo();
-  $("chat-title").textContent = c ? (c.title || "新对话") : "新对话";
+  // 顶栏中间留白：不再把会话标题写进顶栏（元素保留，占位由 CSS flex 决定）
+  const ctEl = $("chat-title"); if (ctEl && ctEl.textContent) ctEl.textContent = "";
   // 模型选择已是输入区圆形图标按钮：文字用 title 承载，选中时高亮
   const mb = $("btn-model");
   if (mb) {
@@ -2396,16 +2397,20 @@ async function sendOrStop() {
     }
     dropEditCtx();
   }
+  // 清空必须在 await sendWith 之前：sendWith 要等整条 SSE 流跑完才返回，
+  // 放在它后面会让输入框在整个生成期间仍显示刚发出去的文本。
+  input.value = ""; autoGrow();
+  attachments = []; renderAttachments();
   updateSendBtn();
   try {
     await sendWith(text, atts);
   } catch (e) {
-    return; // 转写失败等：保留输入与附件，用户可修改后重发（不必重输）
+    // 转写失败等：把原文与附件还回输入框，用户改一下就能重发（不必重输）
+    input.value = text; autoGrow();
+    attachments = atts; renderAttachments();
   } finally {
     updateSendBtn();
   }
-  input.value = ""; autoGrow();
-  attachments = []; renderAttachments();
 }
 
 /// 实际发送链路（输入框发送 / 长按重发 / 通话共用）。

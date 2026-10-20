@@ -1,6 +1,40 @@
 # CHANGES
 
-## v0.19.13（本版）—— 输入区重排 / 头像层级 / 修改回填 / 模型页定位
+## v0.19.14（本版）—— 输入框去提示词 / 发送即清空 / 顶栏 QuakeAI
+
+> 用户 3 条反馈。第 2 条是真 bug：清空动作写在了 `await sendWith()` 之后。
+
+### 1. 输入框去掉 placeholder
+
+`placeholder="给 AI 发消息…"` 删除，快捷键说明仍挂在 `title` 上（hover 可见）。
+输入框空态就是纯空框，不再有灰字。
+
+### 2. 发送后立即清空输入框
+
+`sendOrStop` 原来是这样：
+
+```js
+try { await sendWith(text, atts); } finally { updateSendBtn(); }
+input.value = "";                    // ← 太晚
+```
+
+`sendWith` 要 `await` 到整条 SSE 流结束才返回，所以清空发生在**回答生成完之后**——
+整个生成期间输入框里还留着刚发出去的文本。改为拿到 `text/atts` 后立刻清空，
+并把附件一并清掉；`sendWith` 内部用的是传入的副本，不受影响。
+若 `sendWith` 抛错（语音转写失败等），再把原文与附件回填，用户改一下就能重发。
+
+### 3. 顶栏产品名改 QuakeAI，中间留白
+
+- `.brand-name`：`QUAKEAI网关` → `QuakeAI`（侧栏小字 `sidebar-brand` 同步）
+- `#chat-title`：元素保留（`flex: 1 1 auto` 继续撑住中间、右侧按钮仍贴右），
+  但不再写入会话标题，`updateChatTop()` 里恒置空
+
+会话标题仍可在侧栏看到，顶栏不再重复显示。
+
+验证：浏览器实测 10/10（真实页面 + 真实 wasm，SSE 用 2.5s 慢流卡住生成过程），
+含「生成中输入框已空」「320px 下右侧按钮不溢出」。截图见 `preview-v0.19.14`。
+
+## v0.19.13 —— 输入区重排 / 头像层级 / 修改回填 / 模型页定位
 
 > 用户 5 条反馈（编号 1、2、3、5、6，第 4 项未给出）。设计说明见
 > `docs/composer-edit-spec.md`。
