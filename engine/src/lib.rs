@@ -424,6 +424,193 @@ impl EngineCore {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 会话记忆状态机（Memory FSM）：纯数值、零 JSON、体积最小。
+// 职责：根据累计 token 与消息数做状态跃迁 + 计算上下文窗口（keep_from）。
+// 原始对话文本存在外部（浏览器 IndexedDB / Worker 侧 KV·D1），Wasm 只驻留
+// 这个几十字节的结构体，绝不长期持有大文本 —— 天然规避 CF Worker 内存压力。
+// 真压缩（语义摘要）由宿主侧 LLM 调用完成，FSM 只负责「何时压缩 + 窗口边界」。
+// ---------------------------------------------------------------------------
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionState {
+    Idle = 0,        // 初始/空闲
+    Collecting = 1,  // 正常收集期（保留最近 N 条）
+    Summarizing = 2, // 触发长文本摘要/压缩状态
+    Locked = 3,      // 会话超限锁定
+}
+
+impl SessionState {
+    fn from_code(c: i32) -> SessionState {
+        match c {
+            1 => SessionState::Collecting,
+            2 => SessionState::Summarizing,
+            3 => SessionState::Locked,
+            _ => SessionState::Idle,
+        }
+    }
+    fn code(self) -> i32 { self as i32 }
+}
+
+#[derive(Clone)]
+pub struct MemoryStateMachine {
+    state: SessionState,
+    token_count: u32,
+    max_tokens: u32,
+    hard_max: u32,
+    keep_recent: u32,
+    /// 已被折叠进摘要的历史边界（filtered 消息数组下标）。
+    summary_pointer: usize,
+    /// 已见消息总数（与 filtered 消息数组长度对齐，仅增）。
+    msg_count: u32,
+}
+
+impl MemoryStateMachine {
+    pub fn new(max_tokens: u32, hard_max: u32, keep_recent: u32) -> Self {
+        MemoryStateMachine {
+            state: SessionState::Idle,
+            token_count: 0,
+            max_tokens: max_tokens.max(1),
+            hard_max: hard_max.max(max_tokens.max(1)),
+            keep_recent: keep_recent.max(1),
+            summary_pointer: 0,
+            msg_count: 0,
+        }
+    }
+
+    /// 恢复持久化状态（跨页面/会话）。
+    pub fn restore(&mut self, state: i32, token_count: u32, summary_pointer: i32, msg_count: u32) {
+        self.state = SessionState::from_code(state);
+        self.token_count = token_count;
+        self.summary_pointer = summary_pointer.max(0) as usize;
+        self.msg_count = msg_count;
+    }
+
+    /// 喂入本轮增量：token 数 + 新增消息条数。返回新状态。
+    pub fn transition(&mut self, incoming_tokens: u32, new_msgs: u32) -> SessionState {
+        self.msg_count += new_msgs;
+        self.token_count += incoming_tokens;
+        if self.state == SessionState::Idle {
+            self.state = SessionState::Collecting;
+        }
+        if self.token_count > self.hard_max {
+            self.state = SessionState::Locked;
+        } else if self.token_count > self.max_tokens && self.state == SessionState::Collecting {
+            self.state = SessionState::Summarizing;
+        }
+        self.state
+    }
+
+    /// 计算「应保留的消息起始下标」：不早于已折叠边界，也不少于最近 keep_recent 条。
+    pub fn window_keep_from(&self) -> usize {
+        let recent_floor = if self.msg_count > self.keep_recent {
+            (self.msg_count - self.keep_recent) as usize
+        } else {
+            0
+        };
+        recent_floor.max(self.summary_pointer)
+    }
+
+    pub fn need_summary(&self) -> bool { self.state == SessionState::Summarizing }
+
+    /// 摘要完成后回报：重置 token 计数（用摘要自身 token 成本），推进边界，回到 Collecting。
+    pub fn note_summary(&mut self, summary_tokens: u32, new_pointer: i32) {
+        self.token_count = summary_tokens;
+        self.summary_pointer = new_pointer.max(0) as usize;
+        self.state = if self.token_count > self.hard_max {
+            SessionState::Locked
+        } else {
+            SessionState::Collecting
+        };
+    }
+
+    pub fn state(&self) -> SessionState { self.state }
+    pub fn token_count(&self) -> u32 { self.token_count }
+    pub fn summary_pointer(&self) -> usize { self.summary_pointer }
+    pub fn msg_count(&self) -> u32 { self.msg_count }
+}
+
+// ---- FSM 的 WASM ABI（仅 wasm32；宿主 cargo test 走下方单测） ----
+#[cfg(target_arch = "wasm32")]
+mod fsm_abi {
+    use super::*;
+    use std::sync::Mutex;
+
+    static FSM_REG: Mutex<Vec<Option<MemoryStateMachine>>> = Mutex::new(Vec::new());
+
+    /// 句柄 = 注册表下标；越界/已释放返回 -1。
+    #[no_mangle]
+    pub extern "C" fn memfsm_new(max_tokens: u32, hard_max: u32, keep_recent: u32) -> i32 {
+        let mut reg = FSM_REG.lock().unwrap();
+        reg.push(Some(MemoryStateMachine::new(max_tokens, hard_max, keep_recent)));
+        (reg.len() as i32) - 1
+    }
+
+    #[no_mangle]
+    pub extern "C" fn memfsm_drop(h: i32) {
+        let mut reg = FSM_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            *slot = None;
+        }
+    }
+
+    /// 仅在闭包返回 Copy 值时使用（不逃逸借用）。
+    fn with_fsm<R: Copy>(h: i32, f: impl FnOnce(&mut MemoryStateMachine) -> R) -> Option<R> {
+        let mut reg = FSM_REG.lock().unwrap();
+        reg.get_mut(h as usize).and_then(|slot| slot.as_mut()).map(f)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn memfsm_set(h: i32, state: i32, token_count: u32, summary_pointer: i32, msg_count: u32) {
+        let mut reg = FSM_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            if let Some(fsm) = slot.as_mut() {
+                fsm.restore(state, token_count, summary_pointer, msg_count);
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn memfsm_transition(h: i32, incoming_tokens: u32, new_msgs: u32) -> i32 {
+        with_fsm(h, |f| f.transition(incoming_tokens, new_msgs).code()).unwrap_or(-1)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn memfsm_state(h: i32) -> i32 {
+        with_fsm(h, |f| f.state().code()).unwrap_or(-1)
+    }
+    #[no_mangle]
+    pub extern "C" fn memfsm_token_count(h: i32) -> u32 {
+        with_fsm(h, |f| f.token_count()).unwrap_or(0)
+    }
+    #[no_mangle]
+    pub extern "C" fn memfsm_summary_pointer(h: i32) -> i32 {
+        with_fsm(h, |f| f.summary_pointer() as i32).unwrap_or(-1)
+    }
+    #[no_mangle]
+    pub extern "C" fn memfsm_msg_count(h: i32) -> u32 {
+        with_fsm(h, |f| f.msg_count()).unwrap_or(0)
+    }
+    #[no_mangle]
+    pub extern "C" fn memfsm_window_keep_from(h: i32) -> i32 {
+        with_fsm(h, |f| f.window_keep_from() as i32).unwrap_or(-1)
+    }
+    #[no_mangle]
+    pub extern "C" fn memfsm_need_summary(h: i32) -> i32 {
+        with_fsm(h, |f| if f.need_summary() { 1 } else { 0 }).unwrap_or(0)
+    }
+    #[no_mangle]
+    pub extern "C" fn memfsm_note_summary(h: i32, summary_tokens: u32, new_pointer: i32) {
+        let mut reg = FSM_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            if let Some(fsm) = slot.as_mut() {
+                fsm.note_summary(summary_tokens, new_pointer);
+            }
+        }
+    }
+}
+
 fn placeholder_wf() -> Workflow {
     // 空占位：engine_new 后、engine_load 前若误调 start 会因事件不匹配安全失败。
     Workflow {
@@ -704,5 +891,75 @@ mod tests {
         let h = core.new_engine();
         assert_eq!(core.load(h, W), 0);
         assert_eq!(core.start(h, r#"{"event":"other"}"#), -2);
+    }
+}
+
+#[cfg(test)]
+mod fsm_tests {
+    use super::*;
+
+    #[test]
+    fn idle_to_collecting_on_first_transition() {
+        let mut f = MemoryStateMachine::new(100, 1000, 4);
+        assert_eq!(f.transition(10, 2), SessionState::Collecting);
+        assert_eq!(f.token_count(), 10);
+        assert_eq!(f.msg_count(), 2);
+    }
+
+    #[test]
+    fn summarizing_when_soft_threshold_exceeded() {
+        let mut f = MemoryStateMachine::new(100, 1000, 4);
+        f.transition(60, 2); // Collecting
+        f.transition(50, 2); // 110 > 100 → Summarizing
+        assert_eq!(f.state(), SessionState::Summarizing);
+        assert!(f.need_summary());
+    }
+
+    #[test]
+    fn locked_when_hard_max_exceeded() {
+        let mut f = MemoryStateMachine::new(100, 200, 4);
+        f.transition(150, 2);
+        assert_eq!(f.state(), SessionState::Summarizing); // 150 > 100 软阈 → Summarizing
+        f.transition(100, 2); // 250 > 200 硬上限 → Locked
+        assert_eq!(f.state(), SessionState::Locked);
+    }
+
+    #[test]
+    fn window_respects_recent_floor_and_summary_pointer() {
+        let mut f = MemoryStateMachine::new(100, 1000, 4);
+        f.transition(10, 10); // 10 messages, summary_pointer 0
+        assert_eq!(f.window_keep_from(), 6); // 10 - 4
+        f.note_summary(5, 6);
+        assert_eq!(f.summary_pointer(), 6);
+        f.transition(10, 2); // 12 total; recent_floor 8, summary_pointer 6 → max = 8
+        assert_eq!(f.window_keep_from(), 8);
+    }
+
+    #[test]
+    fn note_summary_resets_and_returns_to_collecting() {
+        let mut f = MemoryStateMachine::new(100, 1000, 4);
+        f.transition(200, 10); // Summarizing
+        assert!(f.need_summary());
+        f.note_summary(8, 10);
+        assert_eq!(f.state(), SessionState::Collecting);
+        assert_eq!(f.token_count(), 8);
+        assert!(!f.need_summary());
+    }
+
+    #[test]
+    fn restore_roundtrip_keeps_boundary() {
+        let mut f = MemoryStateMachine::new(100, 1000, 4);
+        f.transition(200, 10);
+        f.note_summary(8, 10);
+        let (st, tk, sp, mc) = (f.state().code(), f.token_count(), f.summary_pointer() as i32, f.msg_count());
+        let mut g = MemoryStateMachine::new(100, 1000, 4);
+        g.restore(st, tk, sp, mc);
+        assert_eq!(g.state(), SessionState::Collecting);
+        assert_eq!(g.token_count(), 8);
+        assert_eq!(g.summary_pointer(), 10);
+        assert_eq!(g.msg_count(), 10);
+        // 继续追加：窗口不应低于已折叠边界
+        g.transition(5, 2);
+        assert_eq!(g.window_keep_from(), 10); // max(10, 12-4=8)
     }
 }

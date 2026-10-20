@@ -906,10 +906,15 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
     <details class="fold" id="wf-fold">
       <summary>⚙ 工作流引擎（浏览器侧 WASM）</summary>
       <div class="fold-body">
-        <p class="hint">Rust 编译的 WASM 内核跑在 Web Worker 里：每次回答结束后自动执行 ① token 流用量记账 ② LLM 总结历史标题 ③ 会话记忆更新 ④ 附件显示规格。全部在本地执行、服务端零存储；模型调用走网关自身（计入账本）。</p>
+        <p class="hint">Rust 编译的 WASM 内核跑在主线程：每次回答结束后自动执行 ① token 流用量记账 ② LLM 总结历史标题 ③ 会话记忆更新（WASM 状态机按 token 阈值自适应触发）④ 附件显示规格。全部在本地执行、服务端零存储；模型调用走网关自身（计入账本）。</p>
         <div class="vg-row"><label><input type="checkbox" id="wf-on-usage"> token 流用量统计（徽章 + 会话累计）</label></div>
         <div class="vg-row"><label><input type="checkbox" id="wf-on-title"> LLM 总结历史标题（失败保留首条截断兜底）</label></div>
-        <div class="vg-row"><label><input type="checkbox" id="wf-on-memory"> 会话记忆更新（第 2 答起，每 4 答一次）</label></div>
+        <div class="vg-row"><label><input type="checkbox" id="wf-on-memory"> 会话记忆更新（WASM 状态机：按 token 阈值自适应触发）</label></div>
+        <div style="margin:6px 0 2px 18px;border-left:2px solid var(--line);padding-left:10px">
+          <div class="vg-row"><label>软阈 tokens（超此触发摘要）</label><input id="wf-mem-maxtok" type="number" min="256" max="32000" value="4000"></div>
+          <div class="vg-row"><label>硬上限 tokens（超此锁会话）</label><input id="wf-mem-hard" type="number" min="512" max="64000" value="16000"></div>
+          <div class="vg-row"><label>最近保留条数</label><input id="wf-mem-keep" type="number" min="2" max="40" value="8"></div>
+        </div>
         <div class="vg-row"><label><input type="checkbox" id="wf-on-format"> 附件显示规格（缩略图 / 视频容器）</label></div>
         <div class="vg-row"><label>标题 / 记忆模型</label><select id="wf-model-sel"><option value="">自动（最低优先级文本模型 ≈ 最廉价）</option></select></div>
         <div class="vg-row"><label>缩略图边长 px</label><input id="wf-thumb" type="number" min="48" max="200" value="96"></div>
@@ -1283,7 +1288,7 @@ const IDB = {
     // 老会话这些字段为 undefined，结构化克隆原样跳过，读取不受影响。
     return this._req(this.db.transaction("convos", "readwrite").objectStore("convos")
       .put({ id: c.id, title: c.title, model: c.model, updated: c.updated,
-        tokens: c.tokens, answers: c.answers, memory: c.memory, memory_at: c.memory_at, title_auto: c.title_auto }));
+        tokens: c.tokens, answers: c.answers, memory: c.memory, memory_at: c.memory_at, title_auto: c.title_auto, memfsm: c.memfsm }));
   },
   putMsg(convoId, idx, m) {
     if (!this.db) return Promise.resolve();
@@ -4624,7 +4629,7 @@ function toggleTheme() {
 
 const WfCfg = {
   KEY: "gw_wf_cfg",
-  def: { usage: true, title: true, memory: true, format: true, model: "", thumb: 96, vw: 260, vh: 190 },
+  def: { usage: true, title: true, memory: true, format: true, model: "", thumb: 96, vw: 260, vh: 190, memMaxTokens: 4000, memHardMax: 16000, memKeepRecent: 8 },
   load() { try { return { ...this.def, ...(JSON.parse(localStorage.getItem(this.KEY) || "{}")) }; } catch { return { ...this.def }; } },
   save(c) { try { localStorage.setItem(this.KEY, JSON.stringify(c)); } catch {} },
 };
@@ -4743,7 +4748,7 @@ const WF_SEED_TITLE = JSON.stringify({ id: "auto_title", version: 1, trigger: { 
 const WF_SEED_FORMAT = JSON.stringify({ id: "content_format", version: 1, trigger: { event: "chat.completed" },
   steps: [{ id: "fmt", plugin: "wf.content_format", input: { thumb: "${/event/cfg/thumb}", vw: "${/event/cfg/vw}", vh: "${/event/cfg/vh}" } }] });
 const WF_SEED_MEMORY = JSON.stringify({ id: "memory_update", version: 1, trigger: { event: "chat.completed" },
-  steps: [{ id: "mem", plugin: "wf.memory_update", input: { convoId: "${/event/convoId}", answers: "${/event/answers}" } }] });
+  steps: [{ id: "mem", plugin: "wf.memory_update", input: { convoId: "${/event/convoId}", total: "${/event/usage/total_tokens}" } }] });
 
 // ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
 const WF_PLUGINS = {
@@ -4775,16 +4780,53 @@ const WF_PLUGINS = {
     wfApplyFormat(prof.thumb, prof.vw, prof.vh);
     return prof;
   },
-  // ④ 会话记忆更新：第 2 答起、每 4 答一次；压缩成中文要点存进会话
+  // ④ 会话记忆更新：WASM 状态机（MemoryFSM）按 token 阈值自适应触发。
+  // FSM 只决定「何时压缩 + 折叠哪一段」（返回 keep_from / need_summary），
+  // 真压缩由 LLM 完成；原始对话文本始终留在 IDB，Wasm 只驻留几十字节的状态结构体。
   "wf.memory_update": async (inp) => {
-    const c = WF.c; if (!c) return { skipped: true };
-    const msgs = (c.msgs || []).filter(m => (m.role === "user" || m.role === "assistant") && m.content && !m.error);
-    const transcript = msgs.slice(-16).map(m => (m.role === "user" ? "用户" : "AI") + "：" + m.content).join("\n");
-    const prev = c.memory ? ("已有记忆：\n" + c.memory + "\n\n") : "";
-    const sys = "你是会话记忆压缩器。从对话中提取长期有用的信息（用户偏好、项目背景、待办、事实），用不超过 200 字的中文要点列表记录。只输出要点，不要寒暄。";
-    const mem = (await wfChat([{ role: "system", content: sys }, { role: "user", content: prev + "新对话：\n" + transcript }], wfCfg.model)).trim().slice(0, 400);
-    if (mem) { c.memory = mem; c.memory_at = Date.now(); await IDB.putConvo(c); wfShowMemory(); }
-    return { memory: mem || "" };
+    const c = WF.c; if (!c || !WF.ex) return { skipped: true };
+    const ex = WF.ex;
+    if (typeof ex.memfsm_new !== "function") return { skipped: "fsm n/a" };
+    const h = ex.memfsm_new(wfCfg.memMaxTokens, wfCfg.memHardMax, wfCfg.memKeepRecent);
+    if (h < 0) return { skipped: "fsm alloc" };
+    const s = c.memfsm || {};
+    ex.memfsm_set(h, s.state || 0, s.token_count || 0, s.summary_pointer || 0, s.msg_count || 0);
+    const filtered = (c.msgs || []).filter(m => (m.role === "user" || m.role === "assistant") && m.content && !m.error);
+    const newMsgs = Math.max(0, filtered.length - (s.msg_count || 0));
+    const turnTokens = Number(inp.total) || 0;
+    ex.memfsm_transition(h, turnTokens, newMsgs);
+    let didSummarize = false;
+    if (ex.memfsm_need_summary(h) === 1) {
+      const sp = ex.memfsm_summary_pointer(h);
+      const keepFrom = ex.memfsm_window_keep_from(h);
+      if (keepFrom > sp) {
+        const region = filtered.slice(sp, keepFrom);
+        const transcript = region.map(m => (m.role === "user" ? "用户" : "AI") + "：" + m.content).join("\n");
+        const prev = c.memory ? ("已有记忆：\n" + c.memory + "\n\n") : "";
+        const sys = "你是会话记忆压缩器。从对话中提取长期有用的信息（用户偏好、项目背景、待办、事实），用不超过 200 字的中文要点列表记录。只输出要点，不要寒暄。";
+        const mem = (await wfChat([{ role: "system", content: sys }, { role: "user", content: prev + "新对话：\n" + transcript }], wfCfg.model)).trim().slice(0, 400);
+        if (mem) {
+          c.memory = mem; c.memory_at = Date.now();
+          ex.memfsm_note_summary(h, Math.max(1, Math.round(mem.length / 1.6)), keepFrom);
+          await IDB.putConvo(c); wfShowMemory(); didSummarize = true;
+        } else {
+          // LLM 失败：仍推进边界、减半计数，避免卡在 Summarizing 反复触发
+          ex.memfsm_note_summary(h, Math.max(1, Math.round(ex.memfsm_token_count(h) * 0.5)), keepFrom);
+        }
+      } else {
+        // 阈值超了但无新增可折叠内容（keep_recent 很大）：只压计数，避免死循环
+        ex.memfsm_note_summary(h, Math.max(1, Math.round(ex.memfsm_token_count(h) * 0.5)), sp);
+      }
+    }
+    // 持久化 FSM 状态到会话（跨页面/会话复用，不必每次从零累积）
+    c.memfsm = {
+      state: ex.memfsm_state(h),
+      token_count: ex.memfsm_token_count(h),
+      summary_pointer: ex.memfsm_summary_pointer(h),
+      msg_count: ex.memfsm_msg_count(h),
+    };
+    ex.memfsm_drop(h);
+    return { ok: true, state: c.memfsm.state, didSummarize };
   },
 };
 
@@ -4806,9 +4848,9 @@ async function wfAfterAnswer(c, convoId, asst, fullText, atts) {
   try {
     if (wfCfg.usage) await wfDrive(ex, WF.h.usage, event, WF_PLUGINS["wf.usage_tally"]);
     if (wfCfg.format) await wfDrive(ex, WF.h.format, event, WF_PLUGINS["wf.content_format"]);
-    // 标题：第 2 答起每次刷新（保持最新概括）；记忆：第 2 答起每 4 答一次
+    // 标题：第 2 答起每次刷新（保持最新概括）；记忆：每次都跑，由 FSM 决定何时真正压缩
     if (wfCfg.title && answers >= 2) await wfDrive(ex, WF.h.title, event, WF_PLUGINS["wf.auto_title"]);
-    if (wfCfg.memory && answers >= 2 && ((answers - 2) % 4 === 0)) await wfDrive(ex, WF.h.memory, event, WF_PLUGINS["wf.memory_update"]);
+    if (wfCfg.memory) await wfDrive(ex, WF.h.memory, event, WF_PLUGINS["wf.memory_update"]);
   } catch (e) { console.warn("工作流执行异常（已降级）:", e); }
 }
 
@@ -4822,6 +4864,9 @@ function saveWfCfg() {
   wfCfg.thumb = clampNum($("wf-thumb").value, 48, 200, 96);
   wfCfg.vw = clampNum($("wf-vw").value, 120, 640, 260);
   wfCfg.vh = clampNum($("wf-vh").value, 90, 640, 190);
+  wfCfg.memMaxTokens = clampNum($("wf-mem-maxtok").value, 256, 32000, 4000);
+  wfCfg.memHardMax = clampNum($("wf-mem-hard").value, 512, 64000, 16000);
+  wfCfg.memKeepRecent = clampNum($("wf-mem-keep").value, 2, 40, 8);
   WfCfg.save(wfCfg);
   if (wfCfg.format) wfApplyFormat(wfCfg.thumb, wfCfg.vw, wfCfg.vh);
   wfShowMemory();
@@ -4832,6 +4877,7 @@ function loadWfCfgToUI() {
   set("wf-on-usage", wfCfg.usage); set("wf-on-title", wfCfg.title); set("wf-on-memory", wfCfg.memory); set("wf-on-format", wfCfg.format);
   const val = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
   val("wf-model-sel", wfCfg.model || ""); val("wf-thumb", wfCfg.thumb); val("wf-vw", wfCfg.vw); val("wf-vh", wfCfg.vh);
+  val("wf-mem-maxtok", wfCfg.memMaxTokens); val("wf-mem-hard", wfCfg.memHardMax); val("wf-mem-keep", wfCfg.memKeepRecent);
 }
 
 document.addEventListener("DOMContentLoaded", () => {

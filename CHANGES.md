@@ -1,5 +1,21 @@
 # CHANGES
 
+## v0.19.5（本版）—— 会话记忆升级为 WASM 状态机（MemoryFSM）
+
+### 1. 引擎内核新增 MemoryFSM 模块（engine/src/lib.rs → src/engine_wasm.bin，+2KB）
+- 纯数值有限状态机：`Idle / Collecting / Summarizing / Locked` 四态；按累计 token 与消息数做**自适应跃迁**（软阈触发摘要、硬上限锁会话），并算上下文窗口 `keep_from`（不早于已折叠边界、不少于最近 N 条）。
+- 零 JSON、零大文本驻留：Wasm 只持有几十字节状态结构体，原始对话文本始终留在浏览器 IndexedDB（或 Worker 侧 KV/D1）——天然规避 CF Worker 内存压力，真压缩（语义摘要）由 LLM 调用完成。
+- ABI：`memfsm_new/drop/set/transition/state/token_count/summary_pointer/msg_count/window_keep_from/need_summary/note_summary`；句柄全局注册表，越界返回 -1。单测 6 条覆盖阈值/窗口/摘要回报/状态持久化往返。
+
+### 2. 前端集成（src/admin_ui.html）
+- 记忆工作流从「固定每 4 答」改为 **FSM 按 token 阈值自适应触发**：每轮回答结束喂 `usage.total_tokens` 给 FSM；FSM 报 `need_summary` 才调 LLM 压缩（`[summary_pointer, keep_from)` 区段），回报后推进边界。
+- FSM 状态（`state/token_count/summary_pointer/msg_count`）随会话持久化进 IndexedDB，刷新/换会话可复用，不必从零累积。
+- 设置面板新增三个旋钮：软阈 tokens（默认 4000）/ 硬上限 tokens（默认 16000）/ 最近保留条数（默认 8）。
+
+### 3. 说明
+- 沿用 v0.19.4 的浏览器主线程宿主（同步 WASM 内核 + `await` 驱动 LLM，不阻塞 UI）；记忆仍走「网关自身 /v1/chat/completions 计入账本」。
+- 部署产物 build/index_bg.wasm 已重编（含新内核）。
+
 ## v0.19.4（本版）—— 浏览器侧工作流引擎（Rust→WASM 内核 + JS Host 驱动）
 
 ### 1. 新增：浏览器侧工作流引擎内核（engine/ crate → src/engine_wasm.bin）
