@@ -589,10 +589,17 @@ fn pick_model_attempts(
         m.serves(want_kind) || (want_kind == "tts" && m.kind == "stt" && c.kind == "audio")
     };
     let mut pairs: Vec<(ModelMeta, &Channel)> = Vec::new();
+    // 放宽 kind 的"全部可用（渠道×模型）池"：仅排除禁用/冷却的模型，不卡 kind。
+    // 用户**显式指定**的模型（哪怕 kind 不匹配当前请求类型）也应优先被尊重，
+    // 因此 primary 主选从这里取，而非仅从 kind 匹配的 pairs 里取。
+    let mut all_usable: Vec<(ModelMeta, &Channel)> = Vec::new();
     for c in &usable {
         for m in c.effective_models() {
-            if m.enabled && !m.health.cooling(now) && kind_ok(c, &m) {
-                pairs.push((m, c));
+            if m.enabled && !m.health.cooling(now) {
+                all_usable.push((m.clone(), c));
+                if kind_ok(c, &m) {
+                    pairs.push((m, c));
+                }
             }
         }
     }
@@ -608,9 +615,11 @@ fn pick_model_attempts(
     };
 
     if let Some(rm) = requested {
-        // 主选：所有提供该模型的渠道（跨渠道），按优先级
+        // 主选：所有提供该模型的渠道（跨渠道），按优先级——**绕过 kind 过滤**，
+        // 尊重用户显式选择（例如选了 vision 模型来答纯文本也照用，只有全部失败时再回退）。
+        // 来源是 all_usable（仅排除禁用/冷却），而不是只含 kind 匹配项的 pairs。
         let mut primary: Vec<(ModelMeta, &Channel)> =
-            pairs.iter().filter(|(m, _)| m.name == rm).cloned().collect();
+            all_usable.iter().filter(|(m, _)| m.name == rm).cloned().collect();
         if !primary.is_empty() {
             primary.sort_by(by_priority);
             let mut list: Vec<ModelAttempt> = primary
@@ -1025,6 +1034,9 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     // ---- 模型选择引擎：跨渠道挑（渠道×模型）候选 ----
     let (candidates, notes) =
         pick_model_attempts(&channels, want_kind, requested.as_deref(), admin::now_ms());
+    // 用户显式指定的模型没有任何渠道可提供（禁用/冷却/不存在）→ 网关回退到自动选路。
+    // 记一个标记，最终响应上打 x-gateway-model-unavailable 头，前端据此提示而非静默。
+    let model_unavailable = notes.iter().any(|n| n.starts_with("requested-model-unavailable:"));
     if candidates.is_empty() {
         return no_candidates_response(want_kind, &notes);
     }
@@ -1070,13 +1082,26 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     )
     .await?;
 
+    // 若用户所选模型不可用（已回退自动选路），在每个出口都打上标记头，前端提示。
+    let mark_unavailable = |resp: &mut Response| {
+        if model_unavailable {
+            let _ = resp.headers_mut().set("x-gateway-model-unavailable", "1");
+        }
+    };
     match outcome {
-        ChannelOutcome::Locked(resp) => Ok(resp),
+        ChannelOutcome::Locked(mut resp) => {
+            mark_unavailable(&mut resp);
+            Ok(resp)
+        }
         ChannelOutcome::UpstreamError(status, err_body, attempts, degraded) => {
-            final_error_response(status, err_body, &attempts, &degraded)
+            let mut resp = final_error_response(status, err_body, &attempts, &degraded)?;
+            mark_unavailable(&mut resp);
+            Ok(resp)
         }
         ChannelOutcome::AllConnFailed(attempts, degraded) => {
-            all_channels_failed(&attempts, &degraded)
+            let mut resp = all_channels_failed(&attempts, &degraded)?;
+            mark_unavailable(&mut resp);
+            Ok(resp)
         }
     }
 }

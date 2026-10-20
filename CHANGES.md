@@ -1,5 +1,22 @@
 # CHANGES
 
+## v0.19.3（本版）—— 修「选模型不生效」/ 增强模式整块下线（并入 skill）/ 用户消息左对齐 · 移除单文件部署版
+
+### 1. 选了模型，问答却走「列表第一项」——服务端路由修复
+根因：`pick_model_attempts` 只在**能力（kind）匹配的候选池**里找用户显式指定的模型；所选模型 kind 与请求类型不匹配时被静默过滤，回退到积分第一项（即「总是问了列表第一个」）。
+修复：为用户显式指定的模型新建 `all_usable` 池（**仅排除禁用/冷却、不卡 kind**）作主选；只有该模型确实不可用（禁用/冷却/不存在）才回退自动选路，并透传 `x-gateway-model-unavailable` 头 + 前端 toast 提示，不再静默。另收敛前端多媒体模型覆盖——仅当**本轮**真带图片/视频附件时才覆盖 `body.model`（历史曾带过附件不再抢走文本模型选择）。
+
+### 2. 增强模式（⚡ 三段式接力）整块下线
+其能力已由 skill 子系统承载（PRE-ANSWER DRILL PROTOCOL /「三个诸葛亮」）。删除模型选择页增强 banner、发送按钮双环动效与阶段进度点、步骤时间线、增强徽章，及 `enhanceOn`/`enhanceModels`/`enhanceBlockReason`/`syncEnhanceRow`/`streamOnce`/`runEnhanced` 等前后端逻辑；`DRILL_PROMPT` 提示词仍由 skill 种子化复用，予以保留。旧对话中的历史增强消息退化为普通回复（正文不丢，仅步骤时间线不再展示），配套 e2e 断言同步移除。
+
+### 3. 用户消息改左对齐
+头像靠左、正文 `text-align:left`、时间戳居左、气泡小角换到左下（此前为右对齐 / 头像居右）。
+
+### 4. 移除单文件部署版
+删除长期停更于 v0.6.0 的 `deploy/single-file-worker.js` 与 `scripts/make-single-file.sh`；统一走 **wrangler** 多模块构建（`build/index.js` + `build/index_bg.wasm`），不再提供网页粘贴单文件路线，CF 空间亦更省；`deploy.yml`（wrangler）不受影响。
+
+---
+
 ## v0.19.2（2026-10-23）—— 模型选择逻辑线理顺 + 增强模式修复（⚡ 不是没了）
 
 用户反馈（v0.19.1 之后）：「加了 skill、模型也选了，怎么还是第一模型去提问？模型选择的逻辑线是不是乱了？自动切换模型的模式（⚡ 增强）也没了？」
