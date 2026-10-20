@@ -1,6 +1,70 @@
 # CHANGES
 
-## v0.19.11（本版）—— 模型选择器体验整理：真 bug 修复 + 交互统一
+## v0.19.12（本版）—— 修「工作流自检卡在检测中」：插件参数传错的根因
+
+> 现象：打开模型选择页，本页模型全部停在「检测中…」，永远不出结论；
+> 「重新检测本页」也没反应。查下来不是探测逻辑的问题，是**工作流驱动循环从来没把
+> 步骤参数交给插件**——从 v0.19.4 引入内核起就是这样，所有 5 个插件一直在空转。
+
+### 1. 根因：`wfDrive` 把 `st.plugin` 当成 input 传
+
+内核 `engine_ready` 返回的就绪步只有 `{id, input}`（`engine/src/lib.rs:384`，
+`plugin` 只是 seed 里的字段，不参与回传）。而驱动循环写的是：
+
+```js
+const out = await plugin(st.plugin, st.input);   // 错
+```
+
+`st.plugin` 恒为 `undefined`，于是插件收到的 `inp` 是 `undefined`，`st.input` 被当成
+第二个实参丢掉。`wf.model_probe` 第一行 `if (!model) return {skipped:true}` 直接短路 →
+状态机从未被写入 → `AVAIL_MEM` 里那批模型永远停在 `Probing(1)` → 渲染成「检测中…」。
+
+用真实 wasm 复核（`engine_ready` 实际返回）：
+
+```json
+{"status":0,"steps":[{"id":"p0","input":{"force":false,"model":"a/x"}}]}
+```
+
+`st.plugin = undefined`，旧写法拿到 `UNDEFINED`，新写法拿到 `a/x`。
+
+**影响面不止自检**：`usage_tally` / `auto_title` / `content_format` / `memory_update`
+四个插件同样一直收 `undefined`（`Number(undefined)||0` 之类静默通过），所以用量记账、
+自动标题、附件版式、记忆压缩从 v0.19.4 起就没真正生效过。本次一并恢复。
+
+修复：
+
+```js
+const fn = typeof plugin === "function" ? plugin : (plugin && plugin[st.plugin]);
+if (!fn) throw new Error("未注册的插件: " + st.plugin);
+const out = await fn(st.input);
+```
+
+同时检查 `engine_complete` 返回值（0 = 成功）。原来忽略返回值：若回报失败，该步仍是
+Pending，下一轮 `engine_ready` 又把它取回来，空转到 `guard > 16` 才中断——同样表现为"卡住"。
+
+### 2. 单模型探测加 20s 超时
+
+`/admin/api/models/test` 是同步等上游应答，`api()` 原本没有超时。上游不响应时整条 run
+悬着，`availScanning` 锁不释放，连「重新检测」都点不动（点了直接 return）。
+
+- `api(path, method, body, timeoutMs)` 支持 `AbortSignal.timeout`
+- 探测传 20000；超时按 `reason 6（超时）` 上报，与网络错误 `7` 区分——修复动作不同
+- 扫描中再点「重新检测」会提示「正在检测本页，请稍候…」，不再静默无反应
+
+### 3. 兜底：扫描结束不留「检测中」
+
+`finally` 里把仍处于 `Probing(1)` 的模型从 `AVAIL_MEM` 清掉并 `console.warn`。
+以后任何原因（插件抛错重试用尽、run 被中断、新增插件写错）都不会再让徽标永久骗人，
+最多显示"未检测"。
+
+### 4. 回归护栏
+
+`scripts/test-e2e.sh` 增加两条断言：驱动循环必须是 `fn(st.input)`、且源码里不得再出现
+`plugin(st.plugin`。这类"参数错位"grep 就能挡住，不必等线上表现。
+
+version 0.19.11 -> 0.19.12
+
+## v0.19.11 —— 模型选择器体验整理：真 bug 修复 + 交互统一
 
 > 11 项评审结论全部落地（决策：顶栏按**高度**收窄、表单「取消」保留、
 > 「强调」= 本地标记、头像 = 几何剪影）。设计说明见 `docs/model-picker-polish-spec.md`。

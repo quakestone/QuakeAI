@@ -1264,10 +1264,16 @@ function decodeHeader(v) {
   if (!v) return "";
   try { return decodeURIComponent(v); } catch (e) { return v; }
 }
-async function api(path, method="GET", body=null) {
+async function api(path, method="GET", body=null, timeoutMs=0) {
   const h = { "Content-Type": "application/json" };
   if (token()) h["x-admin-token"] = token();
-  const r = await fetch("/admin/api" + path, { method, headers: h, body: body ? JSON.stringify(body) : null });
+  const opt = { method, headers: h, body: body ? JSON.stringify(body) : null };
+  // 自检类调用必须带超时：上游不响应时不能让整条工作流 run 一直悬着，
+  // 否则前端会永久停在「检测中」，连"重新检测"都点不动（扫描锁没释放）。
+  if (timeoutMs > 0 && typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+    opt.signal = AbortSignal.timeout(timeoutMs);
+  }
+  const r = await fetch("/admin/api" + path, opt);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error?.message || ("HTTP " + r.status));
   return j;
@@ -3702,7 +3708,9 @@ async function probeOneModel(model, force) {
   else if (!hasKey) outcome = { kind: "mark", code: 2 };                    // 未配置 Key
   else {
     try {
-      const j = await api("/models/test", "POST", { model });
+      // 20s 上限：单模型探测不该拖住整页。超时按「超时」上报（reason 6），
+      // 和网络错误（7）分开——用户看到的修复动作不一样。
+      const j = await api("/models/test", "POST", { model }, 20000);
       const rs = j.results || [];
       const ok = rs.find(r => r.status === "ok");
       if (ok) {
@@ -3714,7 +3722,8 @@ async function probeOneModel(model, force) {
           : { kind: "fail", reason: 7, ms: 0 };                              // 网络/构建失败
       }
     } catch (e) {
-      outcome = { kind: "fail", reason: 7, ms: 0 };
+      const timeout = !!(e && (e.name === "TimeoutError" || e.name === "AbortError"));
+      outcome = { kind: "fail", reason: timeout ? 6 : 7, ms: 0 };
     }
   }
   const r = wfAvailApply(ex, model, outcome);
@@ -3744,13 +3753,14 @@ function availLoadSeed(ex, seed) {
 /// 扫描当前页。force=true 忽略 TTL（「重新检测本页」）。
 async function availScanVisible(force) {
   // 锁必须在第一个 await 之前上，否则两次快速触发会各起一条 run
-  if (availScanning) return;
+  if (availScanning) { if (force) toast("正在检测本页，请稍候…"); return; }
   if (!$("model-dlg") || !$("model-dlg").open) return;
   // v1 只扫文本模型：音频/图视模型的可用性判定口径不同（不都是 /chat/completions），
   // 硬套会把它们误标成"模型不存在"。这两个标签暂不扫。
   if (mpTab !== "text") return;
   availScanning = true;
   let ran = false;
+  let need = [];          // 提到 try 外：finally 里要做残留清理
   try {
     const ex = await WF.ensure();
     if (!ex || !ex.avail_new) return;   // 内核不可用 → 不扫，列表照常能用（降级）
@@ -3759,7 +3769,7 @@ async function availScanVisible(force) {
 
     const cache = availCacheLoad();
     const now = Date.now();
-    const need = models.filter(m => force || availShouldScanTs(ex, (cache[m] && cache[m].ts) || 0, now));
+    need = models.filter(m => force || availShouldScanTs(ex, (cache[m] && cache[m].ts) || 0, now));
     // 未过期的先铺上，避免"检测中"闪一下又变回旧结论
     for (const m of models) {
       if (cache[m] && need.indexOf(m) < 0) AVAIL_MEM[m] = { ...cache[m], cached: true };
@@ -3776,6 +3786,15 @@ async function availScanVisible(force) {
     console.warn("模型可用性扫描失败（已降级）:", e);
   } finally {
     availScanning = false;
+    // 兜底：扫描结束还停在 Probing(1) 的模型，说明这一步没拿到结论
+    // （插件抛错重试用尽 / run 被中断）。清掉「检测中」——
+    // 宁可显示"未检测"，也不能让徽标永久骗人。
+    for (const m of need) {
+      if (AVAIL_MEM[m] && AVAIL_MEM[m].state === 1) {
+        console.warn("模型探测未出结论，已清空检测中状态:", m);
+        delete AVAIL_MEM[m];
+      }
+    }
     if (ran) availMarkRun();   // 只有真正跑完一条 run 才算「一次自检」
     rerenderModelList(); renderAvailBanner(); updateAvailTs();
   }
@@ -5388,10 +5407,20 @@ async function wfDrive(ex, handle, eventJson, plugin) {
     if (!steps.length) break; // run 终态
     for (const st of steps) {
       try {
-        const out = await plugin(st.plugin, st.input);
+        // v0.19.12 修：steps 只回 {id, input}，没有 plugin 字段。
+        // 原来把 st.plugin 当第一个实参传，而它恒为 undefined，
+        // 于是每个插件拿到的 inp 都是 undefined —— 全部静默 skipped，
+        // 探测页因此永远停在「检测中」。plugin 可以是函数（调用点直接传具体插件），
+        // 也可以是名字分派器，两种都支持。
+        const fn = typeof plugin === "function" ? plugin : (plugin && plugin[st.plugin]);
+        if (!fn) throw new Error("未注册的插件: " + st.plugin);
+        const out = await fn(st.input);
         const [sp, sl] = wfStr(ex, st.id);
         const [op, ol] = wfStr(ex, JSON.stringify(out ?? null));
-        ex.engine_complete(rid, sp, sl, op, ol);
+        if (ex.engine_complete(rid, sp, sl, op, ol) !== 0) {
+          console.warn("wf complete 失败:", wfErr(ex));
+          break;
+        }
       } catch (e) {
         const [sp, sl] = wfStr(ex, st.id);
         const [ep, el] = wfStr(ex, String((e && e.message) || e));

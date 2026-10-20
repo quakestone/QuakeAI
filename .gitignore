@@ -1,5 +1,6 @@
 # Rust 构建产物（build/ 内的 index.js / index_bg.wasm 例外——部署必需，随仓库提交）
 /target
+/engine/target
 /build/*
 !/build/index.js
 !/build/index_bg.wasm

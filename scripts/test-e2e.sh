@@ -905,6 +905,11 @@ echo "$UI" | grep -q '<span class="brand-name">QUAKEAI网关</span>'; check "首
 echo "$UI" | grep -q 'id="mp-tabs"'; check "模型选择页有 4 标签栏" $? "no mp tabs"
 
 echo "$UI" | grep -q 'const MP_TABS = \["text", "skill", "audio", "mm"\]'; check "选择页共 4 个标签" $? "bad MP_TABS"
+# 回归（v0.19.12）：内核就绪步只回 {id,input}，没有 plugin 字段。
+# 曾写成 plugin(st.plugin, st.input)，插件收到 undefined，整条 run 空转——
+# 表现就是模型页永远「检测中」。参数错位用 grep 就能挡住。
+echo "$UI" | grep -q 'await fn(st.input)'; check "工作流插件收到的是步骤 input" $? "plugin input not passed"
+if echo "$UI" | grep -q 'plugin(st\.plugin'; then check "驱动循环不再传 st.plugin 当入参" 1 "st.plugin passed as input"; else check "驱动循环不再传 st.plugin 当入参" 0 ""; fi
 echo "$UI" | grep -q 'let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 }'; check "选择页各标签独立页码" $? "mpPages not per-tab"
 echo "$UI" | grep -q 'if (mpTab === "skill") return \[\];'; check "skill 标签不从模型池取数" $? "skill pulls models"
 echo "$UI" | grep -qF 'id="mp-current"' ; check "选择器含当前选择条DOM" $? "no mp-current dom"
