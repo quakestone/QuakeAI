@@ -1,0 +1,708 @@
+//! workflow-engine：浏览器侧工作流引擎内核（编译为 wasm32）。
+//!
+//! 设计总纲（与项目侧约定）：
+//! - **内核是同步状态机**：wasm 里没有 Tokio/无线程，异步全部由 JS Host 驱动。
+//! - ** Host 驱动循环**：JS 每轮调 `engine_ready` 取得就绪步 → 本地并发执行插件
+//!   （fetch/IDB/定时器都在 JS 侧）→ `engine_complete` / `engine_fail` 回报 → 再取
+//!   就绪步，直到 run 终态。超时与重试退避由 Host 决定，内核只数次数。
+//! - **内存态，不持久化**：run 状态只在 wasm 实例存活期内有效；页面关闭即消失
+//!   （侧链路工作流可承受丢失，诚实降级，不引入恢复机制）。
+//! - **ABI 零导入**：内核不 import 任何宿主函数，只导出内存 + 几个读写函数，
+//!   输入输出全部走「bump 竞技场（入）+ 暂存缓冲区（出）」。
+//!
+//! 宿主使用顺序：
+//!   1. `mem_reserve(cap)` → 竞技场基址（进程内一次）
+//!   2. `engine_new()` → 引擎句柄；`engine_load(h, ptr, len)` 加载工作流 JSON
+//!   3. `engine_start(h, ev_ptr, ev_len)` → run_id（事件名不匹配返回 -1）
+//!   4. 循环：`engine_ready(run_id)`（就绪步 JSON 写入暂存区）→ 执行 →
+//!      `engine_complete(run_id, sid, out)` / `engine_fail(run_id, sid, err)`
+//!   5. `engine_status(run_id)` / `engine_result(run_id)` 读终态与全部输出
+
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+// ---------------------------------------------------------------------------
+// Schema（与后端评审版同义：JSON 驱动、插件白名单、显式依赖）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct Workflow {
+    pub id: String,
+    #[serde(default = "default_version")]
+    pub version: u32,
+    pub trigger: Trigger,
+    #[serde(default = "default_concurrency")]
+    #[allow(dead_code)]
+    pub max_concurrency: usize,
+    pub steps: Vec<Step>,
+}
+
+fn default_version() -> u32 { 1 }
+fn default_concurrency() -> usize { 4 }
+
+#[derive(Debug, Deserialize)]
+pub struct Trigger {
+    pub event: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Step {
+    pub id: String,
+    pub plugin: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub input: Value,
+    #[serde(default = "default_timeout")]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub retries: u32,
+}
+
+fn default_timeout() -> u64 { 5000 }
+
+// ---------------------------------------------------------------------------
+// 校验（含静态环检测——评审版"跑起来才发现环"的缺口在这里补上）
+// ---------------------------------------------------------------------------
+
+pub fn validate(wf: &Workflow) -> Result<(), String> {
+    if wf.id.trim().is_empty() {
+        return Err("workflow.id 不能为空".into());
+    }
+    let ids: HashSet<&str> = wf.steps.iter().map(|s| s.id.as_str()).collect();
+    if ids.len() != wf.steps.len() {
+        return Err("步骤 id 不能重复".into());
+    }
+    for s in &wf.steps {
+        for dep in &s.depends_on {
+            if !ids.contains(dep.as_str()) {
+                return Err(format!("步骤 {} 依赖不存在的步骤 {}", s.id, dep));
+            }
+            if dep == &s.id {
+                return Err(format!("步骤 {} 不能依赖自身", s.id));
+            }
+        }
+    }
+    // Kahn 拓扑排序：剩余入度非零 ⇒ 有环
+    let mut indeg: HashMap<&str, usize> = wf.steps.iter().map(|s| (s.id.as_str(), 0)).collect();
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for s in &wf.steps {
+        for dep in &s.depends_on {
+            indeg.entry(s.id.as_str()).and_modify(|d| *d += 1);
+            dependents.entry(dep.as_str()).or_default().push(s.id.as_str());
+        }
+    }
+    let mut queue: Vec<&str> = indeg.iter().filter(|(_, &d)| d == 0).map(|(&k, _)| k).collect();
+    let mut seen = 0usize;
+    while let Some(n) = queue.pop() {
+        seen += 1;
+        if let Some(ds) = dependents.get(n) {
+            for d in ds {
+                let e = indeg.get_mut(*d).unwrap();
+                *e -= 1;
+                if *e == 0 {
+                    queue.push(d);
+                }
+            }
+        }
+    }
+    if seen != wf.steps.len() {
+        return Err("工作流存在循环依赖".into());
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 模板解析：`${/json/pointer}` 整串替换（serde_json::Value::pointer 白嫖）。
+// 只命中整串；串内混排（"a${x}b"）不展开，取不到时落 Null —— 与评审版语义一致。
+// ---------------------------------------------------------------------------
+
+pub fn resolve_templates(value: &Value, context: &Value) -> Value {
+    match value {
+        Value::String(s) if s.starts_with("${") && s.ends_with('}') => {
+            let pointer = &s[2..s.len() - 1];
+            if pointer.is_empty() {
+                return context.clone();
+            }
+            context.pointer(pointer).cloned().unwrap_or(Value::Null)
+        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), resolve_templates(v, context)))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| resolve_templates(v, context)).collect())
+        }
+        _ => value.clone(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 运行时状态机（内存态）
+// ---------------------------------------------------------------------------
+
+const STEP_PENDING: u8 = 0;
+const STEP_RUNNING: u8 = 2;
+const STEP_DONE: u8 = 3;
+const STEP_FAILED: u8 = 4;
+const STEP_SKIPPED: u8 = 5;
+
+const RUN_RUNNING: u8 = 0;
+const RUN_DONE: u8 = 1;
+const RUN_FAILED: u8 = 2;
+
+#[derive(Clone)]
+struct StepRt {
+    id: String,
+    plugin: String,
+    depends_on: Vec<String>,
+    input: Value, // 模板（未解析）
+    #[allow(dead_code)]
+    timeout_ms: u64,
+    retries: u32,
+    state: u8,
+    attempts: u32,
+    output: Option<Value>,
+}
+
+struct Run {
+    status: u8,
+    steps: Vec<StepRt>,
+    ctx: Value, // {event, steps:{id: output}}
+}
+
+impl Run {
+    fn new(wf: &Workflow, event: Value) -> Self {
+        Run {
+            status: RUN_RUNNING,
+            steps: wf
+                .steps
+                .iter()
+                .map(|s| StepRt {
+                    id: s.id.clone(),
+                    plugin: s.plugin.clone(),
+                    depends_on: s.depends_on.clone(),
+                    input: s.input.clone(),
+                    timeout_ms: s.timeout_ms,
+                    retries: s.retries,
+                    state: STEP_PENDING,
+                    attempts: 0,
+                    output: None,
+                })
+                .collect(),
+            ctx: json!({ "event": event, "steps": {} }),
+        }
+    }
+
+    /// 收集就绪步：依赖全部 DONE 且自身 PENDING。命中即置 RUNNING 并解析输入，
+    /// 同一轮不会重复返回（Host 并发执行后由 complete/fail 收敛）。
+    fn take_ready(&mut self) -> Vec<(String, Value)> {
+        // 先收完成集（owned，避开与 iter_mut 的双借）
+        let done: HashSet<String> = self
+            .steps
+            .iter()
+            .filter(|s| s.state == STEP_DONE)
+            .map(|s| s.id.clone())
+            .collect();
+        let mut out = Vec::new();
+        for s in self.steps.iter_mut() {
+            if s.state != STEP_PENDING {
+                continue;
+            }
+            if !s.depends_on.iter().all(|d| done.contains(d)) {
+                continue;
+            }
+            s.state = STEP_RUNNING;
+            out.push((s.id.clone(), resolve_templates(&s.input, &self.ctx)));
+        }
+        out
+    }
+
+    fn complete(&mut self, sid: &str, output: Value) -> Result<(), String> {
+        let s = self
+            .steps
+            .iter_mut()
+            .find(|s| s.id == sid)
+            .ok_or_else(|| format!("未知步骤 {sid}"))?;
+        s.state = STEP_DONE;
+        s.output = Some(output.clone());
+        self.ctx["steps"][sid] = output;
+        self.recompute();
+        Ok(())
+    }
+
+    /// 回报一次失败。返回 true = 允许重试（次数未用尽，步回 PENDING）；
+    /// false = 次数用尽，步 FAILED，整个 run 置 FAILED，其余步 SKIPPED。
+    fn fail(&mut self, sid: &str, _err: &str) -> Result<bool, String> {
+        let s = self
+            .steps
+            .iter_mut()
+            .find(|s| s.id == sid)
+            .ok_or_else(|| format!("未知步骤 {sid}"))?;
+        s.attempts += 1;
+        if s.attempts <= s.retries {
+            s.state = STEP_PENDING; // 回就绪池，Host 下一轮会再拿到
+            return Ok(true);
+        }
+        s.state = STEP_FAILED;
+        self.status = RUN_FAILED;
+        for o in self.steps.iter_mut() {
+            if o.state == STEP_PENDING || o.state == STEP_RUNNING {
+                o.state = STEP_SKIPPED;
+            }
+        }
+        Ok(false)
+    }
+
+    fn recompute(&mut self) {
+        if self.status != RUN_RUNNING {
+            return;
+        }
+        if self.steps.iter().all(|s| s.state == STEP_DONE) {
+            self.status = RUN_DONE;
+        }
+    }
+
+    fn status_json(&self) -> Value {
+        let steps: BTreeMap<String, Value> = self
+            .steps
+            .iter()
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    json!({
+                        "state": s.state,
+                        "attempts": s.attempts,
+                        "plugin": s.plugin,
+                    }),
+                )
+            })
+            .collect();
+        json!({ "status": self.status, "steps": steps })
+    }
+
+    fn result_json(&self) -> Value {
+        let outs: BTreeMap<String, Value> = self
+            .steps
+            .iter()
+            .filter_map(|s| s.output.clone().map(|o| (s.id.clone(), o)))
+            .collect();
+        json!({
+            "status": self.status,
+            "state_name": match self.status { RUN_DONE => "done", RUN_FAILED => "failed", _ => "running" },
+            "steps": outs,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 内核主体（宿主/WASM 共用）
+// ---------------------------------------------------------------------------
+
+pub struct EngineInst {
+    workflow: Workflow,
+}
+
+pub struct EngineCore {
+    engines: Vec<EngineInst>,
+    // run 全局注册表：run_id = 全局索引。这样多个引擎（不同工作流）并存时，
+    // ready/complete/fail 只需传 run_id 即可唯一定位，ABI 无需改动。
+    runs: Vec<Run>,
+    last_err: String,
+}
+
+impl Default for EngineCore {
+    fn default() -> Self {
+        EngineCore { engines: Vec::new(), runs: Vec::new(), last_err: String::new() }
+    }
+}
+
+impl EngineCore {
+    pub fn new_engine(&mut self) -> i32 {
+        self.engines.push(EngineInst { workflow: placeholder_wf() });
+        (self.engines.len() - 1) as i32
+    }
+
+    /// 加载（或替换）工作流 JSON。句柄越界返回 -3；格式/校验错误 -1（原因见 last_err）。
+    pub fn load(&mut self, handle: i32, json: &str) -> i32 {
+        let idx = handle as usize;
+        if idx >= self.engines.len() {
+            self.last_err = format!("引擎句柄越界: {handle}");
+            return -3;
+        }
+        let wf: Workflow = match serde_json::from_str(json) {
+            Ok(w) => w,
+            Err(e) => {
+                self.last_err = format!("工作流 JSON 解析失败: {e}");
+                return -1;
+            }
+        };
+        if let Err(e) = validate(&wf) {
+            self.last_err = e;
+            return -1;
+        }
+        self.engines[idx].workflow = wf;
+        0
+    }
+
+    /// 以事件启动一个 run。事件名不匹配 trigger 返回 -2；返回 run_id。
+    pub fn start(&mut self, handle: i32, event_json: &str) -> i32 {
+        let idx = handle as usize;
+        if idx >= self.engines.len() {
+            self.last_err = format!("引擎句柄越界: {handle}");
+            return -3;
+        }
+        let event: Value = match serde_json::from_str(event_json) {
+            Ok(v) => v,
+            Err(e) => {
+                self.last_err = format!("事件 JSON 解析失败: {e}");
+                return -1;
+            }
+        };
+        let ev_name = event.get("event").and_then(Value::as_str).unwrap_or("");
+        if ev_name != self.engines[idx].workflow.trigger.event {
+            self.last_err = format!(
+                "事件不匹配：工作流监听 {}，收到 {ev_name}",
+                self.engines[idx].workflow.trigger.event
+            );
+            return -2;
+        }
+        let run = Run::new(&self.engines[idx].workflow, event);
+        let rid = self.runs.len() as i32;
+        self.runs.push(run);
+        rid
+    }
+
+    /// 取就绪步（同时置 RUNNING）。返回 JSON：{steps:[{id,input}], status, done}
+    pub fn ready(&mut self, run_id: i32) -> Result<String, String> {
+        let r = self.run_mut(run_id)?;
+        let ready = r.take_ready();
+        let st = r.status_json();
+        Ok(serde_json::to_string(&json!({
+            "steps": ready.into_iter().map(|(id, input)| json!({"id": id, "input": input})).collect::<Vec<_>>(),
+            "status": st["status"],
+        }))
+        .unwrap())
+    }
+
+    pub fn complete(&mut self, run_id: i32, sid: &str, output: &str) -> Result<(), String> {
+        let v: Value = if output.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(output).map_err(|e| format!("步骤 {sid} 输出不是合法 JSON: {e}"))?
+        };
+        self.run_mut(run_id)?.complete(sid, v)
+    }
+
+    /// 回报失败：Ok(true)=可重试；Ok(false)=次数用尽（run 已 FAILED）。
+    pub fn fail(&mut self, run_id: i32, sid: &str, err: &str) -> Result<bool, String> {
+        self.run_mut(run_id)?.fail(sid, err)
+    }
+
+    pub fn status(&self, run_id: i32) -> Result<String, String> {
+        Ok(self.run_ref(run_id)?.status_json().to_string())
+    }
+
+    pub fn result(&self, run_id: i32) -> Result<String, String> {
+        Ok(self.run_ref(run_id)?.result_json().to_string())
+    }
+
+    fn run_mut(&mut self, run_id: i32) -> Result<&mut Run, String> {
+        let rid = run_id as usize;
+        self.runs
+            .get_mut(rid)
+            .ok_or_else(|| format!("run_id 越界: {run_id}"))
+    }
+
+    fn run_ref(&self, run_id: i32) -> Result<&Run, String> {
+        let rid = run_id as usize;
+        self.runs
+            .get(rid)
+            .ok_or_else(|| format!("run_id 越界: {run_id}"))
+    }
+}
+
+fn placeholder_wf() -> Workflow {
+    // 空占位：engine_new 后、engine_load 前若误调 start 会因事件不匹配安全失败。
+    Workflow {
+        id: "__unloaded__".into(),
+        version: 0,
+        trigger: Trigger { event: "__none__".into() },
+        max_concurrency: 1,
+        steps: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WASM ABI（仅 wasm32 编译；宿主机 cargo test 不 포함这部分）
+// ---------------------------------------------------------------------------
+
+#[cfg(target_arch = "wasm32")]
+mod abi {
+    use super::*;
+    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    static CORE: Mutex<EngineCore> = Mutex::new(EngineCore { engines: Vec::new(), runs: Vec::new(), last_err: String::new() });
+    static SCRATCH: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+    static ARENA_BASE: AtomicI32 = AtomicI32::new(0);
+    static ARENA_OFF: AtomicUsize = AtomicUsize::new(0);
+
+    fn set_scratch(bytes: &[u8]) {
+        let mut s = SCRATCH.lock().unwrap();
+        s.clear();
+        s.extend_from_slice(bytes);
+    }
+
+    /// 入参读取：从竞技场绝对地址取字节。调用方保证 [ptr, ptr+len) 有效。
+    unsafe fn read_input(ptr: i32, len: i32) -> &'static [u8] {
+        std::slice::from_raw_parts(ptr as *const u8, len as usize)
+    }
+
+    fn last_err_ptr() -> (i32, i32) {
+        let core = CORE.lock().unwrap();
+        set_scratch(core.last_err.as_bytes());
+        let s = SCRATCH.lock().unwrap();
+        (s.as_ptr() as i32, s.len() as i32)
+    }
+
+    /// 竞技场预留（进程一次）。返回基址；之后 alloc 在其上 bump 分配。
+    #[no_mangle]
+    pub extern "C" fn mem_reserve(cap: i32) -> i32 {
+        let v = vec![0u8; cap as usize].into_boxed_slice();
+        let base = v.as_ptr() as i32;
+        std::mem::forget(v); // 故意泄漏：竞技场活到实例销毁
+        ARENA_BASE.store(base, Ordering::SeqCst);
+        ARENA_OFF.store(0, Ordering::SeqCst);
+        base
+    }
+
+    /// bump 分配 len 字节，返回绝对地址（1 字节对齐，够放 u8/JSON）。
+    #[no_mangle]
+    pub extern "C" fn alloc(len: i32) -> i32 {
+        let off = ARENA_OFF.fetch_add(len as usize, Ordering::SeqCst);
+        ARENA_BASE.load(Ordering::SeqCst) + off as i32
+    }
+
+    #[no_mangle]
+    pub extern "C" fn arena_reset() {
+        ARENA_OFF.store(0, Ordering::SeqCst);
+    }
+
+    #[no_mangle]
+    pub extern "C" fn scratch_ptr() -> i32 {
+        let s = SCRATCH.lock().unwrap();
+        s.as_ptr() as i32
+    }
+
+    #[no_mangle]
+    pub extern "C" fn scratch_len() -> i32 {
+        let s = SCRATCH.lock().unwrap();
+        s.len() as i32
+    }
+
+    #[no_mangle]
+    pub extern "C" fn last_error_ptr() -> i32 {
+        last_err_ptr().0
+    }
+    #[no_mangle]
+    pub extern "C" fn last_error_len() -> i32 {
+        last_err_ptr().1
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_new() -> i32 {
+        CORE.lock().unwrap().new_engine()
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_load(handle: i32, ptr: i32, len: i32) -> i32 {
+        let json = unsafe { std::str::from_utf8(read_input(ptr, len)).unwrap_or("") };
+        CORE.lock().unwrap().load(handle, json)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_start(handle: i32, ptr: i32, len: i32) -> i32 {
+        let ev = unsafe { std::str::from_utf8(read_input(ptr, len)).unwrap_or("") };
+        CORE.lock().unwrap().start(handle, ev)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_ready(run_id: i32) -> i32 {
+        let mut core = CORE.lock().unwrap();
+        match core.ready(run_id) {
+            Ok(s) => {
+                set_scratch(s.as_bytes());
+                1
+            }
+            Err(e) => {
+                core.last_err = e;
+                0
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_complete(run_id: i32, sid_ptr: i32, sid_len: i32, out_ptr: i32, out_len: i32) -> i32 {
+        let sid = unsafe { std::str::from_utf8(read_input(sid_ptr, sid_len)).unwrap_or("") };
+        let out = unsafe { std::str::from_utf8(read_input(out_ptr, out_len)).unwrap_or("") };
+        let mut core = CORE.lock().unwrap();
+        match core.complete(run_id, sid, out) {
+            Ok(()) => 0,
+            Err(e) => {
+                core.last_err = e;
+                -1
+            }
+        }
+    }
+
+    /// 回报失败；返回 1 = 可重试，0 = 次数用尽（run FAILED），-1 = 调用错误。
+    #[no_mangle]
+    pub extern "C" fn engine_fail(run_id: i32, sid_ptr: i32, sid_len: i32, err_ptr: i32, err_len: i32) -> i32 {
+        let sid = unsafe { std::str::from_utf8(read_input(sid_ptr, sid_len)).unwrap_or("") };
+        let err = unsafe { std::str::from_utf8(read_input(err_ptr, err_len)).unwrap_or("") };
+        let mut core = CORE.lock().unwrap();
+        match core.fail(run_id, sid, err) {
+            Ok(true) => 1,
+            Ok(false) => 0,
+            Err(e) => {
+                core.last_err = e;
+                -1
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_status(run_id: i32) -> i32 {
+        let mut core = CORE.lock().unwrap();
+        match core.status(run_id) {
+            Ok(s) => {
+                set_scratch(s.as_bytes());
+                1
+            }
+            Err(e) => {
+                core.last_err = e;
+                0
+            }
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn engine_result(run_id: i32) -> i32 {
+        let core = CORE.lock().unwrap();
+        match core.result(run_id) {
+            Ok(s) => {
+                drop(core);
+                set_scratch(s.as_bytes());
+                1
+            }
+            Err(e) => {
+                drop(core);
+                CORE.lock().unwrap().last_err = e;
+                0
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 宿主机单测（cargo test，逻辑与编译靶无关）
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn wf(json: &str) -> Workflow {
+        serde_json::from_str(json).unwrap()
+    }
+
+    const W: &str = r#"{
+      "id": "t", "version": 1, "trigger": { "event": "e" },
+      "steps": [
+        { "id": "a", "plugin": "p.a", "input": { "x": "${/event/payload/v}" }, "timeout_ms": 100, "retries": 1 },
+        { "id": "b", "plugin": "p.b", "depends_on": ["a"], "input": { "prev": "${/steps/a/out}" } },
+        { "id": "c", "plugin": "p.c" }
+      ]
+    }"#;
+
+    #[test]
+    fn validate_rejects_cycle_and_dups() {
+        let cyc = r#"{"id":"c","trigger":{"event":"e"},"steps":[
+            {"id":"a","plugin":"p","depends_on":["b"]},{"id":"b","plugin":"p","depends_on":["a"]}]}"#;
+        assert!(validate(&wf(cyc)).unwrap_err().contains("循环依赖"));
+        let dup = r#"{"id":"c","trigger":{"event":"e"},"steps":[
+            {"id":"a","plugin":"p"},{"id":"a","plugin":"p"}]}"#;
+        assert!(validate(&wf(dup)).unwrap_err().contains("重复"));
+        let unknown = r#"{"id":"c","trigger":{"event":"e"},"steps":[
+            {"id":"a","plugin":"p","depends_on":["zzz"]}]}"#;
+        assert!(validate(&wf(unknown)).unwrap_err().contains("不存在"));
+        assert!(validate(&wf(W)).is_ok());
+    }
+
+    #[test]
+    fn template_resolution() {
+        let ctx = json!({"event": {"payload": {"v": 42}}, "steps": {"a": {"out": "hi"}}});
+        assert_eq!(resolve_templates(&json!("${/event/payload/v}"), &ctx), json!(42));
+        assert_eq!(resolve_templates(&json!("${/steps/a/out}"), &ctx), json!("hi"));
+        assert_eq!(resolve_templates(&json!("${/nope/x}"), &ctx), Value::Null);
+        // 整串命中才解析；混排原样
+        assert_eq!(resolve_templates(&json!("pre${/event/payload/v}"), &ctx), json!("pre${/event/payload/v}"));
+        // 对象/数组递归
+        let t = json!({"k": ["${/steps/a/out}", 1]});
+        assert_eq!(resolve_templates(&t, &ctx), json!({"k": ["hi", 1]}));
+    }
+
+    #[test]
+    fn dag_ready_and_flow() {
+        let mut core = EngineCore::default();
+        let h = core.new_engine();
+        assert_eq!(core.load(h, W), 0);
+        let rid = core.start(h, r#"{"event":"e","payload":{"v":7}}"#);
+        assert!(rid >= 0);
+        // 第一轮就绪：a、c（b 等 a）
+        let r: Value = serde_json::from_str(&core.ready(rid).unwrap()).unwrap();
+        let ids: Vec<&str> = r["steps"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["a", "c"]);
+        assert_eq!(r["steps"][0]["input"]["x"], json!(7));
+        core.complete(rid, "a", r#"{"out":"A"}"#).unwrap();
+        core.complete(rid, "c", "null").unwrap();
+        let r: Value = serde_json::from_str(&core.ready(rid).unwrap()).unwrap();
+        assert_eq!(r["steps"][0]["id"], "b");
+        assert_eq!(r["steps"][0]["input"]["prev"], json!("A")); // 步骤间传数
+        core.complete(rid, "b", "null").unwrap();
+        let st: Value = serde_json::from_str(&core.status(rid).unwrap()).unwrap();
+        assert_eq!(st["status"], json!(RUN_DONE));
+    }
+
+    #[test]
+    fn retry_then_fail_kills_run() {
+        let mut core = EngineCore::default();
+        let h = core.new_engine();
+        assert_eq!(core.load(h, W), 0);
+        let rid = core.start(h, r#"{"event":"e","payload":{}}"#);
+        assert!(rid >= 0);
+        let _ = core.ready(rid).unwrap(); // a, c running
+        // a 第一次失败 → 可重试（retries=1）
+        assert!(core.fail(rid, "a", "boom").unwrap());
+        let r: Value = serde_json::from_str(&core.ready(rid).unwrap()).unwrap();
+        let arr = r["steps"].as_array().unwrap();
+        let a_again = arr.iter().any(|s| s["id"] == "a");
+        assert!(a_again, "重试应回就绪池");
+        // 第二次失败 → 次数用尽，run FAILED
+        assert!(!core.fail(rid, "a", "boom2").unwrap());
+        let st: Value = serde_json::from_str(&core.status(rid).unwrap()).unwrap();
+        assert_eq!(st["status"], json!(RUN_FAILED));
+        assert_eq!(st["steps"]["b"]["state"], json!(STEP_SKIPPED));
+    }
+
+    #[test]
+    fn event_mismatch_rejected() {
+        let mut core = EngineCore::default();
+        let h = core.new_engine();
+        assert_eq!(core.load(h, W), 0);
+        assert_eq!(core.start(h, r#"{"event":"other"}"#), -2);
+    }
+}

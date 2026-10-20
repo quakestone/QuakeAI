@@ -1,5 +1,27 @@
 # CHANGES
 
+## v0.19.4（本版）—— 浏览器侧工作流引擎（Rust→WASM 内核 + JS Host 驱动）
+
+### 1. 新增：浏览器侧工作流引擎内核（engine/ crate → src/engine_wasm.bin）
+- 纯 Rust 编译为 wasm32（无 Tokio / 无线程），内核只做**同步 DAG 调度 + `${/json/pointer}` 模板解析 + 重试计数**，零宿主导入；异步（fetch / IndexedDB / 计时）全部由 JS Host 循环驱动。
+- 调度能力：Kahn 拓扑静态环检测（校验阶段即拦环 / 重复 id / 悬空依赖）、`take_ready` 依赖就绪判定、重试耗尽则整 run FAILED 并 SKIP 其余步。
+- 新增网关路由 `GET /wf/kernel.wasm` 分发内核（随 Worker 同体 `include_bytes!` 编入，`Cache-Control` 1h）；前端 Blob 加载一次、`WebAssembly.Module` 缓存复用。
+- 修一处隐藏缺陷：`run_mut/run_ref` 原写死取 `engines[0]`，多引擎并存（4 个工作流）时 run_id 对不上；改为**全局 run 注册表**，ABI 不变。单测 5/5 通过，Node 端用真实 wasm 跑通 4 引擎并存 + 驱动。
+
+### 2. 四个工作流（每次回答结束 chat.completed 后自动执行，服务端零存储）
+- ① **token 流用量记账**：累加进会话（本条徽章 + 会话累计），数据源为 SSE 末块 `usage`（前端已带 `stream_options.include_usage`）。
+- ② **LLM 总结历史标题**：第 2 答起每次刷新，走网关自身 chat 端点（计入账本）；失败保留首条截断兜底，不覆盖用户已手动命名的标题。
+- ③ **附件显示规格**：由设置算出版式档案（缩略图边长 / 视频容器宽高），经 CSS 变量 `--att-thumb / --att-video-w / --att-video-h` 下发，旧观感上调为默认值。
+- ④ **会话记忆更新**：第 2 答起、每 4 答一次，把对话压缩成中文要点存进会话（`c.memory`），设置面板可查看。
+
+### 3. 后端 / 前端配套
+- `IDB.putConvo` 增加 `tokens / answers / memory / memory_at / title_auto` 字段（老会话结构化克隆原样跳过）。
+- 消息徽章新增「⛁ token」与既有「模型 X」同行；`title_auto` 标记让自动标题可被升级、手动标题不被覆盖。
+- 设置面板新增「⚙ 工作流引擎」折叠区：四个开关 + 标题/记忆模型（默认自动选最廉价文本模型）+ 缩略图与视频容器尺寸，保存落 `localStorage`。
+- 守三纪律：事件只背标量小字符串（不背历史大载荷）、LLM 前必本地 reduce 取最近若干条、内核加载/任一步骤异常都静默降级，绝不阻塞主聊天流。
+
+---
+
 ## v0.19.3（本版）—— 修「选模型不生效」/ 增强模式整块下线（并入 skill）/ 用户消息左对齐 · 移除单文件部署版
 
 ### 1. 选了模型，问答却走「列表第一项」——服务端路由修复

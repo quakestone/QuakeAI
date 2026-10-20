@@ -1429,6 +1429,16 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if path == "/" {
         return admin::handle_admin(req, &env, "").await;
     }
+    // 浏览器侧工作流引擎内核（engine/ crate 编出的 wasm，include_bytes! 随 Worker
+    // 同体分发；Blob Worker 启动时 fetch 一次、WebAssembly.Module 缓存复用）。
+    if method == Method::Get && path == "/wf/kernel.wasm" {
+        let hdrs = worker::Headers::new();
+        hdrs.set("Content-Type", "application/wasm")?;
+        hdrs.set("Cache-Control", "public, max-age=3600")?;
+        hdrs.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
+        return Ok(Response::from_bytes(include_bytes!("engine_wasm.bin").to_vec())?
+            .with_headers(hdrs));
+    }
     if path.starts_with("/admin") {
         return admin::handle_admin(req, &env, &path["/admin".len()..]).await;
     }

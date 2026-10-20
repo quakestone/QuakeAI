@@ -352,13 +352,14 @@
   .rec-live:not(:empty)::after { content: "▍"; color: var(--bad); animation: live-blink 1s steps(2) infinite; }
   /* 消息气泡内的附件 */
   .att-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-  .att-row img.att-thumb { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+  /* 附件显示规格由工作流 content_format 经 CSS 变量下发（默认值即旧观感的上调版） */
+  .att-row img.att-thumb { width: var(--att-thumb, 96px); height: var(--att-thumb, 96px); object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
   .att-row .att-file { font-size: 12px; color: var(--dim); border: 1px solid var(--border); border-radius: 8px; padding: 3px 9px; }
   .att-row .att-media { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--border); border-radius: 10px; padding: 7px; background: var(--panel2); }
   .att-row .att-media-ic { font-size: 13px; }
   .att-row .att-media-nm { font-size: 10px; color: var(--dim); max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .att-row audio.att-audio { width: 230px; height: 32px; }
-  .att-row video.att-video { width: 230px; max-height: 170px; border-radius: 8px; background: #000; display: block; }
+  .att-row video.att-video { width: var(--att-video-w, 260px); max-height: var(--att-video-h, 190px); border-radius: 8px; background: #000; display: block; }
   .composer-hint { text-align: center; font-size: 11px; color: var(--dim); margin-top: 6px; }
 
   /* ================= skill 独立表达线 ================= */
@@ -901,6 +902,26 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
         <input id="admin-token" placeholder="留空 = 未配置鉴权" autocomplete="off">
       </div>
     </details>
+
+    <details class="fold" id="wf-fold">
+      <summary>⚙ 工作流引擎（浏览器侧 WASM）</summary>
+      <div class="fold-body">
+        <p class="hint">Rust 编译的 WASM 内核跑在 Web Worker 里：每次回答结束后自动执行 ① token 流用量记账 ② LLM 总结历史标题 ③ 会话记忆更新 ④ 附件显示规格。全部在本地执行、服务端零存储；模型调用走网关自身（计入账本）。</p>
+        <div class="vg-row"><label><input type="checkbox" id="wf-on-usage"> token 流用量统计（徽章 + 会话累计）</label></div>
+        <div class="vg-row"><label><input type="checkbox" id="wf-on-title"> LLM 总结历史标题（失败保留首条截断兜底）</label></div>
+        <div class="vg-row"><label><input type="checkbox" id="wf-on-memory"> 会话记忆更新（第 2 答起，每 4 答一次）</label></div>
+        <div class="vg-row"><label><input type="checkbox" id="wf-on-format"> 附件显示规格（缩略图 / 视频容器）</label></div>
+        <div class="vg-row"><label>标题 / 记忆模型</label><select id="wf-model-sel"><option value="">自动（最低优先级文本模型 ≈ 最廉价）</option></select></div>
+        <div class="vg-row"><label>缩略图边长 px</label><input id="wf-thumb" type="number" min="48" max="200" value="96"></div>
+        <div class="vg-row"><label>视频容器宽 px</label><input id="wf-vw" type="number" min="120" max="640" value="260"></div>
+        <div class="vg-row"><label>视频最大高 px</label><input id="wf-vh" type="number" min="90" max="640" value="190"></div>
+        <div class="toolbar" style="margin-top:10px">
+          <button class="primary" onclick="saveWfCfg()">保存工作流设置</button>
+          <span class="muted" id="wf-hint"></span>
+        </div>
+        <div class="vg-row"><label>当前会话记忆</label><span class="muted" id="wf-mem-view" style="white-space:pre-wrap">（无）</span></div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -1258,8 +1279,11 @@ const IDB = {
   _req(req) { return new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); }); },
   putConvo(c) {
     if (!this.db) return Promise.resolve();
+    // tokens/answers/memory/title_auto 由工作流引擎（浏览器 WASM）维护；
+    // 老会话这些字段为 undefined，结构化克隆原样跳过，读取不受影响。
     return this._req(this.db.transaction("convos", "readwrite").objectStore("convos")
-      .put({ id: c.id, title: c.title, model: c.model, updated: c.updated }));
+      .put({ id: c.id, title: c.title, model: c.model, updated: c.updated,
+        tokens: c.tokens, answers: c.answers, memory: c.memory, memory_at: c.memory_at, title_auto: c.title_auto }));
   },
   putMsg(convoId, idx, m) {
     if (!this.db) return Promise.resolve();
@@ -1738,6 +1762,7 @@ function renderMessages() {
     const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
     const badges = (m.channel ? `<span class="ch-badge">via ${esc(m.channel)}</span>` : "")
       + (m.model ? `<span class="ch-badge mdl-badge" title="本条回答实际采用的模型名">模型 ${esc(m.model)}</span>` : "")
+      + (m.usage && m.usage.total_tokens != null ? `<span class="ch-badge" title="prompt ${m.usage.prompt_tokens || 0} · completion ${m.usage.completion_tokens || 0}">⛁ ${fmtTok(m.usage.total_tokens)}</span>` : "")
       + (m.attempts && m.attempts.split(";").length > 1
         ? `<span class="switch-badge" title="${esc(m.attempts)}">⤻ 已自动切换</span>` : "");
     const acts = m.streaming ? "" : `<button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button><button class="act-btn" onclick="shareMsg(this)" title="分享本条回答">分享</button><button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button>`;
@@ -2099,7 +2124,7 @@ async function sendWith(text, atts) {
   const asstIdx = c.msgs.length;
   const asst = { role: "assistant", content: "", reasoning: "", streaming: true, ts: Date.now() };
   c.msgs.push(asst);
-  if (!c.title || c.title === "新对话") c.title = (fullText || "[附件]").slice(0, 24);
+  if (!c.title || c.title === "新对话") { c.title = (fullText || "[附件]").slice(0, 24); c.title_auto = true; }
   c.updated = Date.now();
   // 立即可见 + 立即落库（新会话此刻才真正创建，不等防抖）
   renderConvos(); renderMessages(); updateChatTop();
@@ -2120,6 +2145,8 @@ async function sendWith(text, atts) {
     api("/skills/" + encodeURIComponent(activeSkill.id) + "/use", "POST").catch(() => {});
   }
   const body = { messages: history, stream: true };
+  // 让上游在 SSE 末块带回 usage（token 账本与「本条 tokens」徽章的数据源）
+  body.stream_options = { include_usage: true };
   if (curModel) body.model = curModel;
   // 图片视频块生效：仅当**本轮**确实带图片/视频附件时，才用选定的视觉/视频模型覆盖
   // 用户选择；「always」作用范围也只在自动模式（未显式选模型）下才允许无附件覆盖。
@@ -2175,6 +2202,8 @@ async function sendWith(text, atts) {
       streaming = false; aborter = null; updateSendBtn();
       renderMessages();
     }
+    // 工作流事件：token 记账 / LLM 标题升级 / 记忆更新。异步、失败静默，不阻塞 UI。
+    if (!asst.error) wfAfterAnswer(c, convoId, asst, fullText, atts);
   }
 }
 
@@ -3259,6 +3288,9 @@ function feedSseBlock(block, sink) {
       if (typeof delta.content === "string") sink.content += delta.content;
       if (typeof delta.reasoning_content === "string") sink.reasoning += delta.reasoning_content;
     }
+    // 末块 usage（前端请求带 stream_options.include_usage 时上游随流返回）：
+    // 挂到消息上，供工作流 usage.tally 记账与徽章展示；上游不回则无此字段。
+    if (j.usage) sink.usage = j.usage;
   } catch {}
 }
 function handleSseBlock(block, asst) { feedSseBlock(block, asst); }
@@ -4584,6 +4616,224 @@ function toggleTheme() {
 }
 
 // ================= 初始化 =================
+// ================= 浏览器侧工作流引擎（Rust→WASM 内核 + JS Host 驱动） =================
+// 设计：内核只做同步 DAG 调度 / 模板解析 / 重试计数，零宿主导入；异步（fetch/IDB/计时）
+// 全部由这里的 JS Host 驱动。每个回答结束（chat.completed）后，wfAfterAnswer 用同一份
+// 轻量事件（只有标量与小字符串，不背大载荷）启动 4 个工作流，各自的插件做真实副作用。
+// 内核加载失败 / 任一步骤异常都静默降级，绝不阻塞主聊天流。
+
+const WfCfg = {
+  KEY: "gw_wf_cfg",
+  def: { usage: true, title: true, memory: true, format: true, model: "", thumb: 96, vw: 260, vh: 190 },
+  load() { try { return { ...this.def, ...(JSON.parse(localStorage.getItem(this.KEY) || "{}")) }; } catch { return { ...this.def }; } },
+  save(c) { try { localStorage.setItem(this.KEY, JSON.stringify(c)); } catch {} },
+};
+let wfCfg = WfCfg.load();
+
+function fmtTok(n) {
+  n = Number(n || 0);
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return "" + n;
+}
+function clampNum(v, min, max, def) {
+  const n = Number(v);
+  if (!isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+// content_format 的产出：把附件显示规格下发为 CSS 变量（CSS 已用 var(--att-*) 占位）。
+function wfApplyFormat(thumb, vw, vh) {
+  const r = document.documentElement.style;
+  r.setProperty("--att-thumb", thumb + "px");
+  r.setProperty("--att-video-w", vw + "px");
+  r.setProperty("--att-video-h", vh + "px");
+}
+// 设置面板打开时刷新「当前会话记忆」展示
+function wfShowMemory() {
+  const el = document.getElementById("wf-mem-view");
+  if (el) { const c = curConvo(); el.textContent = (c && c.memory) ? c.memory : "（无）"; }
+}
+// 走网关自身 chat 端点（计入账本）；非流式，方便拿 content。失败返回 ""，由插件兜底。
+async function wfChat(messages, model) {
+  const body = { messages, stream: false };
+  if (model) body.model = model;
+  try {
+    const h = gwHeaders({ "Content-Type": "application/json" });
+    const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body) });
+    if (!resp.ok) return "";
+    const j = await resp.json().catch(() => null);
+    return (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+  } catch { return ""; }
+}
+
+// ---- WASM 内核宿主：加载一次、缓存复用；驱动循环 + 插件分派 ----
+const WF = {
+  ex: null, h: null, loading: null, c: null,
+  async ensure() {
+    if (this.ex) return this.ex;
+    if (this.loading) return this.loading;
+    this.loading = (async () => {
+      const resp = await fetch("/wf/kernel.wasm");
+      if (!resp.ok) throw new Error("kernel " + resp.status);
+      const bytes = await resp.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      const ex = instance.exports;
+      if (!ex.memory) throw new Error("wasm 未导出 memory");
+      ex.mem_reserve(1024 * 1024); // 1MB 竞技场（一次，故意泄漏到实例销毁）
+      const load = (seed) => { const h = ex.engine_new(); const [p, l] = wfStr(ex, seed); const r = ex.engine_load(h, p, l); if (r !== 0) throw new Error("load " + wfErr(ex)); return h; };
+      this.h = {
+        usage: load(WF_SEED_USAGE), title: load(WF_SEED_TITLE),
+        format: load(WF_SEED_FORMAT), memory: load(WF_SEED_MEMORY),
+      };
+      this.ex = ex;
+      return ex;
+    })();
+    try { return await this.loading; }
+    catch (e) { this.loading = null; console.warn("工作流内核加载失败，已降级:", e.message); return null; }
+  },
+  readScratch(ex) {
+    const buf = new Uint8Array(ex.memory.buffer, ex.scratch_ptr(), ex.scratch_len());
+    try { return JSON.parse(new TextDecoder().decode(buf)); } catch { return {}; }
+  },
+};
+function wfStr(ex, s) {
+  const b = new TextEncoder().encode(s);
+  const p = ex.alloc(b.length);
+  new Uint8Array(ex.memory.buffer, p, b.length).set(b);
+  return [p, b.length];
+}
+function wfErr(ex) {
+  const buf = new Uint8Array(ex.memory.buffer, ex.last_error_ptr(), ex.last_error_len());
+  return new TextDecoder().decode(buf);
+}
+// 驱动单条 run 直到终态：engine_ready 取就绪步 → 插件执行 → engine_complete/fail 回报。
+async function wfDrive(ex, handle, eventJson, plugin) {
+  ex.arena_reset();
+  const [p, l] = wfStr(ex, JSON.stringify(eventJson));
+  const rid = ex.engine_start(handle, p, l);
+  if (rid < 0) { console.warn("wf start 失败:", wfErr(ex)); return; }
+  let guard = 0;
+  for (;;) {
+    if (++guard > 16) { console.warn("wf 驱动超过步数上限，中断"); break; }
+    if (!ex.engine_ready(rid)) { console.warn("wf ready 错误:", wfErr(ex)); return; }
+    const blk = WF.readScratch(ex);
+    const steps = (blk.steps || []);
+    if (!steps.length) break; // run 终态
+    for (const st of steps) {
+      try {
+        const out = await plugin(st.plugin, st.input);
+        const [sp, sl] = wfStr(ex, st.id);
+        const [op, ol] = wfStr(ex, JSON.stringify(out ?? null));
+        ex.engine_complete(rid, sp, sl, op, ol);
+      } catch (e) {
+        const [sp, sl] = wfStr(ex, st.id);
+        const [ep, el] = wfStr(ex, String((e && e.message) || e));
+        const canRetry = ex.engine_fail(rid, sp, sl, ep, el);
+        if (canRetry !== 1 && canRetry !== true) break; // 次数用尽 / 调用错误 → 终止本轮
+      }
+    }
+  }
+}
+
+// ---- 4 个工作流种子（单步 DAG；事件名统一 chat.completed；模板指向 /event/*） ----
+const WF_SEED_USAGE = JSON.stringify({ id: "usage_tally", version: 1, trigger: { event: "chat.completed" },
+  steps: [{ id: "tally", plugin: "wf.usage_tally", input: { total: "${/event/usage/total_tokens}", convoId: "${/event/convoId}", answers: "${/event/answers}", model: "${/event/model}" } }] });
+const WF_SEED_TITLE = JSON.stringify({ id: "auto_title", version: 1, trigger: { event: "chat.completed" },
+  steps: [{ id: "title", plugin: "wf.auto_title", input: { convoId: "${/event/convoId}", title_auto: "${/event/title_auto}", answers: "${/event/answers}" } }] });
+const WF_SEED_FORMAT = JSON.stringify({ id: "content_format", version: 1, trigger: { event: "chat.completed" },
+  steps: [{ id: "fmt", plugin: "wf.content_format", input: { thumb: "${/event/cfg/thumb}", vw: "${/event/cfg/vw}", vh: "${/event/cfg/vh}" } }] });
+const WF_SEED_MEMORY = JSON.stringify({ id: "memory_update", version: 1, trigger: { event: "chat.completed" },
+  steps: [{ id: "mem", plugin: "wf.memory_update", input: { convoId: "${/event/convoId}", answers: "${/event/answers}" } }] });
+
+// ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
+const WF_PLUGINS = {
+  // ① token 流用量记账：累加进会话，更新「本条 + 会话累计」数据
+  "wf.usage_tally": async (inp) => {
+    const c = WF.c; if (!c) return { ok: true };
+    c.tokens = (c.tokens || 0) + (Number(inp.total) || 0);
+    c.answers = Number(inp.answers) || (c.answers || 0) + 1;
+    c.updated = Date.now();
+    await IDB.putConvo(c);
+    return { ok: true, total: c.tokens, answers: c.answers };
+  },
+  // ② LLM 总结历史标题（失败保留首条截断兜底，不覆盖用户已手动命名的标题）
+  "wf.auto_title": async (inp) => {
+    const c = WF.c; if (!c) return { skipped: true };
+    if (c.title_auto === false) return { skipped: "用户已手动命名" };
+    const msgs = (c.msgs || []).filter(m => (m.role === "user" || m.role === "assistant") && m.content && !m.error);
+    const transcript = msgs.slice(-12).map(m => (m.role === "user" ? "用户" : "AI") + "：" + m.content).join("\n");
+    const sys = "用不超过 18 个汉字概括这段对话的核心主题，只输出标题本身，不要标点、不要引号、不要解释、不要换行。";
+    const title = (await wfChat([{ role: "system", content: sys }, { role: "user", content: transcript }], wfCfg.model))
+      .replace(/[《》""''‘’「」【】\s]/g, "").slice(0, 20);
+    if (title) { c.title = title; c.title_auto = true; await IDB.putConvo(c); renderConvos(); }
+    return { title: title || (c.title || "") };
+  },
+  // ③ 附件显示规格：由设置算出版式档案，下发 CSS 变量（带视频时视频容器适度放大）
+  "wf.content_format": async (inp) => {
+    const hasVideo = (WF.atts || []).some(a => a.kind === "video");
+    const prof = { thumb: Number(inp.thumb) || wfCfg.thumb, vw: (hasVideo ? Math.max(Number(inp.vw) || wfCfg.vw, 300) : Number(inp.vw) || wfCfg.vw), vh: Number(inp.vh) || wfCfg.vh };
+    wfApplyFormat(prof.thumb, prof.vw, prof.vh);
+    return prof;
+  },
+  // ④ 会话记忆更新：第 2 答起、每 4 答一次；压缩成中文要点存进会话
+  "wf.memory_update": async (inp) => {
+    const c = WF.c; if (!c) return { skipped: true };
+    const msgs = (c.msgs || []).filter(m => (m.role === "user" || m.role === "assistant") && m.content && !m.error);
+    const transcript = msgs.slice(-16).map(m => (m.role === "user" ? "用户" : "AI") + "：" + m.content).join("\n");
+    const prev = c.memory ? ("已有记忆：\n" + c.memory + "\n\n") : "";
+    const sys = "你是会话记忆压缩器。从对话中提取长期有用的信息（用户偏好、项目背景、待办、事实），用不超过 200 字的中文要点列表记录。只输出要点，不要寒暄。";
+    const mem = (await wfChat([{ role: "system", content: sys }, { role: "user", content: prev + "新对话：\n" + transcript }], wfCfg.model)).trim().slice(0, 400);
+    if (mem) { c.memory = mem; c.memory_at = Date.now(); await IDB.putConvo(c); wfShowMemory(); }
+    return { memory: mem || "" };
+  },
+};
+
+// 回答结束后入口（sendWith 的 finally 调用）。异步、失败静默、不阻塞 UI。
+async function wfAfterAnswer(c, convoId, asst, fullText, atts) {
+  if (!(wfCfg.usage || wfCfg.title || wfCfg.memory || wfCfg.format)) return;
+  const ex = await WF.ensure();
+  if (!ex) return; // 内核不可用，静默降级
+  WF.c = c; WF.atts = atts || [];
+  const u = asst.usage || {};
+  const answers = (c.answers || 0) + 1;
+  const event = {
+    event: "chat.completed",
+    usage: { prompt_tokens: u.prompt_tokens || 0, completion_tokens: u.completion_tokens || 0, total_tokens: u.total_tokens || 0 },
+    convoId, model: asst.model || "", fullText: fullText || "", answers,
+    title_auto: c.title_auto !== false,
+    cfg: { thumb: wfCfg.thumb, vw: wfCfg.vw, vh: wfCfg.vh },
+  };
+  try {
+    if (wfCfg.usage) await wfDrive(ex, WF.h.usage, event, WF_PLUGINS["wf.usage_tally"]);
+    if (wfCfg.format) await wfDrive(ex, WF.h.format, event, WF_PLUGINS["wf.content_format"]);
+    // 标题：第 2 答起每次刷新（保持最新概括）；记忆：第 2 答起每 4 答一次
+    if (wfCfg.title && answers >= 2) await wfDrive(ex, WF.h.title, event, WF_PLUGINS["wf.auto_title"]);
+    if (wfCfg.memory && answers >= 2 && ((answers - 2) % 4 === 0)) await wfDrive(ex, WF.h.memory, event, WF_PLUGINS["wf.memory_update"]);
+  } catch (e) { console.warn("工作流执行异常（已降级）:", e); }
+}
+
+// ---- 设置面板：保存 / 回填 ----
+function saveWfCfg() {
+  wfCfg.usage = $("wf-on-usage").checked;
+  wfCfg.title = $("wf-on-title").checked;
+  wfCfg.memory = $("wf-on-memory").checked;
+  wfCfg.format = $("wf-on-format").checked;
+  wfCfg.model = $("wf-model-sel").value || "";
+  wfCfg.thumb = clampNum($("wf-thumb").value, 48, 200, 96);
+  wfCfg.vw = clampNum($("wf-vw").value, 120, 640, 260);
+  wfCfg.vh = clampNum($("wf-vh").value, 90, 640, 190);
+  WfCfg.save(wfCfg);
+  if (wfCfg.format) wfApplyFormat(wfCfg.thumb, wfCfg.vw, wfCfg.vh);
+  wfShowMemory();
+  const hint = $("wf-hint"); if (hint) { hint.textContent = "已保存 ✓"; setTimeout(() => { const e = $("wf-hint"); if (e) e.textContent = ""; }, 2000); }
+}
+function loadWfCfgToUI() {
+  const set = (id, v) => { const e = document.getElementById(id); if (e) e.checked = !!v; };
+  set("wf-on-usage", wfCfg.usage); set("wf-on-title", wfCfg.title); set("wf-on-memory", wfCfg.memory); set("wf-on-format", wfCfg.format);
+  const val = (id, v) => { const e = document.getElementById(id); if (e) e.value = v; };
+  val("wf-model-sel", wfCfg.model || ""); val("wf-thumb", wfCfg.thumb); val("wf-vw", wfCfg.vw); val("wf-vh", wfCfg.vh);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   applyTheme(localStorage.getItem("gw_theme") || "dark");
   $("admin-token").value = token();
@@ -4606,6 +4856,11 @@ document.addEventListener("DOMContentLoaded", () => {
   // 会话存储已迁 IndexedDB：异步开库/迁移/灌装完成前消息区是空的，
   // initConvos 内部会负责首渲染（先 applyRoute 让界面框架就位）。
   initConvos();
+  // 工作流引擎设置：回填面板 + 应用附件显示规格（content_format 的持久化侧）
+  loadWfCfgToUI();
+  if (wfCfg.format) wfApplyFormat(wfCfg.thumb, wfCfg.vw, wfCfg.vh);
+  const wfFold = $("wf-fold");
+  if (wfFold) wfFold.addEventListener("toggle", wfShowMemory);
   // 会话搜索：输入即过滤（标题同步、内容命中异步补）
   const searchBox = $("convo-search");
   searchBox.addEventListener("input", debounce((e) => runSearch(e.target.value), 150));

@@ -1,0 +1,21 @@
+[package]
+name = "workflow-engine"
+version = "0.1.0"
+edition = "2021"
+description = "浏览器侧工作流引擎内核（wasm32）：Schema/校验/DAG 调度/模板解析/同步状态机"
+# 只编 wasm32-unknown-unknown；宿主机靶仅用于 `cargo test`（逻辑与靶无关）。
+
+[lib]
+# cdylib 供 wasm 构建；rlib 让宿主机 cargo test 能链进去。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
