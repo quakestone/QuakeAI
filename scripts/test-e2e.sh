@@ -376,37 +376,69 @@ echo "$RESP" | grep -q 'glm-4.7-flash'; check "冷却模型被跳过，自动换
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-cool > /dev/null
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-other > /dev/null
 
-echo "== 15. 呼叫页二次通话回归（v0.7.5：麦克风竞争 / 播报叠加 / AudioContext 累积）=="
-# 用户实测「第一次识别可以，第二次就挂」。三个根因都在前端 admin_ui.html：
-# ① callBusy 加锁太晚（曾在 await rec.stop() 之后）→ 松手瞬间连按第二次，
-#    两个 MediaStream 并发，iOS 直接拒绝 getUserMedia（硬件占用）；
-# ② pumpTts 未被 await → callBusy 早释，第二轮说话与第一轮播报声音叠加；
-# ③ 每次阶段性 STT 都 new AudioContext → iOS 实时 AudioContext 并发上限触顶，
-#    后续识别/播音全面失灵。
+echo "== 15. 语音全链路回归（v0.8.0：状态机 / 单消费者 / TTS-STT 双兜底）=="
+# v0.7.5 修「第二次就挂」（麦克风竞争/播报叠加/AudioContext 累积）后，v0.8.0
+# 把语音交互重构为三层能力：MicHub（麦克风单所有者）+ VoiceInput（一次输入
+# 只用一个消费者）+ CallFsm（双向状态机，barge-in 打断是一等公民），TTS/STT
+# 均为「网关 → 自定义端点 → 浏览器」递降链。以下断言锁定新架构不回归。
 UI="$ROOT/src/admin_ui.html"
-# ① 早锁：录音启动（start(250)）后立即持锁，「录音→识别→思考→播报」全程禁第二轮
-grep -A4 'callRec.start(250);' "$UI" | grep -q 'callBusy = true'; check "呼叫录音启动即持锁 callBusy（防两轮 MediaStream 并发）" $? "no early lock after start"
+# ① 麦克风单所有者：MicHub 抢占前先彻底释放旧所有者的流（iOS 双流直接拒）
+grep -q 'const MicHub' "$UI" && grep -q 'this.release(); // 抢占' "$UI"; check "MicHub 单所有者 + 抢占前彻底释放旧流" $? "no MicHub preempt release"
+# ② VoiceInput 单消费者：识别可用走浏览器 SpeechRecognition 并先 return，
+#    MediaRecorder 只在识别不可用分支出现——两个消费者绝不并发
 python3 -c "
 import re, sys
 ui = open('$UI').read()
-m = re.search(r'async function finishCallVoice\(\) \{(.*?)\n\}', ui, re.S)
-b = re.sub(r'//[^\n]*', '', m.group(1))  # 去行注释：注释里提到的 await 字样不算代码
-lock = b.find('callBusy = true'); aw = b.find('await ')
-sys.exit(0 if (lock != -1 and lock < aw) else 1)
-"; check "finishCallVoice 在首个 await 前加锁（松手连按不再交错收尾）" $? "lock still after await"
-# ② 播报排空：chatStream 结束≠播报结束，必须等队列播空才松 callBusy
-grep -q 'await ttsQueueDrained();' "$UI"; check "callAskStreaming 等播报队列排空（callBusy 不早释）" $? "no drain await"
-grep -q 'function ttsQueueDrained' "$UI" && grep -q 'flushTtsWaiters()' "$UI"; check "drain 等待者有 flush 唤醒机制" $? "no flush fn"
-grep -A2 'ttsPlaying = false;' "$UI" | grep -q 'flushTtsWaiters'; check "pumpTts 播空时唤醒 drain 等待者" $? "no flush in pumpTts"
-grep -A6 'function stopCallAudio' "$UI" | grep -q 'ttsCurResolve'; check "挂断时唤醒被 pause 卡住的播放（pumpTts 不会永挂）" $? "no manual resolve on hangup"
-# ③ AudioContext 单例：全局复用，不再每次 new（iOS 并发上限）
-if grep -q '_wavCtx' "$UI" && ! grep -q 'ctx\.close()' "$UI"; then check "AudioContext 全局单例复用（iOS 并发上限不再触顶）" 0; else check "AudioContext 全局单例复用（iOS 并发上限不再触顶）" 1 "per-call context still present"; fi
-# ④ 防重入 + 超时兜底 + 入口清理 + 流式中断
+m = re.search(r'const VoiceInput = \{\s*cur:.*?\n\};', ui, re.S)
+b = re.sub(r'//[^\n]*', '', m.group(0))  # 去行注释
+br = b.find('return \"browser\"'); mr = b.find('new MediaRecorder')
+sys.exit(0 if (br != -1 and mr != -1 and br < mr) else 1)
+"; check "VoiceInput 单消费者（浏览器识别先 return，MediaRecorder 仅兜底分支）" $? "dual mic consumer"
+# ③ CallFsm 六态 + barge-in 一等公民：speaking/thinking 态 press 合法
+grep -q 'closed:.*{ open: \"idle\" }' "$UI"; check "CallFsm 状态机事件表存在（closed→idle）" $? "no fsm table"
+grep -q 'speaking:.*{ press: \"listening\"' "$UI"; check "barge-in：播报中 press→listening（打断是一等公民）" $? "no barge-in transition"
+grep -q 'if (!to) return false;' "$UI"; check "CallFsm 拒绝非法迁移（忙态按钮点不动）" $? "illegal transitions accepted"
+# ④ 早锁：录音/识别启动即占锁，全程禁第二轮（同 v0.7.5 修复语义）
+grep -A8 'mode = await VoiceInput.start(\"call\"' "$UI" | grep -q 'CallFsm.fire(\"press\")'; check "呼叫识别启动即迁移 listening 持锁" $? "no early lock (call)"
+grep -A6 'mode = await VoiceInput.start(\"input\"' "$UI" | grep -q 'setVoiceBusy(true)'; check "输入框识别启动即持锁 voiceBusy" $? "no early lock (input)"
+# ⑤ finishVoice/finishCallVoice 松锁在 finally（每条出口都不锁死按钮）
+python3 -c "
+import re, sys
+ui = open('$UI').read()
+m = re.search(r'async function finishVoice\(\) \{(.*?)\n\}', ui, re.S)
+b = re.sub(r'//[^\n]*', '', m.group(1))
+unlock = b.find('setVoiceBusy(false)'); aw = b.find('await ')
+sys.exit(0 if (unlock != -1 and unlock > aw) else 1)
+"; check "finishVoice 所有 await 出口后统一松锁（finally）" $? "unlock before await"
+# ⑥ TTS 三层递降链：网关 → 自定义端点 → 浏览器兜底
+grep -q 'mode === \"custom\" ? await customTtsBlob(text) : await ttsBlob(text)' "$UI"; check "TTS 递降链：网关/自定义端点优先" $? "no tts chain"
+grep -q 'if (!BrowserTts.ready) throw e;' "$UI"; check "TTS 浏览器兜底可用性检查（不可用则上抛）" $? "no browser fallback guard"
+grep -q 'async function customTtsBlob' "$UI" && grep -q 'response_format: \"wav\"' "$UI"; check "自定义 TTS 端点 OpenAI 兼容（客户自有资源替换点）" $? "no custom endpoint"
+grep -q 'if (mode === \"gateway\") throw e;' "$UI"; check "仅网关模式不降级（错误明示不静默）" $? "gateway mode degrades"
+# ⑦ 浏览器 TTS（Speakit-JS 融合体）：长文本切片 + 主动停止信号
+grep -q 'parts = String(text || \"\").split' "$UI" && grep -q 'i += 120' "$UI"; check "浏览器 TTS 长文本按句切片 + 120 字硬切（防 Chrome 静默截断）" $? "no chunking"
+grep -q 'reject(new Error(\"stopped\"))' "$UI" && grep -q '=== \"stopped\") return;' "$UI"; check "TTS 停止语义：cancel→stopped 信号被静默消费（不误报错）" $? "no stopped signal"
+grep -q 'onvoiceschanged' "$UI" && grep -q 'Date.now() - t0 > 1500' "$UI"; check "浏览器音色列表加载有 onvoiceschanged + 1.5s 轮询兜底" $? "no voice poll"
+# ⑧ 浏览器 STT：continuous+interimResults 实时文字流
+grep -q 'rec.continuous = true; rec.interimResults = true;' "$UI"; check "浏览器 STT continuous+interimResults（真实时文字流）" $? "no realtime stt"
+# ⑨ 防重入 + 60s 超时兜底（两个入口都有）
 grep -q 'callFinishing' "$UI" && grep -q 'voiceFinishing' "$UI"; check "finish 函数防重入（60s 超时兜底与 pointerup 不双入）" $? "no reentry guard"
-grep -q 'if (callRec === rec0) finishCallVoice(); }, 60000)' "$UI"; check "呼叫录音 60s 超时自动收尾（pointerup 丢失不锁死）" $? "no timeout guard"
-grep -B8 'callStream = await navigator.mediaDevices.getUserMedia' "$UI" | grep -q 'clearInterval(callSttTimer)'; check "呼叫入口先回收残留定时器/录音器（防旧流占麦克风）" $? "no residual cleanup"
-grep -A3 'mediaRec.start(250);' "$UI" | grep -q 'setVoiceBusy(true)'; check "输入框录音启动即持锁 voiceBusy（与呼叫页同策略）" $? "no early voice lock"
+grep -q 'if (CallFsm.s === \"listening\") finishCallVoice(); }, 60000)' "$UI"; check "呼叫 60s 超时自动收尾（pointerup 丢失不锁死）" $? "no timeout guard (call)"
+grep -q 'if (voiceBusy) finishVoice(); }, 60000)' "$UI"; check "输入框 60s 超时自动收尾（pointerup 丢失不锁死）" $? "no timeout guard (input)"
+# ⑩ 入口清理：异常路径先 abort 旧输入会话 + 释放麦克风
+grep -q 'VoiceInput.abort(\"input\")' "$UI" && grep -q 'VoiceInput.abort(\"call\")' "$UI"; check "入口先 abort 残留识别会话（防旧消费者占麦）" $? "no input cleanup"
+grep -q 'MicHub.release(\"call\")' "$UI"; check "打断时显式释放麦克风（下轮重新 acquire）" $? "no mic release on barge-in"
+# ⑪ 播报排空 + 挂断唤醒 + 流式中断（v0.7.5 修复不回退）
+grep -q 'await ttsQueueDrained();' "$UI"; check "callAskStreaming 等播报队列排空（不早释锁）" $? "no drain await"
+grep -q 'function ttsQueueDrained' "$UI" && grep -q 'flushTtsWaiters()' "$UI"; check "drain 等待者有 flush 唤醒机制" $? "no flush fn"
+grep -A6 'function ttsStopAll' "$UI" | grep -q 'ttsCurResolve'; check "ttsStopAll 唤醒被 pause 卡住的播放（pumpTts 不会永挂）" $? "no manual resolve"
 grep -q 'chatAbort = new AbortController' "$UI" && grep -q 'chatAbort.abort()' "$UI"; check "挂断中断进行中的流式请求（不必等上游把话说完）" $? "no chat abort"
+# ⑫ AudioContext 单例（v0.7.5 修复不回退）
+if grep -q '_wavCtx' "$UI" && ! grep -q 'ctx\.close()' "$UI"; then check "AudioContext 全局单例复用（iOS 并发上限不再触顶）" 0; else check "AudioContext 全局单例复用（iOS 并发上限不再触顶）" 1 "per-call context still present"; fi
+# ⑬ 语音设置对话框：策略可配 + 客户端点 + 配置持久化
+grep -q 'id=\"voice-dlg\"' "$UI" && grep -q 'function openVoiceCfg' "$UI"; check "语音设置对话框（TTS/STT 模式可配）" $? "no voice dialog"
+grep -q 'gw_voice_cfg' "$UI" && grep -q 'VoiceCfg.save' "$UI"; check "语音配置 localStorage 持久化" $? "no cfg persistence"
+grep -q 'speakMsg' "$UI" && grep -q 'await ttsPlaySentence' "$UI"; check "消息播音统一走 ttsPlaySentence（同一条递降链）" $? "speakMsg bypasses chain"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

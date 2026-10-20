@@ -1,5 +1,67 @@
 # CHANGES
 
+## v0.8.0（2026-10-22）—— 语音全链路重构：状态机 + 单消费者 + TTS/STT 双兜底
+
+v0.7.5 修完「第二次就挂」后，按用户三条优化指令把语音这条功能线补齐：
+TTS 去 GitHub 抓精简项目改造融合做兜底、STT 加兜底模型、双向交互引入
+状态机（中断是高频事件）。核心思路：**把「哪个组件此刻独占麦克风/扬声器」
+变成显式状态，从结构上消灭竞争**。
+
+### ① 麦克风单所有者 MicHub（「第二次就挂 / STT 跑不通」的根治）
+
+所有取麦统一走 `MicHub.acquire(owner) / release(owner)`：新 owner 抢占前
+**先彻底释放旧所有者的流**再要新的。浏览器语音识别与 MediaRecorder
+绝不并存——`VoiceInput` 一次输入只用一个消费者：识别可用（Chrome/Edge）
+走 `SpeechRecognition`（continuous+interimResults，零上传、真实时文字流），
+不可用（Firefox/Safari）或用户强制网关模式才 `MediaRecorder` + 网关转写。
+输入框长按语音与通话页共用同一套（owner 分别为 input / call），
+互相抢占时旧会话被 `abort()` 同步取消。
+
+### ② 通话状态机 CallFsm（barge-in 打断是一等公民）
+
+六态 `closed/idle/listening/transcribing/thinking/speaking`，事件驱动
+显式迁移，非法迁移直接拒绝（忙态按钮点不动）：
+
+- **打断（barge-in）**：`speaking/thinking` 态 press → `listening`，
+  立即停播（`ttsStopAll`）+ 中断在途 SSE 流 + 清空 TTS 队列 + 释放麦克风，
+  不等当前句播完——双向语音里打断是高频操作，不允许「等 AI 说完」；
+- 每个 UI 动作都是「状态 + 事件 → 新状态」，从结构上消灭两轮交错/声音叠加；
+- 状态文案/精灵球四态/按钮 busy 全部由 `callSyncUi()` 按状态派生，
+  不再各处手工同步。
+
+### ③ TTS 三层递降链（Speakit-JS 融合体做浏览器兜底）
+
+去 GitHub 抓了 **Speakit-JS**（MIT，2KB，对 `speechSynthesis` 的 promise
+化封装）改造融合，并吸收 Easy Speech 的语音列表加载策略
+（`getVoices` → `onvoiceschanged` → 1.5s 轮询兜底）：
+
+- **递降链**：网关 `/v1/audio/speech` → **自定义端点**（OpenAI 兼容，
+  客户自有 TTS 接口资源的替换点，填 URL/Key/模型/音色即换）→
+  浏览器 `speechSynthesis`（离线可用的最后兜底）；
+- 仅网关模式不降级（错误明示）；auto/custom 任一层失败自动落下一层；
+- 浏览器 TTS 长文本按句切片 + 120 字硬切（Chrome 超长 utterance
+  静默截断）；`cancel → onerror → reject("stopped")` 作为控制流信号
+  被静默消费（打断/挂断不误报错）；
+- 新增 **🎛 语音设置对话框**：TTS/STT 模式、自定义端点、浏览器音色、
+  语速，配置存 localStorage（`gw_voice_cfg`），实时预览递降链。
+
+### ④ STT 两层链
+
+浏览器实时识别（零上传）优先 → 网关 `/v1/audio/transcriptions`
+（MediaRecorder 250ms 时间片 + 每 2s 阶段性全量转写做实时文字流）。
+「一直跑不通」的软件层根因就是双消费者互踩，单消费者原则已根治。
+
+### 验证
+
+- e2e **124/124**（§15 重写为 27 条 v0.8.0 架构断言：MicHub 抢占释放/
+  VoiceInput 单消费者/FSM 六态/barge-in 迁移/早锁/递降链/切片/停止语义/
+  防重入/超时兜底/挂断中断/配置持久化）；
+- 单测 **11/11**；
+- Playwright 六场景实测（无头 Chromium）：输入框语音两次无锁死、
+  通话全流程 FSM 闭环、**播报中抢话打断**（speaking→listening +
+  pause 调用证据）、浏览器 TTS 实际播音、custom 端点坏自动降级
+  浏览器兜底、设置对话框保存持久化——零 JS 错误。
+
 ## v0.7.5（2026-10-21）—— 修复呼叫页「第二次就挂」（麦克风竞争 + 播报叠加）
 
 用户实测「呼叫 第一次识别可以 第二次就挂了」，并精准怀疑「麦克风资源占用了

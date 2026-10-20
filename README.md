@@ -1,4 +1,4 @@
-# zhipu-wasm-gateway（v0.7.5）
+# zhipu-wasm-gateway（v0.8.0）
 
 **Rust → WASM 的免费资源 AI 聚合网关：资源管理 + 智能路由单例。**
 
@@ -20,7 +20,8 @@
 | v0.7.0 | **模型选择引擎**：四级能力（text/vision/stt/tts）+ 模型级路由/健康/冷却/自动换模型 + TTS 播音端点（`/v1/audio/speech`）+ 跨渠道 Key 复用（音频渠道借同 provider 主线 Key）；**设备级隔离**：`gw_device_keys` 头 + 本机 Key 卡片 + DO localDisk 持久化（重启不丢 Key）；**前端**：回答复制/分享/播音、最近会话缓存、右上角双向通话、消息长按重发、明暗主题、模型管理模型行/能力徽章/筛选 | ✅ e2e **89/89** + 单测 **7/7** + WASM 编译 0 警告 |
 | v0.7.1 | **三连修**：iOS 键盘弹起 App 消失（visualViewport offsetTop）、STT「不支持当前文件格式」（iOS mp4 → WebAudio 重采样 16kHz WAV）、播音无模型（tts 候选池 chat+audio 双池合并） | ✅ e2e **89/89** + 单测 **7/7** |
 | v0.7.2 | **智谱语音端点模型修正**：STT=glm-asr-2512（+stream=false）、TTS=glm-tts（音色 tongtong）——glm-4-voice 是端到端语音模型，放到转写/合成端点会被上游按 chat 校验（1210/1214）；旧模型名请求时自动改写，老账本零迁移 | ✅ e2e **90/90** + 单测 **7/7** |
-| v0.7.5（本版） | **修复呼叫页「第二次就挂」**：① `callBusy` 加锁提前到录音启动（曾在 `await rec.stop()` 之后——松手连按导致两个 MediaStream 并发，iOS 直接拒）；② `pumpTts` 未被 await 导致 callBusy 早释、两轮播报声音叠加——新增 `ttsQueueDrained()` 等队列播空才松锁；③ 阶段性 STT 每次 `new AudioContext` 累积触顶 iOS 并发上限——改全局单例复用；另加 60s 超时兜底/防重入/入口残留清理/挂断中断 SSE 流 | ✅ e2e **107/107** + 单测 **11/11** + Playwright 连按复测 |
+| v0.8.0（本版） | **语音全链路重构**（用户三条优化指令之语音线）：① 麦克风单所有者 `MicHub` + `VoiceInput` 单消费者（识别与录音绝不并存——「第二次就挂/STT 跑不通」的软件层根治）；② 通话状态机 `CallFsm` 六态，**barge-in 播报中抢话打断是一等公民**（speaking→listening 立即停播+断流+释放麦克风）；③ TTS 三层递降链：网关 → 自定义端点（OpenAI 兼容，客户自有资源替换点）→ 浏览器语音（GitHub 抓 Speakit-JS 融合改造，离线兜底）；④ STT 两层链：浏览器实时识别（零上传）→ 网关转写；⑤ 🎛 语音设置对话框（模式/端点/音色/语速可配，localStorage 持久化） | ✅ e2e **124/124** + 单测 **11/11** + Playwright 六场景实测（打断停播/浏览器兜底/端点降级） |
+| v0.7.5 | **修复呼叫页「第二次就挂」**：① `callBusy` 加锁提前到录音启动（曾在 `await rec.stop()` 之后——松手连按导致两个 MediaStream 并发，iOS 直接拒）；② `pumpTts` 未被 await 导致 callBusy 早释、两轮播报声音叠加——新增 `ttsQueueDrained()` 等队列播空才松锁；③ 阶段性 STT 每次 `new AudioContext` 累积触顶 iOS 并发上限——改全局单例复用；另加 60s 超时兜底/防重入/入口残留清理/挂断中断 SSE 流 | ✅ e2e **107/107** + 单测 **11/11** + Playwright 连按复测 |
 | v0.7.4 | **修复侧栏版本号显示过期值**（「前端版本变成 6.0」）：HTML 初始值去硬编码 + `refreshVersion()` /health 兜底；顺带挖出 `admin.rs` 独立 VERSION 常量停更的深因——全部收敛到 `env!("CARGO_PKG_VERSION")` 单一事实源（以后升级只改 Cargo.toml） | ✅ e2e **95/95** + 单测 **11/11** + Playwright 三场景实测 |
 | v0.7.3 | **实时语音通话**：① 根因根治「messages 参数非法」（1214）——智谱系渠道一律收敛到端点唯一模型 + 账本零迁移（audio 渠道旧名 glm-4-voice → glm-asr-2512/glm-tts）；② **STT 实时文字流**（录音中每 2s 阶段性全量转写 + diff 显示，通话页与长按发语音均支持）；③ **分句实时 TTS 播报**（chat SSE 按句切分，凑满一句立即合成入队顺序播放，文字同步滚动）；④ **呼叫页拟人化 UI**（AI 精灵球四态：呼吸/波纹/脉冲/声浪）+ 通话模型独立切换 | ✅ e2e **92/92** + 单测 **10/10** + 前端 JS 语法/切句逻辑单测 + Playwright 全链路实测（假麦克风录音→实时转写→流式对话→WAV 播报） |
 | v0.5 | **智谱 JWT 自动鉴权**：provider=zhipu 且 Key 为 `{id}.{secret}` → 现场生成 HS256 短期 JWT（sign_type=SIGN，TTL 1h，官方推荐方式）；真实联调证实：完整 Key 直调 200 / JWT 直调 200 / 经网关 JWT 200（此前 401 纯因掩码 Key 无效） | ✅ e2e **69/69** + 密码学标准向量单测 **5/5** + 真实端点联调 **13/13**（智谱 + 硅基双通道，经网关含流式/探测/掩码） |

@@ -354,6 +354,16 @@
   .model-opt.sel { border-color: var(--acc); background: var(--sel); }
   .model-opt .p { margin-left: auto; font-size: 11px; color: var(--dim); white-space: nowrap; }
 
+  /* ================= 语音设置对话框 ================= */
+  .dlg-sub { font-size: 12px; color: var(--dim); margin: -6px 0 14px; line-height: 1.6; }
+  .vg { display: flex; flex-direction: column; gap: 12px; }
+  .vg-row { display: flex; flex-direction: column; gap: 5px; }
+  .vg-row > label { font-size: 12px; color: var(--dim); }
+  .vg-row select, .vg-row input { width: 100%; }
+  .vg-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .vg-status { font-size: 12px; color: var(--dim); line-height: 1.7; border-top: 1px dashed var(--border); padding-top: 10px; }
+  .vg-status b { color: var(--txt); }
+
   #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; z-index: 60; width: min(92vw, 420px); pointer-events: none; }
   .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--acc); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px var(--shadow); animation: tin .18s ease-out; overflow-wrap: anywhere; pointer-events: auto; }
   .toast.ok { border-left-color: var(--ok); }
@@ -412,6 +422,7 @@
       <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新对话" title="新对话">＋</button>
       <button class="entry-btn" id="btn-models-top" onclick="navigate('models')" title="模型管理" aria-label="模型管理">⚙</button>
       <button class="icon-btn" id="btn-call" onclick="openCall()" aria-label="语音通话" title="语音通话（按住说话，AI 语音回答）">📞</button>
+      <button class="icon-btn" id="btn-voice-cfg" onclick="openVoiceCfg()" aria-label="语音设置" title="语音设置（TTS/STT 策略与兜底）">🎛</button>
       <button class="icon-btn" id="btn-theme" onclick="toggleTheme()" aria-label="切换明暗主题" title="明暗切换">🌙</button>
       <button class="model-chip" id="btn-model" onclick="openModelPicker()">…</button>
     </header>
@@ -608,6 +619,48 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <div class="dlg-actions"><button onclick="modelDlg.close()">关闭</button></div>
 </dialog>
 
+<dialog id="voice-dlg">
+  <h3>🎛 语音设置</h3>
+  <p class="dlg-sub">TTS / STT 均为三层策略：网关 → 自定义端点 → 浏览器兜底，任一层失败自动降级</p>
+  <div class="vg">
+    <div class="vg-row"><label>TTS 模式</label>
+      <select id="vg-tts-mode">
+        <option value="auto">自动（网关优先，浏览器兜底）</option>
+        <option value="gateway">仅网关 /v1/audio/speech</option>
+        <option value="custom">自定义端点（优先）</option>
+        <option value="browser">仅浏览器语音（离线可用）</option>
+      </select>
+    </div>
+    <div class="vg-row"><label>自定义 TTS 端点</label>
+      <input id="vg-custom-url" placeholder="https://your-tts.example.com/v1/audio/speech（OpenAI 兼容）">
+    </div>
+    <div class="vg-row"><label>端点 Key</label>
+      <input id="vg-custom-key" type="password" placeholder="sk-…（只存本浏览器 localStorage）" autocomplete="off">
+    </div>
+    <div class="vg-row"><label>端点模型 / 音色</label>
+      <span class="vg-2"><input id="vg-custom-model" placeholder="模型名（留空由端点决定）"><input id="vg-custom-voice" placeholder="音色（留空默认）"></span>
+    </div>
+    <div class="vg-row"><label>浏览器音色</label>
+      <select id="vg-browser-voice"><option value="">加载中…</option></select>
+    </div>
+    <div class="vg-row"><label>语速 <b id="vg-rate-v">1.05</b></label>
+      <input id="vg-rate" type="range" min="0.6" max="1.6" step="0.05" value="1.05">
+    </div>
+    <div class="vg-row"><label>STT 模式</label>
+      <select id="vg-stt-mode">
+        <option value="auto">自动（浏览器实时优先，网关兜底）</option>
+        <option value="gateway">仅网关 /v1/audio/transcriptions</option>
+        <option value="browser">仅浏览器语音识别</option>
+      </select>
+    </div>
+    <div class="vg-row vg-status" id="vg-status"></div>
+  </div>
+  <div class="dlg-actions">
+    <button class="primary" id="vg-save">保存</button>
+    <button onclick="voiceDlg.close()">关闭</button>
+  </div>
+</dialog>
+
 <dialog id="diag-dlg">
   <h3>部署自检</h3>
   <pre id="diag-body" class="mono" style="background:#0d1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;white-space:pre-wrap">加载中…</pre>
@@ -619,7 +672,7 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 <script>
 // ================= 基础 =================
 const $ = (id) => document.getElementById(id);
-const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg");
+const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg");
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function toast(msg, cls="") {
   const t = document.createElement("div");
@@ -878,13 +931,11 @@ async function shareMsg(btn) {
     catch { toast("分享失败", "err"); }
   }
 }
-/// 播音：POST /v1/audio/speech（TTS）→ Audio 播放；再点一次停止
+/// 播音：走统一 TTS 链（网关 → 自定义端点 → 浏览器 speechSynthesis 兜底）；
+/// 再点一次停止。ttsStopAll 同时管 Audio 与浏览器语音两条播放通道。
 let speakAudio = null;
 function resetSpeakBtn(btn) { if (!btn) return; btn.dataset.playing = ""; btn.classList.remove("speaking"); btn.textContent = "🔊 播音"; }
-function stopSpeak() {
-  if (speakAudio) { try { speakAudio.pause(); } catch {} speakAudio = null; }
-  document.querySelectorAll(".act-btn.speaking").forEach(resetSpeakBtn);
-}
+function stopSpeak() { ttsStopAll(); }
 /// 请求 TTS 合成，返回音频 Blob（播音按钮与语音通话共用）
 async function ttsBlob(text) {
   const h = gwHeaders({ "Content-Type": "application/json" });
@@ -898,21 +949,20 @@ async function ttsBlob(text) {
   return blob;
 }
 async function speakMsg(btn) {
-  if (btn.dataset.playing === "1") { stopSpeak(); return; }
+  if (btn.dataset.playing === "1") { ttsStopAll(); resetSpeakBtn(btn); return; }
   const text = msgTextOf(btn);
   if (!text.trim()) { toast("没有可朗读的内容", "err"); return; }
-  stopSpeak(); // 同一时刻只播一条
+  ttsStopAll(); // 同一时刻只播一条（含打断通话页播报）
+  document.querySelectorAll(".act-btn.speaking").forEach(resetSpeakBtn);
   btn.dataset.playing = "1"; btn.classList.add("speaking"); btn.textContent = "⏸ 停止";
   try {
-    const blob = await ttsBlob(text);
-    speakAudio = new Audio(URL.createObjectURL(blob));
-    speakAudio.onended = () => { resetSpeakBtn(btn); speakAudio = null; };
-    speakAudio.onerror = () => { resetSpeakBtn(btn); speakAudio = null; toast("播放失败", "err"); };
-    await speakAudio.play();
-    toast("播音中…再点一次停止", "ok");
+    await ttsPlaySentence(text);
+    if (btn.dataset.playing === "1") toast("播音结束", "ok");
   } catch (e) {
+    if (String(e && e.message) !== "stopped") toast("播音失败：" + e.message + ttsErrHint(e.message), "err");
+  } finally {
     resetSpeakBtn(btn);
-    toast("播音失败：" + e.message + ttsErrHint(e.message), "err");
+    if (speakAudio) { speakAudio = null; }
   }
 }
 function quickAsk(btn) { $("input").value = btn.textContent.trim(); sendOrStop(); }
@@ -1184,10 +1234,11 @@ function buildApiContent(m) {
 }
 
 // ================= 语音（🎙 长按说话 → 转写 → 发送） =================
-// 交互：按住麦克风说话，松开发送；上滑超过 60px 取消。音频经
-// /v1/audio/transcriptions（复用网关 multipart 上传 + audio 渠道）转写成
-// 文字后填入输入框并自动发送。需要 audio 渠道（智谱音频 GLM-4-Voice 等）。
-let mediaRec = null, recChunks = [], recStream = null, recTimer = null, recCancel = false, voiceBusy = false;
+// 交互：按住麦克风说话，松开发送；上滑超过 60px 取消。与通话页共用
+// VoiceInput 单消费者：识别可用时走浏览器 SpeechRecognition（零上传、真实时
+// 文字流），不可用（Firefox/Safari）或用户强制网关模式时才 MediaRecorder +
+// /v1/audio/transcriptions 转写。两个消费者绝不并发（iOS/Android 上会互踩）。
+let recTimer = null, recCancel = false, voiceBusy = false;
 let recSttTimer = null, recSttGuard = { busy: false, stopped: false };
 
 function setVoiceBusy(b) {
@@ -1200,32 +1251,18 @@ function setVoiceBusy(b) {
   btn.addEventListener("pointerdown", async (e) => {
     e.preventDefault();
     if (voiceBusy || streaming) return;
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast("当前浏览器不支持录音（需 HTTPS 或 localhost）", "err"); return;
-    }
-    // 兜底清理：上一轮异常残留的定时器/录音器/流先回收，避免麦克风被旧流占着
+    // 兜底清理：上一轮异常残留的定时器/输入会话先回收
     if (recSttTimer) { clearInterval(recSttTimer); recSttTimer = null; }
-    if (mediaRec) { try { mediaRec.stop(); } catch {} mediaRec = null; }
-    if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
+    VoiceInput.abort("input");
+    let mode;
     try {
-      recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mode = await VoiceInput.start("input", (t) => { $("rec-live").textContent = t; });
     } catch (err) {
-      toast("无法使用麦克风：" + ((err && (err.message || err.name)) || err), "err"); return;
+      toast(String((err && err.message) || err), "err"); return;
     }
-    recChunks = []; recCancel = false;
-    try {
-      mediaRec = new MediaRecorder(recStream);
-    } catch (err) {
-      recStream.getTracks().forEach(t => t.stop()); recStream = null;
-      toast("录音启动失败：" + err.message, "err"); return;
-    }
-    mediaRec.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
-    mediaRec.start(250); // 250ms 时间片，避免松开时丢数据
-    // 同呼叫页：录音一开始就占锁，识别+自动发送全程禁止第二次触发
+    // 启动即占锁：识别+自动发送全程禁止第二次触发（同呼叫页语义）
     setVoiceBusy(true);
-    const rec0 = mediaRec;
-    // 兜底：pointerup 丢失（切后台/来电）时 60s 自动收尾，避免 voiceBusy 锁死
-    setTimeout(() => { if (mediaRec === rec0) finishVoice(); }, 60000);
+    recCancel = false;
     btn.classList.add("rec");
     const t0 = Date.now();
     const startY = e.clientY;
@@ -1233,8 +1270,13 @@ function setVoiceBusy(b) {
     $("rec-time").textContent = "0:00";
     $("rec-live").textContent = "";
     recSttGuard = { busy: false, stopped: false, t0: Date.now(), maxSec: 45 };
-    // 实时文字流：录音中每 2s 阶段性转写，识别过程即时可见
-    recSttTimer = setInterval(() => partialStt(recChunks, mediaRec && mediaRec.mimeType, (t) => { $("rec-live").textContent = t; }, recSttGuard), 2000);
+    // 实时文字流：浏览器识别模式天然实时；网关录音模式退化为每 2s 阶段性全量转写
+    if (mode === "recorder") {
+      const info = VoiceInput.info;
+      recSttTimer = setInterval(() => partialStt(info.chunks, info.mime, (t) => { $("rec-live").textContent = t; }, recSttGuard), 2000);
+    }
+    // 兜底：pointerup 丢失（切后台/来电）时 60s 自动收尾，避免 voiceBusy 锁死
+    setTimeout(() => { if (voiceBusy) finishVoice(); }, 60000);
     recTimer = setInterval(() => {
       const s = Math.floor((Date.now() - t0) / 1000);
       $("rec-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
@@ -1269,22 +1311,18 @@ async function finishVoice() {
   $("rec-overlay").classList.remove("cancel");
   $("rec-hint").textContent = "松开发送 · 上滑取消";
   $("btn-voice").classList.remove("rec");
-  const rec = mediaRec, stream = recStream;
-  mediaRec = null; recStream = null;
-  // 早锁（pointerdown 里 setVoiceBusy(true)）之后，取消/空录音/识别失败/
-  // 自动发送每条出口都必须走 finally 松锁，否则按钮会永久失灵
+  // 早锁（setVoiceBusy(true)）之后，取消/空录音/识别失败/自动发送每条出口
+  // 都必须走 finally 松锁，否则按钮会永久失灵
   try {
-    if (!rec) return;
-    const blob = await new Promise((res) => {
-      rec.onstop = () => res(new Blob(recChunks, { type: rec.mimeType || "audio/webm" }));
-      try { rec.stop(); } catch { res(null); }
-    });
-    stream && stream.getTracks().forEach(t => t.stop());
-    if (canceled) { toast("已取消发送", ""); return; }
-    if (!blob || !blob.size) { toast("录音为空", "err"); return; }
-    const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
-    const text = await transcribeBlob(blob, "voice." + ext);
-    if (!text) throw new Error("识别结果为空");
+    if (canceled) {
+      VoiceInput.abort("input"); // 取消：立即释放麦克风，不做任何转写
+      toast("已取消发送", ""); return;
+    }
+    const r = await VoiceInput.stop("input");
+    const text = (r.text || "").trim();
+    if (!text) {
+      toast(r.source === "browser" ? "没听清，再试一次" : "识别结果为空，再试一次", ""); return;
+    }
     const input = $("input");
     input.value = (input.value.trim() ? input.value.trim() + " " : "") + text;
     autoGrow();
@@ -1357,18 +1395,375 @@ async function transcribeBlob(blob, name) {
   return (j.text || "").trim();
 }
 
+// ================= 语音能力层（v0.8.0：三层策略 + 状态机）=================
+// TTS 递降链：网关 /v1/audio/speech → 自定义端点（OpenAI 兼容）→ 浏览器 speechSynthesis
+// STT 递降链：浏览器 SpeechRecognition（实时 partial）→ 网关 /v1/audio/transcriptions
+// 任一层失败自动降级；客户自带 TTS 接口资源时，在「语音设置」填自定义端点即可替换。
+//
+// 浏览器 TTS 融合自 Speakit-JS（github.com/mobilepadawan/Speakit-JS，MIT，2KB）
+// 的 promise 化 speechSynthesis 封装，并补三块实战必需能力：
+//   ① 语音列表加载超时兜底——部分浏览器 onvoiceschanged 不触发，轮询补位
+//      （策略来自 Easy Speech 项目）；
+//   ② 中文音色优先 + 长文本按句切片——Chrome 对超长 utterance 会静默截断；
+//   ③ 与 Audio 播音统一的 play(text)/stop() 接口——供通话状态机统一调度。
+
+const VoiceCfg = {
+  KEY: "gw_voice_cfg",
+  def: { ttsMode: "auto", sttMode: "auto", ttsVoice: "", ttsRate: 1.05, customTts: { url: "", key: "", model: "", voice: "" } },
+  load() { try { return { ...this.def, ...(JSON.parse(localStorage.getItem(this.KEY) || "{}")) }; } catch { return { ...this.def }; } },
+  save(c) { try { localStorage.setItem(this.KEY, JSON.stringify(c)); } catch {} },
+};
+let voiceCfg = VoiceCfg.load();
+
+// ---- 麦克风资源管理器（单所有者 + 强制释放）----
+// iOS 上两个 MediaStream 并发会直接拒绝第二次 getUserMedia（「第二次就挂」的
+// 硬件层根因）；浏览器语音识别与 MediaRecorder 同时抢麦也会互相踩。
+// 所有取麦都必须经过 MicHub.acquire(owner) / release(owner)。
+const MicHub = {
+  stream: null, owner: null,
+  async acquire(owner) {
+    if (this.stream && this.owner === owner) return this.stream;
+    this.release(); // 抢占：先彻底释放旧所有者的流，再要新的
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error("当前浏览器不支持录音（需 HTTPS 或 localhost）");
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.owner = owner;
+    return this.stream;
+  },
+  release(owner) {
+    if (this.stream && (!owner || owner === this.owner)) {
+      this.stream.getTracks().forEach(t => { try { t.stop(); } catch {} });
+      this.stream = null; this.owner = null;
+    }
+  },
+  busy() { return !!this.stream; },
+};
+
+// ---- 浏览器 TTS（Speakit-JS 融合体）----
+const BrowserTts = {
+  supported() { return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window; },
+  voices: [], voiceName: "", ready: false,
+  /// 加载语音列表：getVoices 立即返回 → 直接用；为空则等 onvoiceschanged，
+  /// 1.5s 还不来就轮询兜底（Easy Speech 策略：个别浏览器事件不触发）。
+  async init() {
+    if (!this.supported() || this.ready) return this.ready;
+    const pick = () => {
+      const vs = speechSynthesis.getVoices() || [];
+      if (vs.length) { this.voices = vs; return true; }
+      return false;
+    };
+    if (pick()) { this.ready = true; }
+    else {
+      this.ready = await new Promise((res) => {
+        let done = false;
+        const finish = (ok) => { if (!done) { done = true; res(ok); } };
+        speechSynthesis.onvoiceschanged = () => finish(pick());
+        const t0 = Date.now();
+        const poll = setInterval(() => { if (pick()) { clearInterval(poll); finish(true); } else if (Date.now() - t0 > 1500) { clearInterval(poll); finish(pick()); } }, 200);
+      });
+    }
+    if (this.ready) this.autoPickVoice();
+    return this.ready;
+  },
+  /// 音色优选：设置里指定的 → 中文（zh-CN > zh）→ 默认
+  autoPickVoice() {
+    if (voiceCfg.ttsVoice && this.voices.some(v => v.name === voiceCfg.ttsVoice)) { this.voiceName = voiceCfg.ttsVoice; return; }
+    const zh = this.voices.find(v => v.lang === "zh-CN") || this.voices.find(v => (v.lang || "").startsWith("zh")) || this.voices.find(v => v.default);
+    this.voiceName = zh ? zh.name : (this.voices[0] ? this.voices[0].name : "");
+  },
+  voiceOptions() { return this.voices.map(v => ({ name: v.name, lang: v.lang, local: v.localService })); },
+  /// 播放一段文本，返回 Promise（end resolve / error reject；被 cancel 时
+  /// reject Error("stopped")——调用方按控制流信号静默处理）。
+  /// 长文本按句切片顺序播——超长 utterance 在 Chrome 会被静默截断。
+  speak(text) {
+    return new Promise((resolve, reject) => {
+      if (!this.supported()) return reject(new Error("浏览器不支持语音合成"));
+      const parts = String(text || "").split(/(?<=[。！？；!?\n])/).map(s => s.trim()).filter(Boolean);
+      const chunks = [];
+      for (const p of parts) { // 每片再按 120 字硬切，防无标点长段
+        for (let i = 0; i < p.length; i += 120) chunks.push(p.slice(i, i + 120));
+      }
+      if (!chunks.length) return resolve();
+      const zh = /[\u4e00-\u9fff]/.test(text);
+      let idx = 0;
+      const next = () => {
+        if (idx >= chunks.length) return resolve();
+        const u = new SpeechSynthesisUtterance(chunks[idx++]);
+        u.lang = zh ? "zh-CN" : "en-US";
+        u.rate = Number(voiceCfg.ttsRate) || 1.05;
+        const v = this.voices.find(x => x.name === this.voiceName);
+        if (v) u.voice = v;
+        u.onend = next;
+        u.onerror = (e) => {
+          const err = (e && e.error) || "";
+          if (err === "canceled" || err === "interrupted") reject(new Error("stopped")); // 主动停止
+          else reject(new Error("浏览器播音失败"));
+        };
+        speechSynthesis.speak(u);
+      };
+      next();
+    });
+  },
+  stop() { try { speechSynthesis.cancel(); } catch {} },
+};
+
+// ---- 浏览器 STT（SpeechRecognition 实时识别兜底）----
+// Chrome/Edge 可用：continuous + interimResults 天然就是实时文字流；
+// Firefox/Safari 不可用时自动走网关转写（见 sttStart）。
+const BrowserStt = {
+  supported() { return !!(window.SpeechRecognition || window.webkitSpeechRecognition); },
+  /// onPartial(interim) / onFinal(final) / onEnd(err|null)
+  start(onPartial, onFinal, onEnd) {
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!R) return null;
+    let rec;
+    try { rec = new R(); } catch { return null; }
+    rec.continuous = true; rec.interimResults = true; rec.lang = "zh-CN";
+    let finalText = "", stopped = false;
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalText += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      if (interim && onPartial) onPartial(interim);
+      if (finalText && onFinal) onFinal(finalText);
+    };
+    rec.onerror = (e) => { if (!stopped && onEnd) onEnd(e.error || "error"); };
+    rec.onend = () => { if (!stopped && onEnd) onEnd(null); };
+    try { rec.start(); } catch (e) { if (onEnd) onEnd(e.message || "start-failed"); return null; }
+    return { stop() { stopped = true; try { rec.stop(); } catch {} }, get final() { return finalText; } };
+  },
+};
+
+// ---- 统一 TTS 播放链（播音按钮 / 通话分句播报 / 分享页试听共用）----
+// 返回 Promise：播放完成 resolve；「stopped」是被主动停止（打断/挂断）的
+// 控制流信号——静默 resolve，不当错误上报。失败且模式不允许降级时 reject。
+function ttsStopAll() {
+  BrowserTts.stop();
+  if (speakAudio) { try { speakAudio.pause(); } catch {} speakAudio = null; }
+  if (ttsCur) { try { ttsCur.pause(); } catch {} ttsCur = null; }
+  if (ttsCurResolve) { const r = ttsCurResolve; ttsCurResolve = null; r(); }
+}
+/// 自定义 TTS 端点（OpenAI 兼容 /v1/audio/speech）：客户自带接口资源的替换点
+async function customTtsBlob(text) {
+  const c = voiceCfg.customTts || {};
+  if (!c.url) throw new Error("未配置自定义 TTS 端点");
+  const h = { "Content-Type": "application/json" };
+  if (c.key) h["Authorization"] = "Bearer " + c.key;
+  const body = { input: text.slice(0, 2000), response_format: "wav" };
+  if (c.model) body.model = c.model;
+  if (c.voice) body.voice = c.voice;
+  const resp = await fetch(c.url, { method: "POST", headers: h, body: JSON.stringify(body) });
+  if (!resp.ok) {
+    const j = await resp.json().catch(() => ({}));
+    throw new Error("自定义 TTS：" + (j.error?.message || ("HTTP " + resp.status)));
+  }
+  const blob = await resp.blob();
+  if (!blob.size) throw new Error("自定义 TTS 音频为空");
+  return blob;
+}
+/// 播放一句话（按当前模式走递降链）。浏览器模式直接用 speechSynthesis。
+async function ttsPlaySentence(text) {
+  const mode = voiceCfg.ttsMode;
+  if (mode === "browser") { await BrowserTts.init(); return BrowserTts.speak(text); }
+  try {
+    const blob = mode === "custom" ? await customTtsBlob(text) : await ttsBlob(text);
+    await playCallBlob(blob);
+  } catch (e) {
+    if (String(e && e.message) === "stopped") return; // 被主动停止（打断/挂断）：静默
+    if (mode === "gateway") throw e; // 仅网关：不降级，错误上抛让 UI 明示
+    // auto / custom：降级到浏览器语音（离线可用的最后兜底）
+    await BrowserTts.init();
+    if (!BrowserTts.ready) throw e;
+    return BrowserTts.speak(text);
+  }
+}
+
+// ---- 语音设置对话框（TTS/STT 策略 + 客户自有端点） ----
+function openVoiceCfg() {
+  const c = voiceCfg;
+  $("vg-tts-mode").value = c.ttsMode;
+  $("vg-stt-mode").value = c.sttMode;
+  $("vg-custom-url").value = (c.customTts && c.customTts.url) || "";
+  $("vg-custom-key").value = (c.customTts && c.customTts.key) || "";
+  $("vg-custom-model").value = (c.customTts && c.customTts.model) || "";
+  $("vg-custom-voice").value = (c.customTts && c.customTts.voice) || "";
+  $("vg-rate").value = c.ttsRate;
+  $("vg-rate-v").textContent = Number(c.ttsRate).toFixed(2);
+  refreshVoiceVoices();
+  refreshVoiceStatus();
+  voiceDlg.showModal();
+}
+/// 浏览器音色列表：异步加载（个别浏览器首次 getVoices 为空，init 内含轮询兜底）
+async function refreshVoiceVoices() {
+  const sel = $("vg-browser-voice");
+  if (BrowserTts.supported()) {
+    await BrowserTts.init();
+    if (BrowserTts.ready) {
+      const opts = BrowserTts.voiceOptions();
+      sel.innerHTML = '<option value="">自动（优选中文）</option>' +
+        opts.map(v => `<option value="${esc(v.name)}">${esc(v.name)}（${esc(v.lang || "?")}${v.local ? " · 本地" : ""}）</option>`).join("");
+      if (voiceCfg.ttsVoice) sel.value = voiceCfg.ttsVoice;
+      return;
+    }
+  }
+  sel.innerHTML = '<option value="">浏览器语音不可用</option>';
+}
+function refreshVoiceStatus() {
+  const st = $("vg-status");
+  const tts = [];
+  if (voiceCfg.ttsMode === "auto") tts.push("网关 /v1/audio/speech", "浏览器语音兜底");
+  else if (voiceCfg.ttsMode === "gateway") tts.push("网关 /v1/audio/speech（不降级）");
+  else if (voiceCfg.ttsMode === "custom") tts.push("自定义端点" + (voiceCfg.customTts && voiceCfg.customTts.url ? "" : "（未配置 URL，将自动降级）"), "浏览器语音兜底");
+  else tts.push("浏览器语音（离线可用）");
+  const stt = [];
+  if (voiceCfg.sttMode !== "browser") stt.push("网关 /v1/audio/transcriptions");
+  if (voiceCfg.sttMode !== "gateway") stt.push(BrowserStt.supported() ? "浏览器实时识别（零上传）" : "浏览器识别不可用");
+  st.innerHTML = `<b>TTS 链</b>：${tts.join(" → ")}<br><b>STT 链</b>：${stt.join(" → ")}<br>` +
+    `提示：自定义端点填 OpenAI 兼容的 /v1/audio/speech，客户自有 TTS 资源直接替换即可。`;
+}
+$("vg-rate").addEventListener("input", (e) => { $("vg-rate-v").textContent = Number(e.target.value).toFixed(2); });
+$("vg-save").addEventListener("click", () => {
+  voiceCfg = {
+    ttsMode: $("vg-tts-mode").value,
+    sttMode: $("vg-stt-mode").value,
+    ttsVoice: $("vg-browser-voice").value,
+    ttsRate: Number($("vg-rate").value) || 1.05,
+    customTts: {
+      url: $("vg-custom-url").value.trim(),
+      key: $("vg-custom-key").value.trim(),
+      model: $("vg-custom-model").value.trim(),
+      voice: $("vg-custom-voice").value.trim(),
+    },
+  };
+  VoiceCfg.save(voiceCfg);
+  BrowserTts.ready = false; // 音色/模式变化后下次重新加载与优选
+  refreshVoiceStatus();
+  toast("语音设置已保存", "ok");
+  voiceDlg.close();
+});
+
 // ================= 语音通话（右上角 📞 呼叫） =================
-// 流程：按住大按钮说话（录音中每 2s 阶段性 STT → 实时文字流）→ 松手最终转写
-// → chat 流式按句切分 → 每句立即 TTS 合成入队、顺序播放 → 回到待命。
+// 流程：按住大按钮说话（浏览器 STT 实时文字流 / 网关阶段性转写兜底）→ 松手
+// 最终转写 → chat 流式按句切分 → 每句立即 TTS 合成入队、顺序播放 → 待命。
 // 挂断时停止一切（含进行中的播放与合成）。
-let callOpen = false, callRec = null, callStream = null, callChunks = [], callCancel = false, callBusy = false, callHistory = [];
+//
+// 状态机驱动：双向语音交互里「打断」（AI 播报中抢话）是高频事件，必须是一等
+// 公民——显式 CallFsm 让每个 UI 动作都是「状态 + 事件 → 新状态」的合法迁移，
+// 非法迁移直接拒绝（按钮在忙态点不动），从结构上消灭「两轮交错 / 声音叠加」。
+
+// ---- 统一语音输入：一次输入只用一个麦克风消费者 ----
+// 浏览器 SpeechRecognition 与 MediaRecorder 绝不并存——iOS/Android 上双消费者
+// 互相踩（「第二次就挂 / STT 跑不通」的软件层根因）。识别可用时零上传、真实时；
+// 不可用（Firefox/Safari）或用户强制网关模式时，才走 MediaRecorder + 网关转写。
+const VoiceInput = {
+  cur: null, // { owner, mode: "browser"|"recorder", ... }
+  get mode() { return this.cur ? this.cur.mode : null; },
+  get info() { const c = this.cur; return c && c.mode === "recorder" ? { mode: "recorder", chunks: c.chunks, mime: c.mime } : { mode: c ? c.mode : null }; },
+  async start(owner, onPartial) {
+    this.abort(owner); // 同 owner 的残留先清掉（异常路径兜底）
+    if (voiceCfg.sttMode !== "gateway" && BrowserStt.supported()) {
+      const h = BrowserStt.start(onPartial, null, null);
+      if (!h) throw new Error("浏览器识别启动失败");
+      this.cur = { owner, mode: "browser", handle: h };
+      return "browser";
+    }
+    if (voiceCfg.sttMode === "browser") throw new Error("当前浏览器不支持语音识别（需 Chrome/Edge），请切换 STT 模式");
+    const stream = await MicHub.acquire(owner);
+    let rec;
+    try { rec = new MediaRecorder(stream); }
+    catch (e) { MicHub.release(owner); throw new Error("录音启动失败：" + e.message); }
+    const chunks = [];
+    rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+    rec.start(250);
+    this.cur = { owner, mode: "recorder", rec, chunks, mime: rec.mimeType };
+    return "recorder";
+  },
+  /// 停止并取最终文本：{ text, source: "browser"|"gateway"|"none" }
+  async stop(owner) {
+    const c = this.cur;
+    if (!c || c.owner !== owner) return { text: "", source: "none" };
+    this.cur = null;
+    if (c.mode === "browser") {
+      // 停识别后 Chrome 可能还把最后一句 interim 补成 final：轮询 600ms 兜底
+      const text = await new Promise((res) => {
+        let done = false;
+        const finish = (v) => { if (!done) { done = true; res(v); } };
+        const t = setTimeout(() => finish(c.handle.final || ""), 600);
+        c.handle.stop();
+        const poll = setInterval(() => {
+          if (done) return clearInterval(poll);
+          if (c.handle.final) { clearTimeout(t); finish(c.handle.final); }
+        }, 100);
+      });
+      return { text: (text || "").trim(), source: "browser" };
+    }
+    const blob = await new Promise((res) => {
+      c.rec.onstop = () => res(new Blob(c.chunks, { type: c.mime || "audio/webm" }));
+      try { c.rec.stop(); } catch { res(null); }
+    });
+    MicHub.release(owner);
+    if (!blob || !blob.size) return { text: "", source: "gateway" };
+    const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
+    return { text: (await transcribeBlob(blob, "voice." + ext)).trim(), source: "gateway" };
+  },
+  /// 同步取消（打断 / 挂断）：不等识别结果，立即释放麦克风
+  abort(owner) {
+    const c = this.cur;
+    if (!c || (owner && c.owner !== owner)) return;
+    this.cur = null;
+    if (c.mode === "browser") c.handle.stop();
+    else { try { c.rec.stop(); } catch {} MicHub.release(c.owner); }
+  },
+};
+
+// ---- 通话状态机 ----
+// 事件：open / press（按下，播报思考中=打断）/ release（松手）/ cancel（上滑取消）
+//       mic_fail / stt_ok / stt_fail / sentence（首句出炉）/ done（播报排空）
+//       fail / hangup
+const CallFsm = {
+  s: "closed",
+  E: {
+    closed:       { open: "idle" },
+    idle:         { press: "listening" },
+    listening:    { release: "transcribing", cancel: "idle", mic_fail: "idle", hangup: "closed" },
+    transcribing: { stt_ok: "thinking", stt_fail: "idle", hangup: "closed" },
+    thinking:     { press: "listening", sentence: "speaking", done: "idle", fail: "idle", hangup: "closed" },
+    speaking:     { press: "listening", done: "idle", fail: "idle", hangup: "closed" },
+  },
+  can(ev) { return !!(this.E[this.s] || {})[ev]; },
+  fire(ev) {
+    const to = (this.E[this.s] || {})[ev];
+    if (!to) return false;
+    this.s = to;
+    callSyncUi();
+    return true;
+  },
+};
+const CALL_STATUS = {
+  idle: "按住下方按钮继续说话",
+  listening: "正在听…松开发送",
+  transcribing: "识别中…",
+  thinking: "AI 思考中…",
+  speaking: "AI 播报中…（按住按钮可打断）",
+};
+function callSyncUi() {
+  const s = CallFsm.s;
+  const st = $("call-status");
+  if (st && CALL_STATUS[s] != null) st.textContent = CALL_STATUS[s];
+  setOrb(s === "listening" ? "listening" : (s === "transcribing" || s === "thinking") ? "thinking" : s === "speaking" ? "speaking" : "idle");
+  const btn = $("btn-call-talk");
+  if (btn) btn.classList.toggle("busy", s === "transcribing");
+}
+let callOpen = false, callChunks = [], callCancel = false, callHistory = [], callInterrupt = false;
 let callModel = localStorage.getItem("gw_call_model") || ""; // 通话模型（空 = 网关自动选路）
 let callSttTimer = null, callSttGuard = { busy: false, stopped: false }; // 阶段性转写定时器 / 防叠加
 const ttsQueue = [];                                         // 待播报的句子队列
 let ttsPlaying = false, ttsCur = null, ttsAbort = false;     // 播报状态
 let ttsDrainWaiters = [];                                    // 等队列排空的回调（callAskStreaming 的 drain 用）
 let ttsCurResolve = null;                                    // 当前播放句的 resolve（挂断时手动唤醒 pumpTts）
-let chatAbort = null;                                        // 挂断时中断进行中的流式请求
+let chatAbort = null;                                        // 挂断/打断时中断进行中的流式请求
 
 /// 精灵球四态：idle（呼吸）/ listening（聆听波纹）/ thinking（思考脉冲）/ speaking（播报声浪）
 function setOrb(state) {
@@ -1389,26 +1784,31 @@ function openCallModelPicker() {
   modelDlg.showModal();
 }
 function openCall() {
+  if (callOpen) return;
+  CallFsm.fire("open"); // closed → idle
   callOpen = true;
+  callInterrupt = false;
   callHistory = [];
   ttsAbort = false;
   $("call-log").innerHTML = "";
-  $("call-status").textContent = "按住下方按钮说话，松开发送";
   $("call-live").hidden = true;
   $("call-live").textContent = "";
   refreshCallModelBtn();
-  setOrb("idle");
   $("call-overlay").hidden = false;
 }
 function endCall() {
+  if (!callOpen) return;
+  CallFsm.fire("hangup"); // → closed
   callOpen = false;
-  stopCallAudio();
+  callInterrupt = true; // 让所有在途链路（识别/流式/播报）静默退出
+  ttsAbort = true;
+  ttsQueue.length = 0;
+  ttsStopAll();
   if (chatAbort) { try { chatAbort.abort(); } catch {} chatAbort = null; }
-  if (callRec) { try { callRec.stop(); } catch {} callRec = null; }
-  if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
   if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
   callSttGuard.stopped = true;
-  callBusy = false; callCancel = true; callHistory = [];
+  VoiceInput.abort("call");
+  callCancel = true; callHistory = [];
   $("call-overlay").hidden = true;
 }
 function callLog(html) {
@@ -1422,60 +1822,69 @@ function callLog(html) {
   btn.addEventListener("pointerdown", async (e) => {
     e.preventDefault();
     if (!callOpen) return;
-    if (callBusy) { toast("等 AI 说完…", ""); return; }
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast("当前浏览器不支持录音（需 HTTPS 或 localhost）", "err"); return;
+    if (CallFsm.s === "transcribing") { toast("识别中，稍候…", ""); return; }
+    if (!CallFsm.can("press")) { toast("等 AI 说完…", ""); return; }
+    // 打断（barge-in）：播报/思考中抢说——立即停播 + 中断在途链路，
+    // 不等当前句播完。高频操作，走状态机显式迁移。
+    if (CallFsm.s !== "idle") {
+      callInterrupt = true;
+      ttsStopAll();
+      ttsAbort = true; ttsQueue.length = 0;
+      if (chatAbort) { try { chatAbort.abort(); } catch {} chatAbort = null; }
+      if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
+      callSttGuard.stopped = true;
+      VoiceInput.abort("call");
+      MicHub.release("call");
+      toast("已打断，请说", "");
     }
-    // 兜底清理：上一轮若因异常路径残留了定时器/录音器/流，先回收再开新一轮，
-    // 否则残留的 MediaStream 会让这次 getUserMedia 在 iOS 上直接失败（硬件占用）。
-    if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
-    if (callRec) { try { callRec.stop(); } catch {} callRec = null; }
-    if (callStream) { callStream.getTracks().forEach(t => t.stop()); callStream = null; }
-    try {
-      callStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      toast("无法使用麦克风：" + ((err && (err.message || err.name)) || err), "err"); return;
-    }
-    callChunks = []; callCancel = false;
-    try {
-      callRec = new MediaRecorder(callStream);
-    } catch (err) {
-      callStream.getTracks().forEach(t => t.stop()); callStream = null;
-      toast("录音启动失败：" + err.message, "err"); return;
-    }
-    callRec.ondataavailable = (ev) => { if (ev.data && ev.data.size) callChunks.push(ev.data); };
-    callRec.start(250);
-    // 录音启动即持锁：整个「录音→识别→思考→播报」全程禁止第二轮（finishCallVoice
-    // 同样从入口持锁到播报结束）。松手前绝不开锁，两个 MediaStream 就不会并发。
-    callBusy = true;
-    const rec0 = callRec;
-    // 兜底：极端情况下 pointerup 丢失（切后台/来电），60s 自动收尾，避免 callBusy 锁死
-    setTimeout(() => { if (callRec === rec0) finishCallVoice(); }, 60000);
-    btn.classList.add("rec");
-    setOrb("listening");
-    callSttGuard = { busy: false, stopped: false, t0: Date.now(), maxSec: 45 };
-    $("call-live").hidden = false;
-    $("call-live").textContent = "";
-    $("call-status").textContent = "正在听…松开发送";
-    // 实时文字流：每 2s 把到目前为止的录音整体转写一次（智谱无状态，全量重发即可）
-    callSttTimer = setInterval(() => partialStt(callChunks, callRec && callRec.mimeType, (t) => callLiveShow(t), callSttGuard), 2000);
-    const startY = e.clientY;
-    const move = (ev) => {
-      const cancel = ev.clientY < startY - 60;
-      callCancel = cancel;
-      $("call-status").textContent = cancel ? "松开取消" : "正在听…松开发送";
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      finishCallVoice();
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
+    await callStartRecording(e.clientY);
   });
 })();
+/// 开始一轮录音/识别（状态机已允许 press）。麦克风单消费者 + 失败显式迁移。
+async function callStartRecording(startY) {
+  callInterrupt = false;
+  ttsAbort = false;
+  callChunks = []; callCancel = false;
+  if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
+  let mode;
+  try {
+    mode = await VoiceInput.start("call", (t) => { if (CallFsm.s === "listening") callLiveShow(t); });
+  } catch (err) {
+    CallFsm.fire("mic_fail"); // → idle
+    toast(String((err && err.message) || err), "err");
+    return;
+  }
+  // 录音启动即进入 listening：整个「录音→识别→思考→播报」全程禁第二轮，
+  // 松手/播空前绝不放锁——两个麦克风消费者就不会并发。
+  CallFsm.fire("press");
+  $("btn-call-talk").classList.add("rec");
+  callSttGuard = { busy: false, stopped: false, t0: Date.now(), maxSec: 45 };
+  $("call-live").hidden = false;
+  $("call-live").textContent = "";
+  // 实时文字流：浏览器识别模式天然实时；网关录音模式退化为每 2s 阶段性全量转写
+  if (mode === "recorder") {
+    const info = VoiceInput.info;
+    callSttTimer = setInterval(() => partialStt(info.chunks, info.mime, (t) => callLiveShow(t), callSttGuard), 2000);
+  }
+  // 兜底：极端情况下 pointerup 丢失（切后台/来电），60s 自动收尾
+  const timer = setTimeout(() => { if (CallFsm.s === "listening") finishCallVoice(); }, 60000);
+  // 跟手取消：手指上滑超过 60px
+  const move = (ev) => {
+    const cancel = ev.clientY < startY - 60;
+    callCancel = cancel;
+    $("call-status").textContent = cancel ? "松开取消" : "正在听…松开发送";
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    clearTimeout(timer);
+    finishCallVoice();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
 /// 实时识别区显示
 function callLiveShow(text) {
   const el = $("call-live");
@@ -1503,61 +1912,58 @@ let callFinishing = false; // 防重入：60s 超时兜底与 pointerup 可能�
 async function finishCallVoice() {
   if (callFinishing) return;
   callFinishing = true;
-  const btn = $("btn-call-talk");
-  btn.classList.remove("rec");
-  setOrb("idle");
-  if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
-  callSttGuard.stopped = true;
-  const canceled = callCancel;
-  const rec = callRec, stream = callStream;
-  callRec = null; callStream = null;
-  // 早锁：callBusy 从录音启动一直锁到播报结束（见 pointerdown）。
-  // 曾经锁加在 await rec.stop() 之后——松手瞬间连按第二次，两轮收尾交错，
-  // 第一个 MediaStream 还活着就又 getUserMedia，iOS 直接拒（硬件占用）→「第二次就挂」。
-  callBusy = true;
   try {
-    if (!rec) return;
-    const blob = await new Promise((res) => {
-      rec.onstop = () => res(new Blob(callChunks, { type: rec.mimeType || "audio/webm" }));
-      try { rec.stop(); } catch { res(null); }
-    });
-    stream && stream.getTracks().forEach(t => t.stop());
-    if (canceled || !callOpen) return;
-    if (!blob || !blob.size) {
-      $("call-live").hidden = true;
-      $("call-status").textContent = "录音为空，再试一次";
+    if (CallFsm.s !== "listening") return; // 已被打断/挂断接管，旧链路静默退出
+    const canceled = callCancel;
+    CallFsm.fire("release"); // listening → transcribing
+    $("btn-call-talk").classList.remove("rec");
+    if (callSttTimer) { clearInterval(callSttTimer); callSttTimer = null; }
+    callSttGuard.stopped = true;
+    let text = "";
+    try {
+      const r = await VoiceInput.stop("call"); // 浏览器识别优先，网关转写兜底
+      if (callInterrupt || !callOpen) return;
+      text = (r.text || "").trim();
+      if (canceled) { CallFsm.fire("cancel"); return; }
+      if (!text) {
+        CallFsm.fire("stt_fail"); // → idle
+        $("call-status").textContent = r.source === "browser" ? "没听清，再试一次" : "识别结果为空，再试一次";
+        return;
+      }
+    } catch (e) {
+      if (callInterrupt || !callOpen) return;
+      CallFsm.fire("stt_fail");
+      $("call-status").textContent = "识别失败：" + e.message + "（重试或挂断）";
+      callLog(`<span class="who err">!</span>${esc(e.message)}`);
       return;
     }
-    $("call-status").textContent = "识别中…";
-    const ext = blob.type.includes("mp4") ? "m4a" : blob.type.includes("ogg") ? "ogg" : "webm";
-    const text = (await transcribeBlob(blob, "voice." + ext)).trim();
-    if (!text) throw new Error("识别结果为空");
     $("call-live").hidden = true;
     $("call-live").textContent = "";
     callLog(`<span class="who me">我</span>${esc(text)}`);
     callHistory.push({ role: "user", content: text });
-    setOrb("thinking");
-    $("call-status").textContent = "AI 思考中…";
-    await callAskStreaming(text);
-    if (!callOpen) return;
-    setOrb("idle");
-    $("call-status").textContent = "按住下方按钮继续说话";
-  } catch (e) {
-    if (!callOpen) return;
-    setOrb("idle");
-    $("call-status").textContent = "出错：" + e.message + "（重试或挂断）";
-    callLog(`<span class="who err">!</span>${esc(e.message)}`);
+    CallFsm.fire("stt_ok"); // → thinking
+    try {
+      await callAskStreaming(text);
+      if (callInterrupt || !callOpen) return; // 被打断：press 事件已切到 listening
+      CallFsm.fire("done"); // → idle（callSyncUi 复位精灵球与状态文案）
+    } catch (e) {
+      if (callInterrupt || !callOpen) return;
+      CallFsm.fire("fail"); // → idle
+      $("call-status").textContent = "出错：" + e.message + "（重试或挂断）";
+      callLog(`<span class="who err">!</span>${esc(e.message)}`);
+    }
   } finally {
     callFinishing = false;
-    callBusy = false;
   }
 }
 
 /// 流式对话 + 分句实时 TTS：chat SSE 按句边界切分，每句立即合成入队顺序播放，
-/// AI 文字同步滚动进通话记录。全程可被挂断中断。
+/// AI 文字同步滚动进通话记录。全程可被挂断/打断中断。
 async function callAskStreaming(userText) {
-  let aiLine = null;
+  let aiLine = null, spoke = false;
   const onSentence = (s) => {
+    if (callInterrupt) return;
+    if (!spoke) { spoke = true; CallFsm.fire("sentence"); } // thinking → speaking
     if (!aiLine) {
       aiLine = document.createElement("div");
       aiLine.className = "call-line";
@@ -1569,11 +1975,12 @@ async function callAskStreaming(userText) {
     ttsEnqueue(s);
   };
   const content = await chatStream(callHistory, callModel, { onSentence });
+  if (callInterrupt) return; // 被打断：由 press 事件接管，不报错
   if (!content) throw new Error("AI 无有效回复");
   // 等播报队列排空：chatStream 结束只代表文字生成完，句子还在队列里播。
-  // 不等它，callBusy 会早释，第二轮说话与第一轮播报声音叠加、麦克风交错。
+  // 不等它，状态机会误以为说完，第二轮说话与第一轮播报声音叠加。
   await ttsQueueDrained();
-  if (!callOpen) return; // 等待期间用户已挂断：历史由 endCall 重置，不再入账
+  if (callInterrupt || !callOpen) return; // 等待期间用户已挂断/打断：历史由 endCall 重置
   callHistory.push({ role: "assistant", content });
 }
 
@@ -1594,20 +2001,17 @@ async function pumpTts() {
   ttsPlaying = true;
   while (ttsQueue.length && !ttsAbort && callOpen) {
     const s = ttsQueue.shift();
-    setOrb("speaking");
-    $("call-status").textContent = "AI 播报中…";
+    if (CallFsm.s !== "speaking") CallFsm.fire("sentence"); // 兜底：首句即 speaking
     try {
-      const blob = await ttsBlob(s);
-      if (ttsAbort || !callOpen) break;
-      await playCallBlob(blob);
+      await ttsPlaySentence(s); // 三层递降链：网关 → 自定义端点 → 浏览器语音
     } catch (e) {
+      if (String(e && e.message) === "stopped") break; // 被打断/挂断：静默退出
       callLog(`<span class="who err">!</span>播报失败：${esc(e.message)}${ttsErrHint(e.message)}`);
     }
   }
   ttsPlaying = false;
   if (!ttsQueue.length) {
-    flushTtsWaiters(); // 队列真正播空：唤醒 callAskStreaming 的 drain 等待（此时 callBusy 才会松）
-    if (callOpen && !callBusy) setOrb("idle");
+    flushTtsWaiters(); // 队列真正播空：唤醒 callAskStreaming 的 drain 等待
   }
 }
 function playCallBlob(blob) {
@@ -1620,18 +2024,10 @@ function playCallBlob(blob) {
     a.play().catch((e) => done(e));
   });
 }
-function stopCallAudio() {
-  ttsAbort = true;
-  ttsQueue.length = 0;
-  if (ttsCur) { try { ttsCur.pause(); } catch {} ttsCur = null; }
-  // pause() 不会触发 onended——不手动唤醒，pumpTts 会永远卡在这一句的 await 上
-  if (ttsCurResolve) { const r = ttsCurResolve; ttsCurResolve = null; r(); }
-  flushTtsWaiters(); // 同时唤醒 callAskStreaming 的 drain 等待，让旧链路干净收尾
-}
 /// TTS 上游报错的人类可读补充（旧版 glm-4-voice 打到合成端点的经典 1214）
 function ttsErrHint(msg) {
   return /messages|参数非法|1214/.test(msg || "")
-    ? "（TTS 模型不被合成端点支持：请把网关升级到 v0.7.3+，或在模型管理检查音频渠道的播音模型）"
+    ? "（TTS 模型不被合成端点支持：请把网关升级到 v0.8+，或在模型管理检查音频渠道的播音模型；也可在语音设置改用浏览器语音兜底）"
     : "";
 }
 
