@@ -33,7 +33,10 @@
   button.danger:hover { border-color: var(--bad); color: var(--bad); }
   button.icon-btn { border: none; background: transparent; font-size: 18px; padding: 4px 8px; min-height: 36px; min-width: 36px; border-radius: 8px; flex: none; }
   button.icon-btn:hover { background: var(--panel2); }
-  input, select, textarea { font: inherit; font-size: 16px; background: var(--bg2); color: var(--txt); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; width: 100%; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font: inherit; font-size: 16px; background: var(--bg2); color: var(--txt); border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; width: 100%; }
+  /* 复选框/单选框必须从上面的输入框规则里摘出来：它们不该有 100% 宽、9px 内边距和 10px 输入框圆角。
+     否则在 flex 容器里 basis 取 width:100% 会独占整行，把后面的说明文字挤成一列竖排。 */
+  input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; flex: none; padding: 0; margin: 0; border: 1px solid var(--border); border-radius: 4px; accent-color: var(--acc); vertical-align: -3px; }
   input:focus, select:focus, textarea:focus { outline: none; border-color: var(--acc); }
   code, kbd { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12px; }
   .spacer { flex: 1; min-width: 0; }
@@ -99,11 +102,26 @@
   .msg { display: flex; gap: 10px; margin-bottom: 18px; }
   .msg .avatar { flex: none; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; background: var(--panel2); border: 1px solid var(--border); }
   .msg.assistant .avatar { background: linear-gradient(135deg, var(--acc), var(--acc2)); color: #fff; border: none; }
+  /* 用户头像：描边人形 vs 助手的渐变实心 —— 靠「填充/描边」区分，不靠颜色，灰度下也成立 */
+  .msg .avatar.user-av svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
   .msg-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .msg-body .content { padding-top: 4px; }
-  .msg.user { flex-direction: row; }
-  .msg.user .content { background: var(--panel2); border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; padding: 9px 13px; display: inline-block; max-width: 100%; white-space: pre-wrap; }
-  .msg.user .msg-body { text-align: left; }
+  .msg.user { flex-direction: row; align-items: flex-start; }
+  .msg.user .content { background: var(--panel2); border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; padding: 9px 30px 9px 13px; display: inline-block; max-width: 100%; white-space: pre-wrap;
+    /* 长按不再弹 iOS 系统菜单（callout 不走 contextmenu，只能这样压掉）。
+       只作用于用户气泡：助手回答要能选中代码块。 */
+    -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  /* 宽度跟随内容：这样气泡右上角的「…」才贴气泡，而不是飘在整行最右边 */
+  .msg.user .msg-body { text-align: left; position: relative; flex: 0 1 auto; max-width: 100%; }
+  /* 气泡右上角「…」：常驻可见（移动端没有 hover），低透明度不抢视线 */
+  .more-btn { position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; border: none; background: transparent; color: var(--dim); font-size: 15px; line-height: 1; padding: 0; min-height: 0; border-radius: 6px; opacity: .5; }
+  .more-btn:hover, .more-btn:active { opacity: 1; background: var(--panel2); color: var(--fg); }
+  /* 强调 = 本地标记，不改请求内容 */
+  .msg.user.emph .content { box-shadow: inset 3px 0 0 var(--warn, #d19a2a); }
+  .emph-tag { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--warn, #d19a2a); color: var(--warn, #d19a2a); }
+  .edit-wrap { margin-top: 2px; }
+  .edit-wrap .edit-ta { width: 100%; min-height: 64px; font-size: 14px; line-height: 1.5; resize: vertical; }
+  .edit-wrap .edit-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
   .msg-meta { font-size: 11px; color: var(--dim); margin-top: 5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .msg.user .msg-meta { justify-content: flex-start; }
   .msg-meta .ch-badge { border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
@@ -112,7 +130,15 @@
   .msg-meta .act-btn:hover { color: var(--fg); background: var(--panel2); }
   .msg-meta .act-btn:disabled { opacity: .5; cursor: default; }
   .msg-meta .act-btn.speaking { color: var(--acc2); }
+  /* 助手「…」推到 meta 行最右，不遮挡正文 */
+  .msg-meta .more-inline { margin-left: auto; font-size: 14px; line-height: 1; padding: 1px 8px; }
   .msg.error .content { color: var(--bad); }
+  /* 窄屏：头像统一缩到 26px，否则 30+10 的缩进会把正文压太窄 */
+  @media (max-width: 420px) {
+    .msg .avatar { width: 26px; height: 26px; font-size: 12px; }
+    .msg .avatar.user-av svg { width: 17px; height: 17px; }
+    .msg { gap: 8px; }
+  }
 
   .dk-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .dk-row:last-child { border-bottom: none; }
@@ -135,11 +161,14 @@
   .cap-filter .chip { padding: 5px 12px; font-size: 12px; border-radius: 999px; }
   .cap-filter .chip.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); }
 
-  /* 模型列表三标签页：整行 tab 横向可滚动，绝不换行跑到卡片外 */
-  .tabbar { display: flex; gap: 6px; margin: 4px 0 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
-  .tabbar::-webkit-scrollbar { display: none; }
-  .tabbar .tab { flex: none; padding: 7px 14px; font-size: 13px; border-radius: 999px; white-space: nowrap; }
-  .tabbar .tab.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); font-weight: 600; }
+  /* 模型列表标签页：等宽分栏，而不是一排胶囊按钮。
+     宽度按容器均分（4 栏或 5 栏都自动等分），第 4/5 个不会再被切掉；
+     选中靠底部指示条，不靠填色——这样才读得出「一个控件分成 N 栏」。 */
+  .tabbar { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0; margin: 2px 0 12px; border-bottom: 1px solid var(--border); overflow: visible; }
+  .tabbar .tab { position: relative; display: block; height: 38px; line-height: 38px; min-height: 0; padding: 0 4px; border: none; border-radius: 0; background: transparent; color: var(--dim); font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tabbar .tab:hover { color: var(--txt); background: transparent; border-color: transparent; }
+  .tabbar .tab.sel { color: var(--txt); font-weight: 600; background: transparent; border-color: transparent; }
+  .tabbar .tab.sel::after { content: ""; position: absolute; left: 10%; right: 10%; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--acc); }
 
   /* ---- 模型选择器 / 模型管理页 通用分页条（与管理页内层翻页同一套视觉） ---- */
   .pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 12px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
@@ -237,20 +266,25 @@
   dialog h3 { display: flex; align-items: center; gap: 8px; }
   dialog h3 .mp-mgmt { margin-left: auto; width: 30px; height: 30px; min-height: 0; font-size: 15px; border: none; background: transparent; }
   dialog h3 .mp-mgmt:hover { background: var(--panel2); }
+  /* 标题栏右侧「上次自检过去多久」：与翻页无关，语义是一次自检完成的时刻 */
+  #mp-scan-ago { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--dim); white-space: nowrap; }
+  #mp-scan-ago + .mp-mgmt { margin-left: 0; }
+  #mp-scan-ago.stale { color: var(--warn, #d19a2a); }
   #model-search { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--txt); margin-bottom: 8px; }
   #model-search::placeholder { color: var(--dim); }
 
-  /* 选择器常驻「当前选择」条：让「模型」与「skill 表达线」两条独立轴线一眼可见，
-     避免用户误以为选了 skill 就等于换了模型。 */
-  .mp-current { font-size: 12px; color: var(--dim); padding: 6px 10px; margin-bottom: 8px;
-    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; line-height: 1.5; }
-  .mp-current b { color: var(--txt); font-weight: 600; }
-  .mp-current .mx { color: var(--acc); cursor: pointer; text-decoration: underline dotted; margin-left: 6px; }
-  .mp-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--dim); }
+  /* 当前模型的位置改在列表里表达（常驻条已删）：跨页给可点跳转，跨标签给一条仅此时出现的轻提示。 */
+  .mo-hint { font-size: 11.5px; color: var(--dim); padding: 6px 10px; margin-bottom: 8px;
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; line-height: 1.5; cursor: pointer; }
+  .mo-hint b { color: var(--txt); font-weight: 600; }
+  .mo-hint:hover { border-color: var(--acc); }
+  .mp-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--dim); position: relative; }
+  .mp-pager .mp-jump { position: absolute; right: 0; font-size: 11px; color: var(--acc); cursor: pointer; white-space: nowrap; }
   .mp-pager button { width: 32px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; }
   .mp-pager button:disabled { opacity: .35; }
   .mp-ctx-toggle { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--dim); cursor: pointer; }
-  .mp-ctx-toggle input { margin-top: 2px; flex: none; }
+  .mp-ctx-toggle input { margin-top: 3px; flex: none; }
+  .mp-ctx-toggle > span { flex: 1; min-width: 0; }
   .mp-ctx-toggle em { display: block; font-style: normal; font-size: 11px; opacity: .75; margin-top: 2px; }
   /* 换模型后的上下文边界：把「上面是上一个模型说的」标清楚，避免误读成同一个模型前后矛盾 */
   .ctx-div { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; font-size: 11px; color: var(--dim); }
@@ -504,28 +538,36 @@
   .empty { text-align: center; color: var(--dim); padding: 26px 10px; }
 
   /* ================= 对话框（桌面居中 / 移动端底部弹层） ================= */
-  dialog { border: 1px solid var(--border); background: var(--panel); color: var(--txt); border-radius: 16px; padding: 18px; width: 520px; max-width: 94vw; max-height: 88vh; max-height: 88dvh; overflow-y: auto; }
-  dialog::backdrop { background: #000b; }
+  dialog { border: 1px solid var(--border); background: var(--panel); color: var(--txt); border-radius: 16px; padding: 12px 14px 14px; width: 520px; max-width: 94vw; max-height: 88vh; max-height: 88dvh; overflow-y: auto; --bk: .686; }
+  /* 遮罩浓度走变量：边缘右滑时跟手变淡，用户才知道弹窗在跟着手指走 */
+  dialog::backdrop { background: rgba(0, 0, 0, var(--bk, .686)); }
   dialog[open] { animation: dlgIn .2s ease-out; }
   @keyframes dlgIn { from { transform: translateY(10px); opacity: .5; } }
-  dialog h3 { margin-bottom: 12px; }
+  dialog h3 { margin-bottom: 8px; line-height: 1.25; }
   /* 所有对话框左上角的回退按钮（与页面左上角的 ← 一致） */
   dialog { position: relative; }
-  .dlg-back { position: absolute; left: 10px; top: 10px; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg2); color: var(--txt); font-size: 15px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .dlg-back { position: absolute; left: 8px; top: 8px; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg2); color: var(--txt); font-size: 15px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
   .dlg-back:hover { border-color: var(--acc); color: var(--acc); }
-  dialog h3 { padding-left: 38px; }
+  dialog h3 { padding-left: 34px; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .form-grid .full { grid-column: 1 / -1; }
   .form-grid label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 4px; }
   .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
-  .model-opt { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; cursor: pointer; }
+  /* 模型行：两行结构。名称长短不齐时行高与徽章位置都稳定——
+     单行 flex 会让长名称挤成多行、徽章被顶到下一行、meta 溢出屏幕。 */
+  .model-opt { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; cursor: pointer; min-width: 0; }
   .model-opt:hover { border-color: var(--acc); }
-  .model-opt.sel { border-color: var(--acc); background: var(--sel); }
-  .model-opt .p { margin-left: auto; font-size: 11px; color: var(--dim); white-space: nowrap; }
+  .model-opt .mo-row1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .model-opt .mo-name { flex: 0 1 auto; min-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .model-opt .avail-br { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--dim); font-weight: 400; }
+  .model-opt .mo-right { margin-left: auto; flex: none; display: flex; align-items: center; gap: 4px; }
+  .model-opt .cap-badge { flex: none; white-space: nowrap; }
+  .model-opt .mo-meta { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 「当前」行内标记：常驻条删掉后，位置改由这里表达 */
+  .model-opt .mo-cur { flex: none; font-size: 10px; line-height: 1.6; padding: 0 5px; border-radius: 4px; border: 1px solid var(--acc); color: var(--acc); white-space: nowrap; }
   /* ---- 模型可用性态（v0.19.10）----
      受限/不可用必须一眼看出来：左侧竖条 + 降透明度 + 名称后括号写原因。
      可用态不加任何修饰，避免满屏噪音。 */
-  .model-opt .avail-br { font-size: 11px; color: var(--dim); margin-left: 4px; font-weight: 400; }
   .model-opt.probing { opacity: .75; }
   .model-opt.probing .avail-br { color: var(--acc); }
   .model-opt.subst { border-style: dashed; }
@@ -535,6 +577,8 @@
   .model-opt.gone { opacity: .4; cursor: not-allowed; box-shadow: inset 3px 0 0 var(--bad); }
   .model-opt.gone:hover { border-color: var(--border); }
   .model-opt.blocked.sel, .model-opt.gone.sel { outline: 1px dashed var(--bad); }
+  /* 选中态放最后：蓝色竖条要盖过受限态的暖/冷色竖条，靠颜色区分「当前」与「受限」 */
+  .model-opt.sel { border-color: var(--acc); background: var(--sel); box-shadow: inset 3px 0 0 var(--acc); }
   .avail-banner { border: 1px solid var(--warn, #d19a2a); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; color: var(--dim); }
   .avail-banner b { color: var(--txt); }
 
@@ -543,7 +587,7 @@
   .vg { display: flex; flex-direction: column; gap: 12px; }
   .vg-row { display: flex; flex-direction: column; gap: 5px; }
   .vg-row > label { font-size: 12px; color: var(--dim); }
-  .vg-row select, .vg-row input { width: 100%; }
+  .vg-row select, .vg-row input:not([type="checkbox"]):not([type="radio"]) { width: 100%; }
   .vg-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .vg-status { font-size: 12px; color: var(--dim); line-height: 1.7; border-top: 1px dashed var(--border); padding-top: 10px; }
   .vg-status b { color: var(--txt); }
@@ -605,6 +649,16 @@
 </style>
 </head>
 <body>
+
+<!-- 用户头像图形（只定义一次，各处 <use> 引用）：
+     圆头 + 肩弧，纯几何、无面部特征——去掉脸就不携带性别/年龄/情绪任何暗示。
+     肩线不闭合，避免读成证件照；不做发型暗示。 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="ic-user" viewBox="0 0 24 24">
+    <circle cx="12" cy="8.4" r="3.6"/>
+    <path d="M4.7 20.1c0-4 3.3-6.5 7.3-6.5s7.3 2.5 7.3 6.5"/>
+  </symbol>
+</svg>
 
 <!-- ==================== 对话首页 ==================== -->
 <!-- ==================== 全局侧栏（所有子页共用） ==================== -->
@@ -779,15 +833,17 @@
       </div>
     </details>
 
-    <!-- 模型视图：顶部 5 标签统一切换「文本模型 / skill 模型 / 多媒体模型 / 模型用量 / 模型积分榜」。
+    <!-- 模型视图：顶部 5 标签统一切换「文本模型 / 提示词 / 多媒体 / 用量 / 积分榜」。
+         5 栏等分后每栏只有约 62px，放不下完整的「skill 提示词」，所以这里用 2 字 + title 补全称
+         （聊天页的模型选择器是 4 栏、每栏约 73px，能放下完整文案）。
          资源登记、Key、多媒体等通用卡片留在下方常驻，不随标签切换。 -->
     <div class="card" id="model-view-card">
       <div class="tabbar" id="mgmt-tabs">
-        <button class="tab sel" data-mtab="text" onclick="setMgmtTab('text')">💬 文本模型</button>
-        <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')">🧩 skill 模型</button>
-        <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')">🎬 多媒体模型</button>
-        <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')">📊 模型用量</button>
-        <button class="tab" data-mtab="points" onclick="setMgmtTab('points')">🏆 模型积分榜</button>
+        <button class="tab sel" data-mtab="text" onclick="setMgmtTab('text')">文本模型</button>
+        <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="skill 提示词">提示词</button>
+        <button class="tab" data-mtab="mm" onclick="setMgmtTab('mm')" title="多媒体模型（音频 · 图片 · 视频）">多媒体</button>
+        <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')" title="模型用量">用量</button>
+        <button class="tab" data-mtab="points" onclick="setMgmtTab('points')" title="模型积分榜">积分榜</button>
       </div>
       <h2 id="mgmt-view-ttl">模型列表 <span class="muted" id="model-count"></span></h2>
 
@@ -955,7 +1011,11 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 <!-- 消息长按 / 右键菜单：重发 / 复制 / 删除 -->
 <div id="msg-menu" hidden>
   <button id="mm-copy" type="button" onclick="menuCopy()">复制</button>
-  <button id="mm-resend" type="button" onclick="menuResend()">重发</button>
+  <button id="mm-edit" type="button" class="mm-user" onclick="menuEdit()">修改</button>
+  <button id="mm-retry" type="button" class="mm-user" onclick="menuRetry()">重试</button>
+  <button id="mm-emph" type="button" class="mm-user" onclick="menuEmphasis()">强调</button>
+  <button id="mm-regen" type="button" class="mm-asst" onclick="menuRegen()">重新生成</button>
+  <button id="mm-share" type="button" class="mm-asst" onclick="menuShare()">分享</button>
   <button id="mm-del" type="button" onclick="menuDelete()">删除</button>
 </div>
 
@@ -1033,19 +1093,17 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 
 <dialog id="model-dlg">
   <button class="dlg-back" onclick="modelDlg.close()" aria-label="返回" title="返回">←</button>
-  <h3>选择模型<button class="icon-btn mp-mgmt" onclick="openModels(); modelDlg.close()" aria-label="模型管理" title="模型管理">⚙</button></h3>
-  <input id="model-custom" placeholder="自定义模型名（回车确认）…" style="margin-bottom:10px">
+  <h3>选择模型<span id="mp-scan-ago"></span><button class="icon-btn mp-mgmt" onclick="openModels(); modelDlg.close()" aria-label="模型管理" title="模型管理">⚙</button></h3>
   <div class="tabbar" id="mp-tabs">
-    <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">💬 文本模型</button>
-    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')">🧩 skill 模型</button>
-    <button class="tab" data-mtab="audio" onclick="setMpTab('audio')">🎧 音频模型</button>
-    <button class="tab" data-mtab="mm" onclick="setMpTab('mm')">🖼 图视模型</button>
+    <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">文本模型</button>
+    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')" title="skill 提示词：独立于模型的表达线">skill 提示词</button>
+    <button class="tab" data-mtab="audio" onclick="setMpTab('audio')">音频模型</button>
+    <button class="tab" data-mtab="mm" onclick="setMpTab('mm')">图视模型</button>
   </div>
   <input id="model-search" type="search" placeholder="🔍 搜索模型名 / 渠道 / 供应商…" autocomplete="off">
-  <div id="mp-current" class="mp-current"></div>
   <div id="avail-banner" class="avail-banner" hidden></div>
   <div id="model-list"></div>
-  <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button></div>
+  <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button><span id="model-jump" class="mp-jump" hidden></span></div>
   <div class="mp-pager" style="margin-top:4px">
     <button style="width:auto;padding:0 12px;font-size:12px" onclick="availRescan()" title="忽略 2 小时缓存，立即重新探测本页">↻ 重新检测本页</button>
     <span id="avail-ts" style="font-size:11px"></span>
@@ -1054,7 +1112,6 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
     <input type="checkbox" id="ctx-reset-toggle" onchange="setCtxReset(this.checked)">
     <span>换模型时重置上下文<em>防止新模型照抄上一个模型的自我描述</em></span>
   </label>
-  <div class="dlg-actions"><button onclick="modelDlg.close()">关闭</button></div>
 </dialog>
 
 <dialog id="voice-dlg">
@@ -1124,7 +1181,6 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <div class="vg-row vg-status" id="vg-status"></div>
   <div class="dlg-actions">
     <button class="primary" id="vg-save">保存</button>
-    <button onclick="voiceDlg.close()">关闭</button>
   </div>
 </dialog>
 
@@ -1148,7 +1204,6 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   </div>
   <pre id="selftest-body" class="mono" style="background:#0d1220;border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;font-size:12px;white-space:pre-wrap;margin-top:8px"></pre>
 
-  <div class="dlg-actions"><button onclick="diagDlg.close()">关闭</button></div>
 </dialog>
 
 <div id="toast"></div>
@@ -1161,6 +1216,8 @@ const BUILD_MARK = "__BUILD_VERSION__";
 // ================= 基础 =================
 const $ = (id) => document.getElementById(id);
 const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg");
+// 模型弹窗关闭时停掉「多久前自检」的定时器，避免后台空转
+modelDlg.addEventListener("close", () => stopScanAgoTimer());
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function toast(msg, cls="") {
   const t = document.createElement("div");
@@ -1257,7 +1314,8 @@ function toggleSidebar() { $("sidebar").classList.contains("open") ? closeSideba
 /// 统一规则：**所有子页/弹层都能左滑关闭**——侧栏、对话框、通话页通用。
 (function bindEdgeSwipe() {
   let startX = 0, startY = 0, tracking = false, fromSidebar = false;
-  const EDGE = 24, SLIDE = 56;
+  let target = null, dragging = false, lastX = 0, lastT = 0, velocity = 0;
+  const EDGE = 24, SLIDE = 56, COMMIT = 96;
   // 当前最上层的可关闭层（对话框 > 通话页 > 侧栏）
   function topClosable() {
     const dlgs = Array.from(document.querySelectorAll("dialog[open]"));
@@ -1266,37 +1324,90 @@ function toggleSidebar() { $("sidebar").classList.contains("open") ? closeSideba
     if (ov && !ov.hidden) return { kind: "call", el: ov };
     return null;
   }
+  // 跟手位移 + 遮罩同步变淡。原来滑动过程中界面完全不动，用户根本不知道有这个手势。
+  function shiftTo(dx) {
+    if (!target) return;
+    const d = Math.max(0, dx);
+    const ratio = Math.min(1, d / (window.innerWidth * 0.5));
+    target.el.style.transition = "none";
+    target.el.style.transform = `translateX(${d}px)`;
+    if (target.kind === "dialog") target.el.style.setProperty("--bk", String(0.686 * (1 - ratio * 0.9)));
+    else target.el.style.opacity = String(1 - ratio * 0.6);
+  }
+  function clearShift(animate) {
+    if (!target) return;
+    const el = target.el;
+    if (animate) {
+      el.style.transition = "transform .18s ease-out, opacity .18s ease-out";
+      el.style.transform = "";
+      el.style.opacity = "";
+      el.style.removeProperty("--bk");
+      setTimeout(() => { el.style.transition = ""; }, 220);
+    } else {
+      el.style.transition = "";
+      el.style.transform = "";
+      el.style.opacity = "";
+      el.style.removeProperty("--bk");
+    }
+    target = null; dragging = false;
+  }
   document.addEventListener("pointerdown", (e) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    // 代码块 / 标签栏 / 输入控件上的横滑是在滚内容或选字，不是退出手势
+    if (e.target && e.target.closest && e.target.closest("pre, .tabbar, textarea, input, select")) return;
     const sb = $("sidebar");
     const inSidebar = !!(e.target && e.target.closest && e.target.closest("#sidebar"));
     // 打开态：只在侧栏本体上起手才可能触发关闭
     if (sb.classList.contains("open")) {
       if (!inSidebar) { tracking = false; return; }
       fromSidebar = true;
+      target = null;
     } else {
       // 关闭态：只能从左边缘起手
       if (e.clientX > EDGE) { tracking = false; return; }
       fromSidebar = false;
+      target = topClosable();   // 有弹层才跟手；没弹层时右滑是开侧栏
     }
-    startX = e.clientX; startY = e.clientY; tracking = true;
+    startX = e.clientX; startY = e.clientY; tracking = true; dragging = false;
+    lastX = e.clientX; lastT = Date.now(); velocity = 0;
+  }, { passive: true });
+  document.addEventListener("pointermove", (e) => {
+    if (!tracking) return;
+    const dx = e.clientX - startX, dy = e.clientY - startY;
+    if (!dragging) {
+      if (Math.abs(dy) > Math.abs(dx)) { tracking = false; clearShift(false); return; }  // 纵向为主 → 让页面滚动
+      if (dx < 8) return;                                                              // 还没形成横向位移
+      dragging = true;
+    }
+    const now = Date.now();
+    if (now > lastT) velocity = (e.clientX - lastX) / (now - lastT);
+    lastX = e.clientX; lastT = now;
+    if (target) shiftTo(dx);
   }, { passive: true });
   document.addEventListener("pointerup", (e) => {
     if (!tracking) return;
     tracking = false;
     const dx = e.clientX - startX, dy = e.clientY - startY;
-    if (Math.abs(dy) > Math.abs(dx)) return; // 纵向为主 → 不是滑动手势
-    if (fromSidebar && dx < -SLIDE) { closeSidebar(); return; }
-    if (fromSidebar || dx <= SLIDE) return;
-    // 右滑：先关最上层的弹层（若它在屏幕左侧区域被扫过），否则开侧栏
-    const top = topClosable();
-    if (top) {
-      if (top.kind === "dialog") { try { top.el.close(); } catch {} }
-      else endCall();
+    if (Math.abs(dy) > Math.abs(dx)) { clearShift(false); return; }
+    if (fromSidebar) {
+      clearShift(false);
+      if (dx < -SLIDE) closeSidebar();
       return;
     }
-    openSidebar();
+    // 弹层：拖过 96px（约屏宽 1/4）或甩得够快就关，否则回弹
+    if (target) {
+      const commit = dragging && (dx > COMMIT || velocity > 0.5);
+      const el = target.el, kind = target.kind;
+      clearShift(true);
+      if (commit) {
+        if (kind === "dialog") { try { el.close(); } catch {} }
+        else endCall();
+      }
+      return;
+    }
+    if (dx > SLIDE) openSidebar();
   }, { passive: true });
+  document.addEventListener("pointercancel", () => { tracking = false; clearShift(false); }, { passive: true });
 })();
 
 // ================= 会话存储（IndexedDB） =================
@@ -1342,6 +1453,7 @@ const IDB = {
     return this._req(this.db.transaction("msgs", "readwrite").objectStore("msgs")
       .put({ convoId, idx, role: m.role, content: m.content, reasoning: m.reasoning, ts: m.ts,
              streaming: !!m.streaming, error: m.error, channel: m.channel, attempts: m.attempts,
+             emphasis: !!m.emphasis,
              attachments: (m.attachments || []).map(slimAtt) }));
   },
   deleteMsg(convoId, idx) {
@@ -1815,9 +1927,11 @@ function renderMessages() {
         return `<span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>`;
       }).join("");
       const attRow = chips ? `<div class="att-row">${chips}</div>` : "";
-      return `<div class="msg user" data-idx="${i}"><div class="msg-body">${attRow}${m.content ? `<div class="content">${esc(m.content)}</div>` : ""}<div class="msg-meta">${fmtTime(m.ts)}</div></div></div>`;
+      // 用户头像：与助手「AI」实心渐变形成对照（描边 vs 填充）；「…」在气泡右上角。
+      // 只有附件的消息也带头像——它是「这轮是用户说的」的标识，不该只在有文字时出现。
+      return `<div class="msg user${m.emphasis ? " emph" : ""}" data-idx="${i}"><div class="avatar user-av" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#ic-user"/></svg></div><div class="msg-body">${attRow}${m.content ? `<div class="content">${esc(m.content)}</div>` : ""}<button class="more-btn" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button><div class="msg-meta">${fmtTime(m.ts)}${m.emphasis ? '<span class="emph-tag">重点</span>' : ""}</div></div></div>`;
     }
-    if (m.error && !m.content) return `<div class="msg error" data-idx="${i}"><div class="avatar">⚠</div><div class="msg-body"><div class="content">${esc(m.error)}</div><div class="msg-meta">${fmtTime(m.ts)}</div></div></div>`;
+    if (m.error && !m.content) return `<div class="msg error" data-idx="${i}"><div class="avatar">⚠</div><div class="msg-body"><div class="content">${esc(m.error)}</div><div class="msg-meta">${fmtTime(m.ts)}<button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button></div></div></div>`;
     const think = m.reasoning ? `<details class="think"><summary>思考过程</summary><div class="think-body">${esc(m.reasoning)}</div></details>` : "";
     const body = (m.content ? md(m.content) : "") + (m.streaming ? '<span class="cursor"></span>' : "");
     const errLine = m.error ? `<div class="msg-meta" style="color:var(--bad)">${esc(m.error)}</div>` : "";
@@ -1826,7 +1940,9 @@ function renderMessages() {
       + (m.usage && m.usage.total_tokens != null ? `<span class="ch-badge" title="prompt ${m.usage.prompt_tokens || 0} · completion ${m.usage.completion_tokens || 0}">⛁ ${fmtTok(m.usage.total_tokens)}</span>` : "")
       + (m.attempts && m.attempts.split(";").length > 1
         ? `<span class="switch-badge" title="${esc(m.attempts)}">⤻ 已自动切换</span>` : "");
-    const acts = m.streaming ? "" : `<button class="act-btn" onclick="copyMsg(this)" title="复制全文">复制</button><button class="act-btn" onclick="shareMsg(this)" title="分享本条回答">分享</button><button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button>`;
+    // 复制 / 分享 / 重新生成 / 删除 收进「…」；播音留在行内——它有播放中/停止的状态反馈，
+    // 放进菜单会在菜单关闭后丢掉「正在播」的可见性。
+    const acts = m.streaming ? "" : `<button class="act-btn" onclick="speakMsg(this)" title="朗读本条回答（TTS 播音）">🔊 播音</button><button class="act-btn more-inline" type="button" onclick="openMsgMenu(this)" aria-label="更多操作" title="更多操作">⋯</button>`;
     return `<div class="msg assistant" data-idx="${i}"><div class="avatar">AI</div><div class="msg-body">${think}<div class="content">${body}</div>${errLine}<div class="msg-meta">${badges}${fmtTime(m.ts)}${acts}</div></div></div>`;
   }).join("");
   requestAnimationFrame(() => { const box = $("messages"); box.scrollTop = box.scrollHeight; });
@@ -1993,50 +2109,49 @@ async function speakMsg(btn) {
 }
 function quickAsk(btn) { $("input").value = btn.textContent.trim(); sendOrStop(); }
 
-// ================= 消息长按 / 右键菜单（重发 / 复制） =================
-// 诉求：发送出错后不必重输——长按（或右键）消息弹出「重发 / 复制」。
+// ================= 消息「…」菜单（复制 / 修改 / 重试 / 强调） =================
+// 为什么不再用长按：长按落在可选中文本上时 iOS 会弹原生 callout 菜单，我们自己的菜单
+// 同时弹出——两套叠在一起、位置还错乱。iOS 的 callout 不走 contextmenu 事件，拦不住。
+// 所以入口改成气泡里常驻的「…」按钮，用户气泡同时禁用 callout / user-select。
 let menuMsgEl = null;
-(function bindMsgMenu() {
-  const box = $("messages");
+function curMsgOf(el) {
+  const c = curConvo();
+  const idx = el ? Number(el.dataset.idx) : -1;
+  return (c && !isNaN(idx)) ? c.msgs[idx] : null;
+}
+/// 打开菜单：按角色切换两组按钮，锚定「…」（默认向下，越界向上翻转）。
+function openMsgMenu(btn) {
+  const el = btn.closest(".msg");
+  if (!el) return;
+  menuMsgEl = el;
   const menu = $("msg-menu");
-  let holdTimer = null, holdX = 0, holdY = 0;
-  const place = (x, y) => {
-    menu.hidden = false;
-    const w = menu.offsetWidth, h = menu.offsetHeight;
-    menu.style.left = Math.max(8, Math.min(x - w / 2, window.innerWidth - w - 8)) + "px";
-    menu.style.top = Math.max(8, Math.min(y - h - 10, window.innerHeight - h - 8)) + "px";
-  };
-  const open = (ev, el) => {
-    menuMsgEl = el;
-    const isUser = el.classList.contains("user");
-    const resend = $("mm-resend");
-    resend.hidden = !isUser && !el.classList.contains("assistant");
-    resend.textContent = isUser ? "重发" : "重新生成";
-    place(ev.clientX, ev.clientY);
-  };
-  const cancelHold = () => { if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; } };
-  box.addEventListener("contextmenu", (e) => {
-    const el = e.target.closest(".msg");
-    if (!el) return;
-    e.preventDefault();
-    open(e, el);
-  });
-  box.addEventListener("pointerdown", (e) => {
-    const el = e.target.closest(".msg");
-    if (!el) return;
-    cancelHold();
-    holdX = e.clientX; holdY = e.clientY;
-    holdTimer = setTimeout(() => open(e, el), 500);
-  });
-  ["pointerup", "pointercancel", "pointerleave"].forEach(t => box.addEventListener(t, cancelHold));
-  box.addEventListener("pointermove", (e) => {
-    if (holdTimer && (Math.abs(e.clientX - holdX) > 10 || Math.abs(e.clientY - holdY) > 10)) cancelHold();
-  });
-  box.addEventListener("scroll", cancelHold);
-  document.addEventListener("pointerdown", (e) => {
-    if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true;
-  }, true);
-})();
+  const isUser = el.classList.contains("user");
+  menu.querySelectorAll(".mm-user").forEach(b => { b.hidden = !isUser; });
+  menu.querySelectorAll(".mm-asst").forEach(b => { b.hidden = isUser; });
+  const em = $("mm-emph");
+  if (em) em.textContent = curMsgOf(el)?.emphasis ? "取消强调" : "强调";
+  // 会改动历史的动作在流式生成中禁用
+  ["mm-edit", "mm-retry", "mm-regen", "mm-del"].forEach(id => { const b = $(id); if (b) b.disabled = !!streaming; });
+  menu.hidden = false;
+  const r = btn.getBoundingClientRect();
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = Math.min(Math.max(8, r.right - w), window.innerWidth - w - 8) + "px";
+  let top = r.bottom + 6;
+  if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+  menu.style.top = top + "px";
+}
+// 点菜单外部关闭；再点「…」交给按钮自己重新定位
+document.addEventListener("pointerdown", (e) => {
+  const menu = $("msg-menu");
+  if (!menu || menu.hidden) return;
+  if (menu.contains(e.target)) return;
+  if (e.target.closest && e.target.closest(".more-btn, .more-inline")) return;
+  menu.hidden = true;
+}, true);
+// 右键不再弹浏览器菜单（每条消息都有「…」了）
+$("messages").addEventListener("contextmenu", (e) => {
+  if (e.target.closest(".msg")) e.preventDefault();
+});
 function menuCopy() {
   if (menuMsgEl) {
     const text = (menuMsgEl.querySelector(".content") || {}).innerText || "";
@@ -2044,33 +2159,105 @@ function menuCopy() {
   }
   $("msg-menu").hidden = true;
 }
-function menuResend() {
-  const el = menuMsgEl;
-  $("msg-menu").hidden = true;
+/// 截断 idx 及其后所有消息（含落库）。重试 / 修改 / 重新生成都靠它把「这条之后」清掉再重发，
+/// 否则 sendWith 会再追加一条同样的提问——这正是原来「重发」造成重复提问的原因。
+function truncateFrom(c, idx) {
+  if (!c || idx < 0 || idx >= c.msgs.length) return;
+  for (let k = idx; k < c.msgs.length; k++) IDB.deleteMsg(c.id, k);
+  c.msgs = c.msgs.slice(0, idx);
+  c.updated = Date.now();
+  saveConvos();
+}
+/// 重试（用户消息）：不新增消息——以这条为最后一条重新请求，截断其后的回答。
+function menuRetry() {
+  const el = menuMsgEl; $("msg-menu").hidden = true;
   if (!el || streaming) return;
-  const c = curConvo();
-  if (!c) return;
+  const c = curConvo(); if (!c) return;
+  const idx = Number(el.dataset.idx);
+  const m = c.msgs[idx];
+  if (!m || m.role !== "user") return;
+  const text = m.content || "";
+  const atts = (m.attachments || []).map(a => ({ ...a }));
+  truncateFrom(c, idx);
+  renderMessages();
+  sendWith(text, atts);
+}
+/// 修改（用户消息）：气泡原地变 textarea，保存后截断其后并重发。
+function menuEdit() {
+  const el = menuMsgEl; $("msg-menu").hidden = true;
+  if (!el) return;
+  if (streaming) { toast("正在生成，稍候再改", ""); return; }
+  const c = curConvo(); if (!c) return;
+  const idx = Number(el.dataset.idx);
+  const m = c.msgs[idx];
+  if (!m || m.role !== "user") return;
+  const body = el.querySelector(".msg-body");
+  const content = el.querySelector(".content");
+  if (!body || !content || body.querySelector(".edit-wrap")) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "edit-wrap";
+  const ta = document.createElement("textarea");
+  ta.className = "edit-ta";
+  ta.value = m.content || "";
+  const acts = document.createElement("div");
+  acts.className = "edit-acts";
+  const cancel = document.createElement("button");
+  cancel.type = "button"; cancel.textContent = "取消";
+  const save = document.createElement("button");
+  save.type = "button"; save.className = "primary"; save.textContent = "保存并重发";
+  acts.append(cancel, save);
+  wrap.append(ta, acts);
+  content.replaceWith(wrap);
+  const more = body.querySelector(".more-btn"); if (more) more.hidden = true;
+  ta.style.height = Math.min(240, Math.max(64, ta.scrollHeight + 4)) + "px";
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+
+  cancel.onclick = () => { wrap.replaceWith(content); if (more) more.hidden = false; };
+  save.onclick = () => {
+    const v = ta.value.trim();
+    if (!v) { toast("内容不能为空", "err"); return; }
+    const atts = (m.attachments || []).map(a => ({ ...a }));
+    truncateFrom(c, idx);
+    renderMessages();
+    sendWith(v, atts);
+  };
+}
+/// 重新生成（助手消息）：回退到对应的提问，截断后重发。
+function menuRegen() {
+  const el = menuMsgEl; $("msg-menu").hidden = true;
+  if (!el || streaming) return;
+  const c = curConvo(); if (!c) return;
+  const idx = Number(el.dataset.idx);
+  let j = idx - 1;
+  while (j >= 0 && c.msgs[j].role !== "user") j--;
+  if (j < 0) { toast("找不到对应的提问", "err"); return; }
+  const um = c.msgs[j];
+  const text = um.content || "";
+  const atts = (um.attachments || []).map(a => ({ ...a }));
+  truncateFrom(c, j);
+  renderMessages();
+  sendWith(text, atts);
+}
+/// 强调：本地标记（左侧橙条 + 「重点」徽标），不改请求内容，可再点取消。
+function menuEmphasis() {
+  const el = menuMsgEl; $("msg-menu").hidden = true;
+  if (!el) return;
+  const c = curConvo(); if (!c) return;
   const idx = Number(el.dataset.idx);
   const m = c.msgs[idx];
   if (!m) return;
-  const clone = (atts) => (atts || []).map(a => ({ ...a }));
-  if (m.role === "user") {
-    // 重发：同内容同附件再走一遍发送链路（含失败重试，不必重输）
-    sendWith(m.content || "", clone(m.attachments));
-  } else if (m.role === "assistant") {
-    // 重新生成：回退到该回复对应的提问，截断其后消息后重发
-    let j = idx - 1;
-    while (j >= 0 && c.msgs[j].role !== "user") j--;
-    if (j < 0) { toast("找不到对应的提问", "err"); return; }
-    const um = c.msgs[j];
-    const removed = c.msgs.slice(j); // 含该提问本身，重发会原位置重新入列
-    c.msgs = c.msgs.slice(0, j);
-    removed.forEach((rm, k) => IDB.deleteMsg(c.id, j + k)); // 截断的部分同步删库
-    saveConvos();
-    sendWith(um.content || "", clone(um.attachments));
-  }
+  m.emphasis = !m.emphasis;
+  IDB.putMsg(c.id, idx, m);
+  renderMessages();
+  toast(m.emphasis ? "已标记为重点" : "已取消重点", "ok");
 }
-/// 删除单条消息（长按菜单）。删完更新会话元信息并重渲染。
+function menuShare() {
+  const el = menuMsgEl; $("msg-menu").hidden = true;
+  if (el) shareMsg(el);
+}
+/// 删除单条消息（「…」菜单）。删完更新会话元信息并重渲染。
 async function menuDelete() {
   const el = menuMsgEl;
   $("msg-menu").hidden = true;
@@ -3017,6 +3204,7 @@ function openCallModelPicker() {
   // 通话页没有"上下文"概念，隐藏聊天页专用的重置开关
   const ctLabel = $("ctx-reset-toggle")?.closest("label"); if (ctLabel) ctLabel.hidden = true;
   modelDlg.showModal();
+  startScanAgoTimer();
 }
 function openCall() {
   if (callOpen) return;
@@ -3420,11 +3608,11 @@ async function chatStream(messages, model, handlers) {
 
 // ================= 模型选择器：分页 + 模糊搜索 =================
 // sel/onPick 参数化：聊天页用 curModel + pickModel；通话页用 callModel + 自己的回调（两者共用同一份渲染与分页）。
-// 每页最多 6 条（硬性上限，MP_PAGE_SIZE）。「自动」是"不指定模型"这个语义选项，
-// 固定钉在列表顶部、不参与分页切割；其余条目按积分倒序后再分页。
+// 每页最多 5 条（MP_PAGE_SIZE）。「自动」是"不指定模型"这个语义选项，
+// 固定钉在列表顶部、不参与分页切割，所以第 1 页显示「自动 + 5 个模型」共 6 行。
 // 状态变量在此声明（openModelPicker 等函数在更早的位置就会读写它们，
 // 放到函数后面会撞 TDZ）。
-const MP_PAGE_SIZE = 6;
+const MP_PAGE_SIZE = 5;
 // 四个标签：文本 / skill / 音频 / 图视。每个标签**各自独立页码**，
 // 切标签不会串页（mpPages[标签]），换搜索词才把当前标签重置回第 1 页。
 const MP_TABS = ["text", "skill", "audio", "mm"];
@@ -3562,6 +3750,7 @@ async function availScanVisible(force) {
   // 硬套会把它们误标成"模型不存在"。这两个标签暂不扫。
   if (mpTab !== "text") return;
   availScanning = true;
+  let ran = false;
   try {
     const ex = await WF.ensure();
     if (!ex || !ex.avail_new) return;   // 内核不可用 → 不扫，列表照常能用（降级）
@@ -3582,10 +3771,12 @@ async function availScanVisible(force) {
 
     const h = availLoadSeed(ex, availSeed(need, force));
     await wfDrive(ex, h, { event: "models.page_open", models: need }, WF_PLUGINS["wf.model_probe"]);
+    ran = true;
   } catch (e) {
     console.warn("模型可用性扫描失败（已降级）:", e);
   } finally {
     availScanning = false;
+    if (ran) availMarkRun();   // 只有真正跑完一条 run 才算「一次自检」
     rerenderModelList(); renderAvailBanner(); updateAvailTs();
   }
 }
@@ -3616,12 +3807,40 @@ function renderAvailBanner() {
     el.hidden = true; el.textContent = "";
   }
 }
+/// 「一次自检完成」的时刻。语义是「上一次工作流扫描跑完」，与翻页无关——
+/// 原来底部那个时间取自当前页模型的最大 ts，翻页就变，不是自检时间。
+const AVAIL_RUN_KEY = "gw_avail_last_run";
+function availMarkRun() {
+  const t = Date.now();
+  try { localStorage.setItem(AVAIL_RUN_KEY, String(t)); } catch {}
+  renderScanAgo(t);
+}
+function availLastRun() {
+  try { return parseInt(localStorage.getItem(AVAIL_RUN_KEY) || "0", 10) || 0; } catch { return 0; }
+}
+/// 标题栏右上角「多久前自检」。2 小时是缓存 TTL：过了就说明结论已过期。
+function renderScanAgo(now) {
+  const el = $("mp-scan-ago"); if (!el) return;
+  const t = availLastRun();
+  now = now || Date.now();
+  if (!t) { el.textContent = "未自检"; el.classList.remove("stale"); return; }
+  const d = Math.max(0, now - t);
+  if (d < 60 * 1000) { el.textContent = "刚刚自检"; el.classList.remove("stale"); }
+  else if (d < 60 * 60 * 1000) { el.textContent = `${Math.floor(d / 60000)} 分钟前自检`; el.classList.remove("stale"); }
+  else if (d < AVAIL_TTL_MS) { el.textContent = `${Math.floor(d / 3600000)} 小时前自检`; el.classList.remove("stale"); }
+  else { el.textContent = "自检已过期"; el.classList.add("stale"); }
+}
+let scanAgoTimer = 0;
+function startScanAgoTimer() {
+  renderScanAgo();
+  clearInterval(scanAgoTimer);
+  scanAgoTimer = setInterval(() => renderScanAgo(), 30000);
+}
+function stopScanAgoTimer() { clearInterval(scanAgoTimer); scanAgoTimer = 0; }
 function updateAvailTs() {
   const el = $("avail-ts"); if (!el) return;
-  const ts = MP_SHOWN.map(m => (AVAIL_MEM[m] || {}).ts || 0).filter(Boolean);
-  if (!ts.length) { el.textContent = ""; return; }
-  const d = new Date(Math.max(...ts));
-  el.textContent = `上次检测 ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")} · 2 小时内不再自动检测`;
+  // 绝对时间已交给标题栏的相对时间；这里只说缓存规则，避免两处时间互相打架
+  el.textContent = availLastRun() ? "2 小时内不再自动检测" : "";
 }
 
 function mpPage() { return mpPages[mpTab] || 1; }
@@ -3655,6 +3874,7 @@ function openModelPicker() {
   const ct = $("ctx-reset-toggle"); if (ct) ct.checked = ctxResetOn();
   const ctLabel = ct?.closest("label"); if (ctLabel) ctLabel.hidden = false;
   renderModelList(); modelDlg.showModal();
+  startScanAgoTimer();
   // 打开即扫本页（2 小时内命中缓存则不发起任何探测）
   availScanVisible();
 }
@@ -3679,23 +3899,27 @@ function mpItems() {
   }
   return out;
 }
-/// 模型选择器常驻「当前选择」条：把「模型」与「skill 表达线」两条独立轴线并排显示，
-/// 让用户清楚——选了 skill ≠ 换了模型，两者各自独立生效。
-function renderMpCurrent() {
-  const el = $("mp-current"); if (!el) return;
-  const m = curModel ? curModel : "自动（按积分选路）";
-  const sHtml = activeSkill
-    ? `${esc(activeSkill.title)} <span class="mx" onclick="clearActiveSkill(); renderMpCurrent();">✕ 清除</span>`
-    : "无（纯模型回答）";
-  el.innerHTML = `当前模型：<b>${esc(m)}</b> ｜ 表达线：<b>${sHtml}</b>`;
+/// 当前所选模型属于哪个标签 —— 用于「当前模型不在本标签」的提示。
+/// 只判断具体模型；「自动」归文本标签。
+function modelTabOf(name) {
+  if (!name) return "text";
+  for (const tab of ["text", "audio", "mm"]) {
+    const want = tab === "audio" ? ["stt", "tts"] : tab === "mm" ? ["vision", "video"] : ["text"];
+    const pool = tab === "text" ? usableChatChannels() : CHANNELS.filter(c => c.enabled);
+    for (const c of pool) for (const m of effModels(c)) {
+      if (m.enabled === false) continue;
+      if (m.name === name && (want.includes(m.kind) || want.includes(m.alt_kind))) return tab;
+    }
+  }
+  return "";
 }
+const MP_TAB_LABEL = { text: "文本模型", audio: "音频模型", mm: "图视模型", skill: "skill 提示词" };
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
   // 记下本次的选中值与回调：扫描期间的重绘必须沿用它们，
   // 否则通话页的自定义回调会被重置成 pickModel。
   MP_LAST_SEL = sel; MP_LAST_CB = modelPickCb;
-  renderMpCurrent();
   // skill 标签：skill 是独立于模型对象的表达线（有自己的标题与提示词正文），
   // 展示使用最频繁的前 6 条 + 第 7 行「扩展 skill」入口，不从模型池里取数据。
   if (mpTab === "skill") {
@@ -3729,13 +3953,22 @@ function renderModelList(sel, onPick) {
   MP_SHOWN = shown.filter(it => !it.auto).map(it => it.name);
 
   const autoSel = sel ? "" : "sel";
-  let html = shown.map(it => {
+  const curTag = `<span class="mo-cur">当前</span>`;
+  let html = "";
+  // 当前模型不在本标签（例如选了视觉模型却停在文本标签）：给一条仅此时出现的轻提示
+  const selTab = sel ? modelTabOf(sel) : "text";
+  if (sel && selTab && selTab !== mpTab) {
+    html += `<div class="mo-hint" onclick="setMpTab('${selTab}')">当前模型 <b>${esc(sel)}</b> 在「${MP_TAB_LABEL[selTab]}」标签 · 查看 ›</div>`;
+  }
+  html += shown.map(it => {
     if (it.auto) {
-      return `<div class="model-opt ${autoSel}" onclick="modelPickCb('')"><div><b>自动</b> <span class="muted" style="font-size:11px">网关按能力档位 + 额度自动选路</span></div><span class="p">积分 ${it.score}</span></div>`;
+      return `<div class="model-opt ${autoSel}" onclick="modelPickCb('')">
+        <div class="mo-row1"><b class="mo-name">自动</b><span class="mo-right">${autoSel ? curTag : ""}</span></div>
+        <div class="mo-meta">网关按能力档位 + 额度自动选路 · 积分 ${it.score}</div></div>`;
     }
     const c = it.ch;
     // 音频 / 图视标签下补能力徽章，用户一眼知道选的是 STT 还是 TTS、视觉还是视频
-    const capBadge2 = it.kind ? `<span class="cap-badge">${capBadge(it.alt_kind && it.alt_kind !== it.kind ? it.kind : it.kind)}</span>` : "";
+    const capBadge2 = it.kind ? capBadge(it.kind) : "";
     // 可用性态：可用（2）/未探测（0）不加任何修饰；其余按状态上样式 + 括号写原因
     const av = AVAIL_MEM[it.name];
     const st = av ? av.state : 0;
@@ -3743,10 +3976,13 @@ function renderModelList(sel, onPick) {
     const blocked = st === 4 || st === 5;
     const br = av && av.bracket ? `<span class="avail-br">（${esc(av.bracket)}）</span>` : "";
     const act = blocked ? `availWarn('${esc(it.name)}')` : `modelPickCb('${esc(it.name)}')`;
-    return `<div class="model-opt ${sel === it.name ? "sel" : ""} ${cls}"${blocked ? ' aria-disabled="true"' : ""} onclick="${act}"><div><b>${esc(it.name)}</b>${br}${capBadge2}</div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
+    const isSel = sel === it.name;
+    return `<div class="model-opt ${isSel ? "sel" : ""} ${cls}"${blocked ? ' aria-disabled="true"' : ""} onclick="${act}">
+      <div class="mo-row1"><b class="mo-name" title="${esc(it.name)}">${esc(it.name)}</b>${br}<span class="mo-right">${isSel ? curTag : ""}${capBadge2}</span></div>
+      <div class="mo-meta">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</div></div>`;
   }).join("");
   if (!usable.length) html += `<div class="empty">还没有可用渠道 —— 去「模型管理」登记资源并启用</div>`;
-  else if (!rest.length && mpQuery) html += `<div class="empty">没有匹配「${esc(mpQuery)}」的模型 —— 换个关键词，或用上方输入框直接指定自定义模型名</div>`;
+  else if (!rest.length && mpQuery) html += `<div class="empty">没有匹配「${esc(mpQuery)}」的模型 —— 换个关键词，或去「模型管理」登记这个模型</div>`;
   else if (!rest.length) html += `<div class="empty">该分类下还没有登记模型 —— 去「模型管理」对应标签页登记</div>`;
   $("model-list").innerHTML = html;
 
@@ -3759,6 +3995,20 @@ function renderModelList(sel, onPick) {
     pager.querySelectorAll("button")[1].disabled = cur >= pages;
   } else {
     pager.hidden = true;
+  }
+  // 当前模型不在本页：分页条右侧给可点跳转（替代原来那条常驻「当前模型」）
+  const jump = $("model-jump");
+  if (jump) {
+    const curIdx = sel ? rest.findIndex(it => it.name === sel) : -1;
+    const selPage = curIdx >= 0 ? Math.floor(curIdx / MP_PAGE_SIZE) + 1 : 0;
+    if (pages > 1 && selPage && selPage !== cur) {
+      jump.hidden = false;
+      jump.textContent = `当前在第 ${selPage} 页 ›`;
+      jump.onclick = () => setMpPage(selPage);
+    } else {
+      jump.hidden = true;
+      jump.onclick = null;
+    }
   }
 }
 function pickModel(m) {
@@ -3949,7 +4199,6 @@ async function loadSkills() {
 
 /// 选择器 skill 标签：只显示标题一行，按使用频次取前 6 条；第 7 行是「扩展 skill」入口。
 function renderSkillPicker() {
-  renderMpCurrent();
   const list = SKILLS.slice()
     .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
   const top = list.slice(0, 6);
@@ -4365,7 +4614,7 @@ function modelRow(c, m) {
 let mgmtTab = "text";
 const MGMT_TABS = ["text", "skill", "mm", "usage", "points"];
 const MGMT_TAB_TTL = {
-  text: "文本模型", skill: "skill 模型", mm: "多媒体模型（音频 · 图片 · 视频）",
+  text: "文本模型", skill: "skill 提示词", mm: "多媒体模型（音频 · 图片 · 视频）",
   usage: "模型用量", points: "模型积分榜",
 };
 // 用户要求：列表深度超过 5 个就全部改成分页 —— 每页 5 条，宁可多页也不一拉到底
@@ -5310,9 +5559,6 @@ document.addEventListener("DOMContentLoaded", () => {
     toast("已保存管理口令", "ok");
   });
   $("preset-search").addEventListener("input", e => renderPresets(e.target.value.trim()));
-  $("model-custom").addEventListener("keydown", e => {
-    if (e.key === "Enter") { const v = e.target.value.trim(); if (v) { pickModel(v); e.target.value = ""; } }
-  });
   const input = $("input");
   input.addEventListener("input", autoGrow);
   input.addEventListener("keydown", e => {

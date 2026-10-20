@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "zhipu-wasm-gateway"
-version = "0.19.10"
+version = "0.19.11"
 dependencies = [
  "js-sys",
  "serde",
