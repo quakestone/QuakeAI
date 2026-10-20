@@ -470,7 +470,7 @@ grep -q 'searchHits\[m.convoId\]' "$UI"; check "内容命中按会话聚合（�
 # ⑦ 可联动视图：搜索/删除/打开全部走同一 render 链路；附件随消息持久化
 grep -q 'function renderConvos()' "$UI" && grep -q 'searchHits\[c.id\]' "$UI"; check "搜索态侧栏过滤（命中高亮 + 空态文案）" $? "no filtered render"
 grep -q 'if (a.kind === "image" && a.dataUrl) base.dataUrl = a.dataUrl' "$UI"; check "图片 dataUrl 持久化（刷新后缩略图不丢）" $? "no dataUrl persist"
-grep -q 'if (a.kind === "audio" && a.file) base.file = a.file' "$UI"; check "音频 Blob 持久化（刷新后重发转写仍可用）" $? "no audio persist"
+grep -q 'if ((a.kind === "audio" || a.kind === "video") && a.file) base.file = a.file' "$UI"; check "音频/视频 Blob 持久化（刷新后容器播放仍可用）" $? "no media persist"
 # ⑧ 流式中断恢复：上次异常退出的流式消息重开标记中断，不再带光标
 grep -q 'm.streaming = false; m.error = m.content ? "（生成中断）" : "（未完成）"' "$UI"; check "异常退出的流式消息重开标记中断" $? "no interrupt recovery"
 # ⑨ 重发截断同步删库（否则重开后旧消息复活）
@@ -563,6 +563,80 @@ console.log("share-roundtrip OK");
 EOF
 node "$ROOT/.share-roundtrip.mjs" >/dev/null 2>&1; check "b64url/deflate 编解码真实往返（中英文/emoji/长文）" $? "roundtrip broken"
 rm -f "$ROOT/.share-extract.mjs" "$ROOT/.share-fns.mjs" "$ROOT/.share-roundtrip.mjs"
+
+echo "== 18. v0.11.0：呼叫交流模式 / 分享直通系统面板 / 多媒体容器播放 =="
+UI="$ROOT/src/admin_ui.html"
+# ① 交流模式：一问一答（half，AI 说完才能讲）/ 同时问答（duplex，可抢话打断）
+grep -q 'callMode: "duplex"' "$UI"; check "VoiceCfg.def 定义 callMode（默认 duplex 同时问答）" $? "no callMode"
+grep -q 'id="btn-call-mode"' "$UI" && grep -q 'function toggleCallMode' "$UI"; check "呼叫页模式切换按钮 + toggleCallMode（持久化 VoiceCfg.save）" $? "no toggle"
+grep -q '一问一答模式：等 AI 说完再说话' "$UI"; check "一问一答禁抢话拦截（thinking/speaking 期间 press 被拦 + toast）" $? "no half guard"
+grep -q 'function callStatusText' "$UI"; check "状态文案按模式分化（half 提示说完才能讲）" $? "no callStatusText"
+# ② 播放修复：手势预热媒体栈（iOS Safari 需手势内 resume AudioContext/唤醒 speechSynthesis）
+grep -q 'function unlockMedia' "$UI" && grep -q 'addEventListener("pointerdown", unlockMedia' "$UI"; check "首次 pointerdown 手势预热 AudioContext/静音 WAV/speechSynthesis" $? "no unlockMedia"
+grep -q 'ttsDegradeNotified' "$UI"; check "TTS 降级浏览器语音有一次性可见提示（防刷屏）" $? "no degrade toast"
+# ③ 分享直通：优先 navigator.share 系统面板不弹二级对话框；AbortError 安静退出
+NS=$(grep -n 'await navigator.share' "$UI" | head -1 | cut -d: -f1)
+DL=$(grep -n 'shareDlg.showModal' "$UI" | head -1 | cut -d: -f1)
+[ -n "$NS" ] && [ -n "$DL" ] && [ "$NS" -lt "$DL" ]; check "navigator.share 先于 share-dlg.showModal（直通不弹窗）" $? "share order wrong ns=$NS dl=$DL"
+grep -q 'AbortError' "$UI"; check "用户取消系统分享安静退出（不落级对话框）" $? "no AbortError"
+grep -q 'PLATFORM_SUFFIXES' "$UI" && grep -q '"workers.dev"' "$UI"; check "平台域识别（workers.dev/vercel.app 等回落同源，修 s. 子域 404）" $? "no platform suffixes"
+# ④ 多媒体：图片缩略图 + 音视频容器播放（Blob 持久化 IDB + 视频首帧 poster）
+grep -q 'img class="att-thumb"' "$UI"; check "图片附件缩略图渲染（att-thumb）" $? "no thumb"
+grep -q 'startsWith("video/") ? "video"' "$UI"; check "附件 kind 识别 video" $? "no video kind"
+grep -q 'a.kind === "audio" || a.kind === "video") && a.file' "$UI"; check "slimAtt 音频/视频存 Blob（结构化克隆进 IDB）" $? "no media slim"
+grep -q 'function attMediaUrl' "$UI" && grep -q 'new WeakMap()' "$UI"; check "blob: URL 按附件对象缓存（attMediaUrl + WeakMap）" $? "no attMediaUrl"
+grep -q 'audio class="att-audio" controls preload="metadata"' "$UI"; check "音频消息 <audio controls> 容器播放" $? "no audio container"
+grep -q 'video class="att-video" controls preload="metadata" playsinline' "$UI"; check "视频消息 <video controls playsinline> 容器播放" $? "no video container"
+grep -q 'function videoPoster' "$UI" && grep -qF 'poster="${a.poster}"' "$UI"; check "视频首帧抽帧缩略图（videoPoster + poster 属性）" $? "no video poster"
+grep -q '🎬' "$UI"; check "输入区视频 chip 🎬 图标（无首帧时）" $? "no video icon"
+grep -q '.att-media {' "$UI" && grep -q '.att-video {' "$UI"; check "多媒体容器 CSS（att-media/att-audio/att-video）" $? "no media css"
+# ⑤ shareOrigin 真实单测（node 跑提取函数 + location stub，非 grep 摆设）：
+#    截图中 s.quakestone987.workers.dev 404 的回归防线
+cat > "$ROOT/.origin-extract.mjs" <<'EOF'
+// 提取 PLATFORM_SUFFIXES 常量 + shareOrigin 函数；location. 替换为
+// globalThis.__loc. 便于测试桩切换（浏览器里 location 不可 stub）
+import { readFileSync, writeFileSync } from "node:fs";
+function extractFn(src, name) {
+  let i = src.indexOf("function " + name + "(");
+  if (i < 0) throw new Error("missing " + name);
+  let d = 0;
+  for (let k = src.indexOf("{", i); k < src.length; k++) {
+    if (src[k] === "{") d++;
+    else if (src[k] === "}" && --d === 0) return src.slice(i, k + 1);
+  }
+  throw new Error("unbalanced " + name);
+}
+const src = readFileSync(process.argv[2], "utf8");
+const ci = src.indexOf("const PLATFORM_SUFFIXES = [");
+if (ci < 0) throw new Error("missing PLATFORM_SUFFIXES");
+const consts = src.slice(ci, src.indexOf("];", ci) + 2);
+const fn = extractFn(src, "shareOrigin").replace(/location\./g, "globalThis.__loc.");
+writeFileSync(process.argv[3], consts + "\n" + fn + "\nexport { shareOrigin };\n");
+EOF
+node "$ROOT/.origin-extract.mjs" "$UI" "$ROOT/.origin-fns.mjs" || true
+cat > "$ROOT/.origin-test.mjs" <<'EOF'
+import { shareOrigin } from "./.origin-fns.mjs";
+const assert = (c, m) => { if (!c) { console.error("FAIL: " + m); process.exit(1); } };
+const stub = (h, p) => { globalThis.__loc = { hostname: h, origin: p + "://" + h, protocol: p + ":" }; };
+// 平台域：workers.dev/vercel.app 用户无权配 s. 子域 → 必须回落同源（截图 404 回归）
+stub("s.quakestone987.workers.dev", "https");
+assert(shareOrigin() === "https://s.quakestone987.workers.dev", "workers.dev s. 子域回落同源");
+stub("quakestone987.workers.dev", "https");
+assert(shareOrigin() === "https://quakestone987.workers.dev", "workers.dev 根域回落同源");
+stub("myapp.vercel.app", "https");
+assert(shareOrigin() === "https://myapp.vercel.app", "vercel.app 平台域回落同源");
+// 自有域：三级标签推断 s.<root>
+stub("admin.example.com", "https");
+assert(shareOrigin() === "https://s.example.com", "admin.example.com → s.example.com");
+// 本地/IP：回落同源
+stub("localhost", "http");
+assert(shareOrigin() === "http://localhost", "localhost 回落同源");
+stub("127.0.0.1", "http");
+assert(shareOrigin() === "http://127.0.0.1", "IP 回落同源");
+console.log("origin-test OK (6 cases)");
+EOF
+node "$ROOT/.origin-test.mjs" >/dev/null 2>&1; check "shareOrigin 平台域回落/子域推断真实单测（node + location stub）" $? "origin logic broken"
+rm -f "$ROOT/.origin-extract.mjs" "$ROOT/.origin-fns.mjs" "$ROOT/.origin-test.mjs"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

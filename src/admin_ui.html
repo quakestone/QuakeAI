@@ -264,6 +264,11 @@
   .att-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
   .att-row img.att-thumb { width: 76px; height: 76px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
   .att-row .att-file { font-size: 12px; color: var(--dim); border: 1px solid var(--border); border-radius: 8px; padding: 3px 9px; }
+  .att-row .att-media { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--border); border-radius: 10px; padding: 7px; background: var(--panel2); }
+  .att-row .att-media-ic { font-size: 13px; }
+  .att-row .att-media-nm { font-size: 10px; color: var(--dim); max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-row audio.att-audio { width: 230px; height: 32px; }
+  .att-row video.att-video { width: 230px; max-height: 170px; border-radius: 8px; background: #000; display: block; }
   .composer-hint { text-align: center; font-size: 11px; color: var(--dim); margin-top: 6px; }
 
   /* ================= 模型管理（首页的二级子页 #/models） ================= */
@@ -466,6 +471,7 @@
           <div class="call-ttl">📞 语音通话</div>
           <div class="call-top-actions">
             <button class="call-model-btn" id="btn-call-model" onclick="openCallModelPicker()" title="切换通话模型">自动 ▾</button>
+            <button class="call-model-btn" id="btn-call-mode" onclick="toggleCallMode()" title="交流模式：一问一答（等 AI 说完）/ 同时问答（可抢话打断）">⇄ 同时问答</button>
             <button class="icon-btn" onclick="endCall()" aria-label="挂断" title="挂断">✕</button>
           </div>
         </div>
@@ -863,13 +869,54 @@ const IDB = {
     return this._req(this.db.transaction("msgs", "readonly").objectStore("msgs").getAll());
   },
 };
-/// 附件持久化形态：图片存 dataUrl（渲染缩略图）、音频存 Blob（重发转写用）、
-/// 普通文件只存元信息。File/Blob 可被结构化克隆进 IDB。
+/// 附件持久化形态：图片存 dataUrl（渲染缩略图）、音频/视频存 Blob（容器播放源）、
+/// 视频另存首帧 poster；普通文件只存元信息。File/Blob 可被结构化克隆进 IDB。
 function slimAtt(a) {
   const base = { name: a.name, size: a.size, type: a.type, kind: a.kind };
   if (a.kind === "image" && a.dataUrl) base.dataUrl = a.dataUrl;
-  if (a.kind === "audio" && a.file) base.file = a.file;
+  if ((a.kind === "audio" || a.kind === "video") && a.file) base.file = a.file;
+  if (a.kind === "video" && a.poster) base.poster = a.poster;
   return base;
+}
+/// blob: URL 按附件对象缓存复用（同一消息多次渲染不重复 createObjectURL）。
+/// 附件对象在内存 convos 里稳定，IDB 恢复后引用不变，WeakMap 命中良好。
+const attMediaUrls = new WeakMap();
+function attMediaUrl(att) {
+  if (!att || !att.file) return "";
+  let u = attMediaUrls.get(att);
+  if (!u) {
+    u = URL.createObjectURL(att.file);
+    attMediaUrls.set(att, u);
+  }
+  return u;
+}
+/// 视频首帧缩略图（canvas 抽帧）：muted + metadata 预载后 seek 近 0 处抓帧。
+/// 失败/超时/无轨一律返回 null —— 播放器无 poster 也能正常用，只是不显示首帧。
+function videoPoster(file) {
+  return new Promise(res => {
+    let v;
+    try { v = document.createElement("video"); } catch { return res(null); }
+    let url;
+    try { url = URL.createObjectURL(file); } catch { return res(null); }
+    const finish = (poster) => { try { URL.revokeObjectURL(url); } catch {} try { v.pause(); v.src = ""; } catch {} res(poster); };
+    const timer = setTimeout(() => finish(null), 8000);
+    v.muted = true; v.playsInline = true; v.preload = "metadata";
+    v.onloadeddata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 10); } catch { clearTimeout(timer); finish(null); } };
+    v.onseeked = () => {
+      clearTimeout(timer);
+      try {
+        const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
+        if (!vw || !vh) return finish(null);
+        const w = 200, h = Math.max(1, Math.round(w * vh / vw));
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(v, 0, 0, w, h);
+        finish(c.toDataURL("image/jpeg", 0.72));
+      } catch { finish(null); }
+    };
+    v.onerror = () => { clearTimeout(timer); finish(null); };
+    v.src = url;
+  });
 }
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 let convos = [];            // 内存全量（UI 数据源，按 updated 倒序），IDB 是持久镜像
@@ -1121,9 +1168,13 @@ function renderMessages() {
   }
   col.innerHTML = c.msgs.map((m, i) => {
     if (m.role === "user") {
-      const chips = (m.attachments || []).map(a => a.dataUrl
-        ? `<img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">`
-        : `<span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>`).join("");
+      const chips = (m.attachments || []).map(a => {
+        if (a.dataUrl) return `<img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">`;
+        const src = attMediaUrl(a);
+        if (a.kind === "audio" && src) return `<div class="att-media"><div class="att-media-ic">🎵</div><audio class="att-audio" controls preload="metadata" src="${src}"></audio><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
+        if (a.kind === "video" && src) return `<div class="att-media"><video class="att-video" controls preload="metadata" playsinline${a.poster ? ` poster="${a.poster}"` : ""} src="${src}"></video><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
+        return `<span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>`;
+      }).join("");
       const attRow = chips ? `<div class="att-row">${chips}</div>` : "";
       return `<div class="msg user" data-idx="${i}"><div class="msg-body">${attRow}${m.content ? `<div class="content">${esc(m.content)}</div>` : ""}<div class="msg-meta">${fmtTime(m.ts)}</div></div></div>`;
     }
@@ -1169,9 +1220,17 @@ async function deflateB64url(text) {
   return b64urlFromBytes(buf);
 }
 /// 二级子域优先：www.x.com / app.x.com → s.x.com；localhost/IP 回落同源 /s。
+/// 平台域（workers.dev / vercel.app / github.io…）用户无权配 s.<子域>
+/// （那个子域是平台的地盘，打开必然 404——v0.10.0 实测踩坑），必须回落同源。
+const PLATFORM_SUFFIXES = ["workers.dev", "vercel.app", "github.io", "pages.dev", "netlify.app",
+  "render.com", "onrender.com", "fly.dev", "railway.app", "up.railway.app", "herokuapp.com",
+  "glitch.me", "repl.co", "surge.sh", "web.app", "firebaseapp.com", "appspot.com",
+  "trycloudflare.com", "ngrok.io", "loca.lt", "csb.app", "gitpod.io", "azurewebsites.net"];
 function shareOrigin() {
   const h = location.hostname;
-  if (h === "localhost" || !h.includes(".") || /^\d+(\.\d+){3}$/.test(h)) return location.origin;
+  const same = () => location.origin;
+  if (h === "localhost" || !h.includes(".") || /^\d+(\.\d+){3}$/.test(h)) return same();
+  if (PLATFORM_SUFFIXES.some(s => h === s || h.endsWith("." + s))) return same();
   const labels = h.split(".");
   const root = labels.length >= 3 ? labels.slice(1).join(".") : h;
   return location.protocol + "//s." + root;
@@ -1185,16 +1244,32 @@ async function buildShareUrl(text) {
   const frag = typeof CompressionStream !== "undefined" ? "z." + await deflateB64url(json) : "p." + b64urlUnicode(json);
   return shareOrigin() + "/s#" + frag;
 }
+/// 分享：优先直通系统分享面板（不弹二级对话框——「不要出来二级页中断」）；
+/// 系统分享不可用/失败（如微信内置浏览器）才落级到分享对话框
+/// （复制链接 / 二维码 / 打开分享页）。AbortError = 用户主动取消，安静退出。
 async function shareMsg(btn) {
   const text = msgTextOf(btn);
   if (!text.trim()) { toast("没有可分享的内容", "err"); return; }
   let url = null;
-  try { url = await buildShareUrl(text); } catch { /* 降级走纯文本分享 */ }
+  try { url = await buildShareUrl(text); } catch { /* 压缩不可用：降级走纯文本 */ }
+  if (url && navigator.share) {
+    try {
+      await navigator.share({ title: "AI 助手的回答", text: "看看这个 AI 回答", url });
+      return; // 系统分享成功
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // 用户取消：安静退出
+      // 其余失败（微信里 share 常直接 reject）：落级对话框
+    }
+  }
   if (!url) {
-    try { if (navigator.share) { await navigator.share({ title: "AI 助手的回答", text }); return; } } catch (e) { if (e && e.name === "AbortError") return; }
+    if (navigator.share) {
+      try { await navigator.share({ title: "AI 助手的回答", text }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; }
+    }
     try { await navigator.clipboard.writeText(text); toast("当前环境不支持链接分享，已复制全文", "ok"); } catch { toast("分享失败", "err"); }
     return;
   }
+  // 对话框兜底
   $("share-url").value = url;
   $("share-sys").hidden = !navigator.share;
   $("share-qr").hidden = true;
@@ -1532,18 +1607,25 @@ $("file-input").addEventListener("change", async (e) => {
   e.target.value = ""; // 允许再次选择同一文件
   for (const f of files) {
     if (f.size > 20 * 1024 * 1024) { toast(`${f.name} 超过 20MB，已跳过`, "err"); continue; }
-    const kind = f.type.startsWith("image/") ? "image" : f.type.startsWith("audio/") ? "audio" : "file";
+    const kind = f.type.startsWith("image/") ? "image" : f.type.startsWith("audio/") ? "audio" : f.type.startsWith("video/") ? "video" : "file";
     const att = { name: f.name, size: f.size, type: f.type || "application/octet-stream", kind, file: f };
     if (kind === "image") { try { att.dataUrl = await readAsDataURL(f); } catch { /* 无预览也能发 */ } }
     attachments.push(att);
+    // 视频首帧缩略图异步抽取：不阻塞后续文件与发送，抽帧失败就只留播放器
+    if (kind === "video") videoPoster(f).then(p => {
+      if (p && attachments.includes(att)) { att.poster = p; renderAttachments(); }
+    }).catch(() => {});
   }
   renderAttachments();
 });
 function renderAttachments() {
   const bar = $("attach-bar");
-  bar.innerHTML = attachments.map((a, i) => a.dataUrl
-    ? `<div class="att-chip"><img src="${a.dataUrl}" alt=""><div class="att-nm">${esc(a.name)}</div><button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button></div>`
-    : `<div class="att-chip"><div class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "image" ? "🖼" : "📎"}</div><div class="att-nm">${esc(a.name)}</div><button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button></div>`).join("");
+  bar.innerHTML = attachments.map((a, i) => {
+    const thumb = a.dataUrl || a.poster; // 图片 dataUrl / 视频首帧 → 缩略图，无则类型图标
+    return thumb
+      ? `<div class="att-chip"><img src="${thumb}" alt=""><div class="att-nm">${esc(a.name)}</div><button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button></div>`
+      : `<div class="att-chip"><div class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎"}</div><div class="att-nm">${esc(a.name)}</div><button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button></div>`;
+  }).join("");
   bar.hidden = attachments.length === 0;
 }
 function removeAttachment(i) { attachments.splice(i, 1); renderAttachments(); }
@@ -1742,7 +1824,8 @@ async function transcribeBlob(blob, name) {
 
 const VoiceCfg = {
   KEY: "gw_voice_cfg",
-  def: { ttsMode: "auto", sttMode: "auto", ttsVoice: "", ttsRate: 1.05, customTts: { url: "", key: "", model: "", voice: "" } },
+  // callMode：通话交流模式——duplex 同时问答（播报中可抢话打断）/ half 一问一答（等 AI 说完）
+  def: { ttsMode: "auto", sttMode: "auto", callMode: "duplex", ttsVoice: "", ttsRate: 1.05, customTts: { url: "", key: "", model: "", voice: "" } },
   load() { try { return { ...this.def, ...(JSON.parse(localStorage.getItem(this.KEY) || "{}")) }; } catch { return { ...this.def }; } },
   save(c) { try { localStorage.setItem(this.KEY, JSON.stringify(c)); } catch {} },
 };
@@ -1897,18 +1980,24 @@ async function customTtsBlob(text) {
   return blob;
 }
 /// 播放一句话（按当前模式走递降链）。浏览器模式直接用 speechSynthesis。
+let ttsDegradeNotified = false; // 降级提示只弹一次，避免通话里每句都刷 toast
 async function ttsPlaySentence(text) {
   const mode = voiceCfg.ttsMode;
   if (mode === "browser") { await BrowserTts.init(); return BrowserTts.speak(text); }
   try {
     const blob = mode === "custom" ? await customTtsBlob(text) : await ttsBlob(text);
     await playCallBlob(blob);
+    ttsDegradeNotified = false; // 网关恢复：重置提示，下次故障再告知
   } catch (e) {
     if (String(e && e.message) === "stopped") return; // 被主动停止（打断/挂断）：静默
     if (mode === "gateway") throw e; // 仅网关：不降级，错误上抛让 UI 明示
     // auto / custom：降级到浏览器语音（离线可用的最后兜底）
     await BrowserTts.init();
     if (!BrowserTts.ready) throw e;
+    if (!ttsDegradeNotified) {
+      ttsDegradeNotified = true;
+      toast("网关播音不可用，已切浏览器语音（检查渠道 Key 或语音设置）", "");
+    }
     return BrowserTts.speak(text);
   }
 }
@@ -2055,6 +2144,35 @@ const VoiceInput = {
 // 事件：open / press（按下，播报思考中=打断）/ release（松手）/ cancel（上滑取消）
 //       mic_fail / stt_ok / stt_fail / sentence（首句出炉）/ done（播报排空）
 //       fail / hangup
+/// 媒体栈手势预热（iOS/Android 自动播放策略的对策）。
+/// 通话/播音链路「按键 → 识别 → 流式 → 合成」距用户手势已数秒，不预热则：
+/// ① new Audio().play() 抛 NotAllowedError（iOS 只放行手势栈内的播放）；
+/// ② speechSynthesis 在部分 iOS/微信版本不发声。
+/// 在首个用户手势里同步调用：恢复 AudioContext、播 0.1s 静音再 pause
+/// （换取 iOS sticky media activation）、发空 utterance 唤醒语音引擎。
+let mediaUnlocked = false;
+function unlockMedia() {
+  if (mediaUnlocked) return;
+  mediaUnlocked = true;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) { const ctx = new AC(); if (ctx.state === "suspended") ctx.resume().catch(() => {}); }
+  } catch {}
+  try {
+    const a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=");
+    a.play().then(() => { a.pause(); a.src = ""; }).catch(() => {});
+  } catch {}
+  try {
+    if ("speechSynthesis" in window) {
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      speechSynthesis.speak(u); // iOS：首次 speak 唤醒语音引擎与 voices 列表
+    }
+  } catch {}
+}
+// 页面任意处首个手势即预热（播音按钮 / 通话页共用，once 只跑一次）
+window.addEventListener("pointerdown", unlockMedia, { once: true, capture: true });
+
 const CallFsm = {
   s: "closed",
   E: {
@@ -2081,10 +2199,16 @@ const CALL_STATUS = {
   thinking: "AI 思考中…",
   speaking: "AI 播报中…（按住按钮可打断）",
 };
+/// 状态文案按交流模式分化：一问一答（half）下播报中不可抢话
+function callStatusText(s) {
+  if (s === "speaking" && voiceCfg.callMode === "half") return "AI 播报中…（一问一答：说完才能讲）";
+  if (s === "thinking" && voiceCfg.callMode === "half") return "AI 思考中…（一问一答：说完才能讲）";
+  return CALL_STATUS[s];
+}
 function callSyncUi() {
   const s = CallFsm.s;
   const st = $("call-status");
-  if (st && CALL_STATUS[s] != null) st.textContent = CALL_STATUS[s];
+  if (st && CALL_STATUS[s] != null) st.textContent = callStatusText(s);
   setOrb(s === "listening" ? "listening" : (s === "transcribing" || s === "thinking") ? "thinking" : s === "speaking" ? "speaking" : "idle");
   const btn = $("btn-call-talk");
   if (btn) btn.classList.toggle("busy", s === "transcribing");
@@ -2106,6 +2230,21 @@ function setOrb(state) {
   orb.classList.toggle("speaking", state === "speaking");
 }
 function refreshCallModelBtn() { $("btn-call-model").textContent = (callModel || "自动") + " ▾"; }
+/// 交流模式：一问一答（half：AI 思考/播报期间不能抢话）/ 同时问答（duplex：随时可打断）
+function refreshCallModeBtn() {
+  const b = $("btn-call-mode");
+  if (b) b.textContent = voiceCfg.callMode === "half" ? "↔ 一问一答" : "⇄ 同时问答";
+}
+function toggleCallMode() {
+  voiceCfg.callMode = voiceCfg.callMode === "half" ? "duplex" : "half";
+  VoiceCfg.save(voiceCfg);
+  refreshCallModeBtn();
+  if (callOpen) {
+    $("call-status").textContent = voiceCfg.callMode === "half"
+      ? "一问一答：按住说话，AI 说完才能讲下一句"
+      : "同时问答：AI 播报时按住按钮可抢话打断";
+  }
+}
 function openCallModelPicker() {
   renderModelList(callModel, (m) => {
     callModel = m;
@@ -2118,6 +2257,7 @@ function openCallModelPicker() {
 }
 function openCall() {
   if (callOpen) return;
+  unlockMedia(); // 用户点电话图标 = 手势：预热媒体栈（iOS 不预热则后面 play() 被拒）
   CallFsm.fire("open"); // closed → idle
   callOpen = true;
   callInterrupt = false;
@@ -2127,6 +2267,7 @@ function openCall() {
   $("call-live").hidden = true;
   $("call-live").textContent = "";
   refreshCallModelBtn();
+  refreshCallModeBtn();
   $("call-overlay").hidden = false;
 }
 function endCall() {
@@ -2156,6 +2297,11 @@ function callLog(html) {
     e.preventDefault();
     if (!callOpen) return;
     if (CallFsm.s === "transcribing") { toast("识别中，稍候…", ""); return; }
+    // 一问一答模式：AI 思考/播报期间不抢话，等它说完（同时问答模式才允许 barge-in）
+    if (voiceCfg.callMode === "half" && (CallFsm.s === "thinking" || CallFsm.s === "speaking")) {
+      toast("一问一答模式：等 AI 说完再说话", "");
+      return;
+    }
     if (!CallFsm.can("press")) { toast("等 AI 说完…", ""); return; }
     // 打断（barge-in）：播报/思考中抢说——立即停播 + 中断在途链路，
     // 不等当前句播完。高频操作，走状态机显式迁移。

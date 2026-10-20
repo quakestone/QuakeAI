@@ -1,5 +1,63 @@
 # CHANGES
 
+## v0.11.0（2026-10-23）—— 呼叫交流模式 / 分享直通系统面板 / 多媒体容器播放
+
+按用户测试反馈三条：「① 呼叫页面无法播放，该页面增加交流模式设置：一问一答 /
+同时问答；② 分享不要弹二级页中断，直接走系统分享但没成功；③ 图片.音频视频等
+多媒体支持缩略图，音视频引入容器播放」。
+
+### ① 呼叫页播放修复 + 交流模式
+
+**播放修复根因**（iOS/Android 媒体自动播放策略）：通话链路「按键 → 识别 →
+流式 → 合成」距用户手势已数秒，`Audio.play()` 不在手势栈内被系统拒
+（NotAllowedError），`speechSynthesis` 在部分 iOS/微信版本不发声。修复：
+首个 `pointerdown` 手势内 `unlockMedia()` 同步预热——恢复 AudioContext、
+播 0.1s 静音 WAV 换取 iOS sticky media activation、发空 utterance 唤醒
+语音引擎；`openCall()` 里也显式调一次（点电话图标即手势）。
+
+**交流模式** `callMode`（`VoiceCfg` 持久化，默认 duplex）：
+
+- **duplex 同时问答**：播报/思考中按住说话 = barge-in 打断（v0.8.0 一等公民）；
+- **half 一问一答**：thinking/speaking 期间禁抢话（toast「等 AI 说完再说话」），
+  状态文案同步分化。呼叫页顶部 ⇄/↔ 按钮切换，localStorage 持久化。
+
+**TTS 降级可见提示**：网关播音失败落浏览器语音时 toast 一次
+（`ttsDegradeNotified` 防刷屏）——此前静默降级，用户侧表现就是「没坏但没声」。
+
+### ② 分享直通系统面板（修「没成功」）
+
+- **原流程**：点分享先弹二级对话框（链接框 + 二维码），用户再点对话框里的
+  「系统分享」——多一跳，且系统面板被二级页挡住，用户感知「分享没成功」。
+- **新流程**：`shareMsg()` 优先 `navigator.share()` 直通系统面板；
+  `AbortError`（用户取消）安静退出；其余失败（微信内 share 常直接 reject）
+  才落级原对话框；无 `navigator.share`（微信 WebView）也走原对话框。
+- **顺手修 s. 子域 404（截图实测根因）**：`quakestone987.workers.dev` 是
+  Cloudflare 平台域，用户无权配 `s.` 子域——旧推断逻辑必然产出不存在的子域
+  （截图里 Page not found 的由来）。新增 `PLATFORM_SUFFIXES` 平台域识别
+  （workers.dev / vercel.app / github.io 等 22 个公共后缀），命中即回落同源
+  `/s`；自有域（www.x.com → s.x.com，生产 CNAME）推断逻辑保留。
+  `shareOrigin()` 有 node 单测（location stub，6 用例）防回归。
+
+### ③ 多媒体容器播放
+
+- 附件 `kind` 增加 `video`；`slimAtt` 音频 + 视频存 Blob 进 IDB
+  （结构化克隆，刷新不丢），图片 dataUrl 保留；
+- 消息渲染：图片 `img.att-thumb` 缩略图；音频
+  `<audio controls preload="metadata">`；视频
+  `<video controls preload="metadata" playsinline>`；
+  blob: URL 按附件对象 WeakMap 缓存（多次渲染不重复 createObjectURL）；
+- **视频首帧缩略图**：`videoPoster()` canvas 抽帧（muted + metadata 预载 +
+  seek 0.1s），成功存 poster 并持久化 IDB，失败/无轨降级为无 poster 播放器；
+  输入区 chip 视频显示首帧缩略（抽帧未完成时 🎬 图标）；
+- 刷新后音视频容器仍可播放（IDB Blob 恢复 + blob: 重建）——Playwright 实测覆盖。
+
+### 验证
+
+e2e **183/183**（§18 新增 20 条断言：模式定义/切换/拦截/手势预热/降级提示/
+分享直通顺序/AbortError/平台域识别/多媒体四件套/shareOrigin 6 用例 node 单测）
++ 单测 **11/11** + Playwright **23 断言三场景**（分享直通三种降级路径、half 双态
+禁抢话 + duplex barge-in + idle 起录、多媒体缩略/容器/poster/刷新恢复）零 JS 错误。
+
 ## v0.10.0（2026-10-22）—— 分享微信功能线：/s 二级子页 + 零存储链接分享
 
 按用户三条优化指令之分享线：「分享微信功能线是应用分发裂变的很重要途径，
