@@ -522,6 +522,21 @@
   .model-opt:hover { border-color: var(--acc); }
   .model-opt.sel { border-color: var(--acc); background: var(--sel); }
   .model-opt .p { margin-left: auto; font-size: 11px; color: var(--dim); white-space: nowrap; }
+  /* ---- 模型可用性态（v0.19.10）----
+     受限/不可用必须一眼看出来：左侧竖条 + 降透明度 + 名称后括号写原因。
+     可用态不加任何修饰，避免满屏噪音。 */
+  .model-opt .avail-br { font-size: 11px; color: var(--dim); margin-left: 4px; font-weight: 400; }
+  .model-opt.probing { opacity: .75; }
+  .model-opt.probing .avail-br { color: var(--acc); }
+  .model-opt.subst { border-style: dashed; }
+  .model-opt.subst .avail-br { color: var(--warn, #d19a2a); }
+  .model-opt.blocked { opacity: .55; cursor: not-allowed; box-shadow: inset 3px 0 0 var(--warn, #d19a2a); }
+  .model-opt.blocked:hover { border-color: var(--border); }
+  .model-opt.gone { opacity: .4; cursor: not-allowed; box-shadow: inset 3px 0 0 var(--bad); }
+  .model-opt.gone:hover { border-color: var(--border); }
+  .model-opt.blocked.sel, .model-opt.gone.sel { outline: 1px dashed var(--bad); }
+  .avail-banner { border: 1px solid var(--warn, #d19a2a); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; font-size: 12px; color: var(--dim); }
+  .avail-banner b { color: var(--txt); }
 
   /* ================= 语音设置对话框 ================= */
   .dlg-sub { font-size: 12px; color: var(--dim); margin: -6px 0 14px; line-height: 1.6; }
@@ -1028,8 +1043,13 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   </div>
   <input id="model-search" type="search" placeholder="🔍 搜索模型名 / 渠道 / 供应商…" autocomplete="off">
   <div id="mp-current" class="mp-current"></div>
+  <div id="avail-banner" class="avail-banner" hidden></div>
   <div id="model-list"></div>
   <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button></div>
+  <div class="mp-pager" style="margin-top:4px">
+    <button style="width:auto;padding:0 12px;font-size:12px" onclick="availRescan()" title="忽略 2 小时缓存，立即重新探测本页">↻ 重新检测本页</button>
+    <span id="avail-ts" style="font-size:11px"></span>
+  </div>
   <label class="mp-ctx-toggle" title="换模型时把上下文边界重置，避免新模型照抄上一个模型的回答（例如「我是 ChatGLM」）">
     <input type="checkbox" id="ctx-reset-toggle" onchange="setCtxReset(this.checked)">
     <span>换模型时重置上下文<em>防止新模型照抄上一个模型的自我描述</em></span>
@@ -3411,8 +3431,201 @@ const MP_TABS = ["text", "skill", "audio", "mm"];
 let mpTab = "text";                    // 当前标签
 let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };  // 各标签独立页码
 let mpQuery = "";       // 模型名 / 渠道 / provider 模糊搜索词
+
+// ================= 模型可用性（v0.19.10） =================
+// 打开模型页 → 工作流引擎起一条 run → 每个模型一步 → 结论进 WASM 状态机。
+// 2 小时内再进不重扫（TTL 判定也在状态机里，不在前端散着写）。
+const AVAIL_TTL_MS = 2 * 60 * 60 * 1000;   // 2 小时
+const AVAIL_KEY = "gw_avail_v1";           // 带版本：格式变了直接整体失效，不做迁移
+const AVAIL_MAX = 200;                     // 容量保护：只留最近 200 条
+let AVAIL_MEM = {};        // model -> { state, reason, bracket, http, ms, ts, served }
+let availScanning = false;
+let MP_SHOWN = [];         // 当前页可见模型名（扫描范围 = 这一页）
+let MP_LAST_SEL = undefined, MP_LAST_CB = null;
+let AVAIL_HANDLE = -1;     // 复用同一个引擎句柄，每次 engine_load 换 seed（避免句柄泄漏）
+
+function availCacheLoad() {
+  try {
+    const o = JSON.parse(localStorage.getItem(AVAIL_KEY) || "{}");
+    return (o && typeof o === "object") ? o : {};
+  } catch { return {}; }
+}
+function availCacheSave(o) {
+  const ks = Object.keys(o);
+  if (ks.length > AVAIL_MAX) {
+    ks.sort((a, b) => (o[a].ts || 0) - (o[b].ts || 0));
+    for (const k of ks.slice(0, ks.length - AVAIL_MAX)) delete o[k];
+  }
+  try { localStorage.setItem(AVAIL_KEY, JSON.stringify(o)); } catch {}
+}
+
+/// 把一次探测结论喂进状态机，读回可渲染字段。判定全在 WASM 里，这里只做搬运。
+/// outcome: {kind:"mark", code} | {kind:"fail", reason, ms} | {kind:"http", http, ms, served}
+function wfAvailApply(ex, model, outcome) {
+  const h = ex.avail_new();
+  try {
+    const [p, l] = wfStr(ex, model);
+    ex.avail_set_requested(h, p, l);
+    if (outcome.kind === "mark") {
+      ex.avail_mark(h, outcome.code);
+    } else if (outcome.kind === "fail") {
+      ex.avail_fail(h, outcome.reason, outcome.ms | 0);
+    } else {
+      const [sp, sl] = wfStr(ex, outcome.served || "");
+      ex.avail_result(h, outcome.http, outcome.ms | 0, sp, sl);
+    }
+    const bp = ex.avail_bracket_ptr(h), bl = ex.avail_bracket_len(h);
+    const bracket = bl > 0 ? new TextDecoder().decode(new Uint8Array(ex.memory.buffer, bp, bl)) : "";
+    return { state: ex.avail_state(h), reason: ex.avail_reason(h), bracket, http: ex.avail_http(h), ms: ex.avail_latency(h) };
+  } finally { ex.avail_drop(h); }
+}
+
+/// TTL 判定同样走状态机（唯一实现），这里只把缓存里的 ts 递进去。
+function availShouldScanTs(ex, ts, now) {
+  const h = ex.avail_new();
+  try {
+    if (ts) ex.avail_touch(h, ts);
+    return ex.avail_should_scan(h, now, AVAIL_TTL_MS) === 1;
+  } finally { ex.avail_drop(h); }
+}
+
+function availChannelsFor(model) {
+  return CHANNELS.filter(c => c.kind !== "audio" && effModels(c).some(m => m.name === model));
+}
+
+/// 探测单个模型：缓存 → 配置级短路 → 真正请求。返回写入状态机后的结论。
+async function probeOneModel(model, force) {
+  const ex = await WF.ensure();
+  if (!ex || !ex.avail_new) return null;
+  const cache = availCacheLoad();
+  const now = Date.now();
+  const hit = cache[model];
+  if (!force && hit && !availShouldScanTs(ex, hit.ts || 0, now)) {
+    AVAIL_MEM[model] = { ...hit, cached: true };
+    return AVAIL_MEM[model];
+  }
+  // 配置级短路：不发任何请求就能出结论（最省额度、也最快）
+  const chs = availChannelsFor(model);
+  const enabled = chs.filter(c => c.enabled);
+  const hasKey = enabled.some(c => c.api_key_masked && c.api_key_masked !== "未登记");
+  let outcome;
+  if (!chs.length) outcome = { kind: "fail", reason: 8, ms: 0 };            // 无渠道 ≈ 模型不存在
+  else if (!enabled.length) outcome = { kind: "mark", code: 1 };            // 渠道未启用
+  else if (!hasKey) outcome = { kind: "mark", code: 2 };                    // 未配置 Key
+  else {
+    try {
+      const j = await api("/models/test", "POST", { model });
+      const rs = j.results || [];
+      const ok = rs.find(r => r.status === "ok");
+      if (ok) {
+        outcome = { kind: "http", http: ok.http_status || 200, ms: ok.latency_ms || 0, served: ok.served_model || "" };
+      } else {
+        const bad = rs.find(r => r.status === "http-error");
+        outcome = bad
+          ? { kind: "http", http: bad.http_status || 0, ms: bad.latency_ms || 0, served: "" }
+          : { kind: "fail", reason: 7, ms: 0 };                              // 网络/构建失败
+      }
+    } catch (e) {
+      outcome = { kind: "fail", reason: 7, ms: 0 };
+    }
+  }
+  const r = wfAvailApply(ex, model, outcome);
+  AVAIL_MEM[model] = { ...r, ts: now };
+  cache[model] = { ...r, ts: now };
+  availCacheSave(cache);
+  return AVAIL_MEM[model];
+}
+
+/// 一条 run = 一次页面扫描：页上有几个模型就生成几个步骤。
+/// force 要随步骤带下去——否则「重新检测本页」会命中刚写的缓存，等于没重扫。
+function availSeed(models, force) {
+  return JSON.stringify({
+    id: "model_probe", version: 1,
+    trigger: { event: "models.page_open" },
+    steps: models.map((m, i) => ({ id: "p" + i, plugin: "wf.model_probe", input: { model: m, force: !!force } })),
+  });
+}
+function availLoadSeed(ex, seed) {
+  if (AVAIL_HANDLE < 0) AVAIL_HANDLE = ex.engine_new();
+  const [p, l] = wfStr(ex, seed);
+  const r = ex.engine_load(AVAIL_HANDLE, p, l);
+  if (r !== 0) throw new Error("probe seed: " + wfErr(ex));
+  return AVAIL_HANDLE;
+}
+
+/// 扫描当前页。force=true 忽略 TTL（「重新检测本页」）。
+async function availScanVisible(force) {
+  // 锁必须在第一个 await 之前上，否则两次快速触发会各起一条 run
+  if (availScanning) return;
+  if (!$("model-dlg") || !$("model-dlg").open) return;
+  // v1 只扫文本模型：音频/图视模型的可用性判定口径不同（不都是 /chat/completions），
+  // 硬套会把它们误标成"模型不存在"。这两个标签暂不扫。
+  if (mpTab !== "text") return;
+  availScanning = true;
+  try {
+    const ex = await WF.ensure();
+    if (!ex || !ex.avail_new) return;   // 内核不可用 → 不扫，列表照常能用（降级）
+    const models = MP_SHOWN.slice();
+    if (!models.length) { renderAvailBanner(); return; }
+
+    const cache = availCacheLoad();
+    const now = Date.now();
+    const need = models.filter(m => force || availShouldScanTs(ex, (cache[m] && cache[m].ts) || 0, now));
+    // 未过期的先铺上，避免"检测中"闪一下又变回旧结论
+    for (const m of models) {
+      if (cache[m] && need.indexOf(m) < 0) AVAIL_MEM[m] = { ...cache[m], cached: true };
+    }
+    if (!need.length) { rerenderModelList(); renderAvailBanner(); updateAvailTs(); return; }
+
+    for (const m of need) AVAIL_MEM[m] = { state: 1, reason: 0, bracket: "检测中…", http: 0, ms: 0, ts: 0 };
+    rerenderModelList(); renderAvailBanner();
+
+    const h = availLoadSeed(ex, availSeed(need, force));
+    await wfDrive(ex, h, { event: "models.page_open", models: need }, WF_PLUGINS["wf.model_probe"]);
+  } catch (e) {
+    console.warn("模型可用性扫描失败（已降级）:", e);
+  } finally {
+    availScanning = false;
+    rerenderModelList(); renderAvailBanner(); updateAvailTs();
+  }
+}
+
+/// 重新渲染时保留原来的选中值与回调（通话页用的是自己的回调，不能被重置成 pickModel）
+function rerenderModelList() {
+  if (!$("model-dlg") || !$("model-dlg").open) return;
+  renderModelList(MP_LAST_SEL, MP_LAST_CB);
+}
+function availWarn(name) {
+  const av = AVAIL_MEM[name];
+  toast(`${name} 当前不可选：${av && av.bracket ? av.bracket : "不可用"}`, "warn");
+}
+async function availRescan() {
+  toast("正在重新检测本页…");
+  await availScanVisible(true);
+}
+// 搜索框每敲一个字都会换页，必须防抖，否则一次输入就能把探测额度打光
+const availScanDebounced = debounce(() => availScanVisible(), 700);
+function renderAvailBanner() {
+  const el = $("avail-banner"); if (!el) return;
+  const av = curModel ? AVAIL_MEM[curModel] : null;
+  // 已选中的模型变受限：不清除用户的选择，只明确告知（选择权优先于一次快照结论）
+  if (av && (av.state === 4 || av.state === 5)) {
+    el.hidden = false;
+    el.innerHTML = `当前所选 <b>${esc(curModel)}</b> 受限：${esc(av.bracket || "不可用")} —— 请另选一个模型`;
+  } else {
+    el.hidden = true; el.textContent = "";
+  }
+}
+function updateAvailTs() {
+  const el = $("avail-ts"); if (!el) return;
+  const ts = MP_SHOWN.map(m => (AVAIL_MEM[m] || {}).ts || 0).filter(Boolean);
+  if (!ts.length) { el.textContent = ""; return; }
+  const d = new Date(Math.max(...ts));
+  el.textContent = `上次检测 ${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")} · 2 小时内不再自动检测`;
+}
+
 function mpPage() { return mpPages[mpTab] || 1; }
-function setMpPage(p) { mpPages[mpTab] = Math.max(1, p); renderModelList(); }
+function setMpPage(p) { mpPages[mpTab] = Math.max(1, p); renderModelList(); availScanVisible(); }
 function turnModelPage(d) { setMpPage(mpPage() + d); }
 function setMpTab(k) {
   if (!MP_TABS.includes(k)) return;
@@ -3422,11 +3635,13 @@ function setMpTab(k) {
   const s = $("model-search"); if (s) s.value = "";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
   renderModelList();
+  availScanVisible();
 }
 function setModelQuery(q) {
   mpQuery = (q || "").trim().toLowerCase();
   mpPages[mpTab] = 1;     // 换搜索词回到当前标签的第 1 页
   renderModelList();
+  availScanDebounced();   // 防抖：边打字边扫会把额度打光
 }
 
 let modelPickCb = null;
@@ -3440,6 +3655,8 @@ function openModelPicker() {
   const ct = $("ctx-reset-toggle"); if (ct) ct.checked = ctxResetOn();
   const ctLabel = ct?.closest("label"); if (ctLabel) ctLabel.hidden = false;
   renderModelList(); modelDlg.showModal();
+  // 打开即扫本页（2 小时内命中缓存则不发起任何探测）
+  availScanVisible();
 }
 // 各标签的候选来源：
 //   text  = 可用 chat 渠道的文本模型（沿用旧口径：effModels，避免只登记 models_meta 的渠道丢模型）
@@ -3475,6 +3692,9 @@ function renderMpCurrent() {
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
+  // 记下本次的选中值与回调：扫描期间的重绘必须沿用它们，
+  // 否则通话页的自定义回调会被重置成 pickModel。
+  MP_LAST_SEL = sel; MP_LAST_CB = modelPickCb;
   renderMpCurrent();
   // skill 标签：skill 是独立于模型对象的表达线（有自己的标题与提示词正文），
   // 展示使用最频繁的前 6 条 + 第 7 行「扩展 skill」入口，不从模型池里取数据。
@@ -3505,6 +3725,8 @@ function renderModelList(sel, onPick) {
   const cur = mpPages[mpTab];
   const slice = rest.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
   const shown = autoItem && cur === 1 ? [autoItem, ...slice] : slice;  // 「自动」仅在第一页出现
+  // 扫描范围 = 本页可见的具体模型（「自动」不是具体模型，不扫）
+  MP_SHOWN = shown.filter(it => !it.auto).map(it => it.name);
 
   const autoSel = sel ? "" : "sel";
   let html = shown.map(it => {
@@ -3514,7 +3736,14 @@ function renderModelList(sel, onPick) {
     const c = it.ch;
     // 音频 / 图视标签下补能力徽章，用户一眼知道选的是 STT 还是 TTS、视觉还是视频
     const capBadge2 = it.kind ? `<span class="cap-badge">${capBadge(it.alt_kind && it.alt_kind !== it.kind ? it.kind : it.kind)}</span>` : "";
-    return `<div class="model-opt ${sel === it.name ? "sel" : ""}" onclick="modelPickCb('${esc(it.name)}')"><div><b>${esc(it.name)}</b>${capBadge2}</div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
+    // 可用性态：可用（2）/未探测（0）不加任何修饰；其余按状态上样式 + 括号写原因
+    const av = AVAIL_MEM[it.name];
+    const st = av ? av.state : 0;
+    const cls = st === 1 ? "probing" : st === 3 ? "subst" : st === 4 ? "blocked" : st === 5 ? "gone" : "";
+    const blocked = st === 4 || st === 5;
+    const br = av && av.bracket ? `<span class="avail-br">（${esc(av.bracket)}）</span>` : "";
+    const act = blocked ? `availWarn('${esc(it.name)}')` : `modelPickCb('${esc(it.name)}')`;
+    return `<div class="model-opt ${sel === it.name ? "sel" : ""} ${cls}"${blocked ? ' aria-disabled="true"' : ""} onclick="${act}"><div><b>${esc(it.name)}</b>${br}${capBadge2}</div><span class="p">${esc(c.name)} · ${esc(c.provider)} · ${esc(c.tier)} · 积分 ${it.score}</span></div>`;
   }).join("");
   if (!usable.length) html += `<div class="empty">还没有可用渠道 —— 去「模型管理」登记资源并启用</div>`;
   else if (!rest.length && mpQuery) html += `<div class="empty">没有匹配「${esc(mpQuery)}」的模型 —— 换个关键词，或用上方输入框直接指定自定义模型名</div>`;
@@ -4936,6 +5165,15 @@ const WF_SEED_MEMORY = JSON.stringify({ id: "memory_update", version: 1, trigger
 
 // ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
 const WF_PLUGINS = {
+  // ⓪ 模型可用性探测（v0.19.10）：一条 run 里每个模型一步，串行执行。
+  // 判定不在插件里做——插件只负责"取结论"，状态机负责"这结论意味着什么"。
+  "wf.model_probe": async (inp) => {
+    const model = String((inp && inp.model) || "");
+    if (!model) return { skipped: true };
+    const r = await probeOneModel(model, !!(inp && inp.force));
+    rerenderModelList();          // 边扫边显示，每行只变一次，不会来回抖
+    return r || { skipped: true };
+  },
   // ① token 流用量记账：累加进会话，更新「本条 + 会话累计」数据
   "wf.usage_tally": async (inp) => {
     const c = WF.c; if (!c) return { ok: true };

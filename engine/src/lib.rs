@@ -612,6 +612,255 @@ impl ModelSelFSM {
     pub fn label(&self) -> &'static str { self.state.label() }
 }
 
+// ===== 模型可用性状态机（ModelAvailFSM） =====
+// 管的是「这个模型**现在**能不能用、为什么不能用」——与 ModelSelFSM（这一次请求选了谁）
+// 和 MemoryFSM（会话上下文窗口）互不重叠。
+//
+// 设计要点：
+// 1. **配置级原因不发网络请求**：渠道未启用 / 未配 Key 直接短路成 Blocked，
+//    既省额度又快（这是"选了不生效"的最高频原因）。
+// 2. **TTL 的唯一实现**：should_scan 是"2 小时内不重扫"的唯一判定点，
+//    放前端只会散成多处 if，且没法单测。
+// 3. **原因可比较**：同一模型可能挂在多个渠道，全部失败时取"修复代价最低"的那条，
+//    让括号里给的是用户能立刻动手的那句话。
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvailState {
+    Unknown = 0,     // 未探测
+    Probing = 1,     // 探测中
+    Ok = 2,          // 实测通过，且上游自报 == 所选
+    Substituted = 3, // 可用，但上游换成了别的模型
+    Blocked = 4,     // 受限，但用户可修复（未启用 / 未配 Key / Key 无效 / 限流 / 5xx / 超时 / 网络）
+    Gone = 5,        // 不可用且用户无法自行修复（无渠道 / 上游 404）
+}
+
+impl AvailState {
+    #[allow(dead_code)]
+    fn from_code(c: i32) -> AvailState {
+        match c {
+            1 => AvailState::Probing,
+            2 => AvailState::Ok,
+            3 => AvailState::Substituted,
+            4 => AvailState::Blocked,
+            5 => AvailState::Gone,
+            _ => AvailState::Unknown,
+        }
+    }
+    fn code(self) -> i32 { self as i32 }
+    /// 是否算"能用"（决定行样式是否走可用态）
+    pub fn usable(self) -> bool {
+        matches!(self, AvailState::Ok | AvailState::Substituted)
+    }
+}
+
+/// 受限原因。数值顺序 = 修复代价从低到高，**数值越小越优先展示**。
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvailReason {
+    None = 0,
+    Disabled = 1,     // 渠道未启用 —— 点一下就好
+    NoKey = 2,        // 未配置 Key —— 填一个就好
+    Auth = 3,         // 401/403
+    RateLimited = 4,  // 429
+    Upstream = 5,     // 5xx
+    Timeout = 6,      // 超时
+    Network = 7,      // 网络不通
+    NotFound = 8,     // 404 模型不存在
+    Substituted = 9,  // 上游换家（不是"受限"，仅用于文案）
+}
+
+impl AvailReason {
+    #[allow(dead_code)]
+    fn from_code(c: i32) -> AvailReason {
+        match c {
+            1 => AvailReason::Disabled,
+            2 => AvailReason::NoKey,
+            3 => AvailReason::Auth,
+            4 => AvailReason::RateLimited,
+            5 => AvailReason::Upstream,
+            6 => AvailReason::Timeout,
+            7 => AvailReason::Network,
+            8 => AvailReason::NotFound,
+            9 => AvailReason::Substituted,
+            _ => AvailReason::None,
+        }
+    }
+    fn code(self) -> i32 { self as i32 }
+    /// 括号里给用户看的那句话（要能指导下一步动作，不要写"错误码 429"这种）
+    pub fn text(self) -> &'static str {
+        match self {
+            AvailReason::None => "",
+            AvailReason::Disabled => "渠道未启用",
+            AvailReason::NoKey => "未配置 Key",
+            AvailReason::Auth => "Key 无效",
+            AvailReason::RateLimited => "限流中",
+            AvailReason::Upstream => "上游异常",
+            AvailReason::Timeout => "超时",
+            AvailReason::Network => "网络不通",
+            AvailReason::NotFound => "模型不存在",
+            AvailReason::Substituted => "上游换家",
+        }
+    }
+    /// 从 HTTP 状态码归类（0 = 没拿到响应，按网络错误处理）
+    pub fn from_http(status: u16) -> AvailReason {
+        match status {
+            401 | 403 => AvailReason::Auth,
+            404 => AvailReason::NotFound,
+            429 => AvailReason::RateLimited,
+            0 => AvailReason::Network,
+            500..=599 => AvailReason::Upstream,
+            _ => AvailReason::Upstream,
+        }
+    }
+    /// 取更优先（修复代价更低）的那条；None 永远让位
+    pub fn prefer(self, other: AvailReason) -> AvailReason {
+        match (self, other) {
+            (AvailReason::None, o) => o,
+            (s, AvailReason::None) => s,
+            (s, o) => if o.code() < s.code() { o } else { s },
+        }
+    }
+}
+
+pub struct ModelAvailFSM {
+    state: AvailState,
+    reason: AvailReason,
+    requested: String,
+    served: String,
+    http: u16,
+    latency: u32,
+    last_ts: f64,
+}
+
+impl ModelAvailFSM {
+    pub fn new() -> Self {
+        ModelAvailFSM {
+            state: AvailState::Unknown,
+            reason: AvailReason::None,
+            requested: String::new(),
+            served: String::new(),
+            http: 0,
+            latency: 0,
+            last_ts: 0.0,
+        }
+    }
+
+    pub fn begin(&mut self) {
+        self.state = AvailState::Probing;
+        self.reason = AvailReason::None;
+        self.http = 0;
+        self.latency = 0;
+        self.served.clear();
+    }
+
+    /// 配置级短路：渠道未启用。不发请求就有结论。
+    pub fn mark_disabled(&mut self) {
+        self.state = AvailState::Blocked;
+        self.reason = AvailReason::Disabled;
+        self.http = 0;
+        self.latency = 0;
+        self.served.clear();
+    }
+
+    /// 配置级短路：已启用但没登记 Key。不发请求。
+    pub fn mark_no_key(&mut self) {
+        self.state = AvailState::Blocked;
+        self.reason = AvailReason::NoKey;
+        self.http = 0;
+        self.latency = 0;
+        self.served.clear();
+    }
+
+    /// 上游返回了（含错误状态）。served 为空表示上游没自报模型名。
+    pub fn result(&mut self, http: u16, latency_ms: u32, served: &str) {
+        self.http = http;
+        self.latency = latency_ms;
+        self.served = served.to_string();
+        if (200..300).contains(&http) {
+            if self.served.is_empty() || self.served == self.requested {
+                self.state = AvailState::Ok;
+                self.reason = AvailReason::None;
+            } else {
+                // 上游换家：能用，但不是你选的那个 —— 不算受限，但要警示
+                self.state = AvailState::Substituted;
+                self.reason = AvailReason::Substituted;
+            }
+        } else {
+            let r = AvailReason::from_http(http);
+            self.state = if r == AvailReason::NotFound { AvailState::Gone } else { AvailState::Blocked };
+            self.reason = r;
+        }
+    }
+
+    /// 传输层失败（fetch 抛错 / 超时）
+    pub fn fail(&mut self, reason: AvailReason, latency_ms: u32) {
+        self.state = if reason == AvailReason::NotFound { AvailState::Gone } else { AvailState::Blocked };
+        self.reason = reason;
+        self.http = 0;
+        self.latency = latency_ms;
+        self.served.clear();
+    }
+
+    /// 另一渠道的结论并入本模型：任一渠道可用即可用；全挂则保留"最可行动"的原因。
+    pub fn merge(&mut self, other_state: AvailState, other_reason: AvailReason) {
+        if other_state.usable() && !self.state.usable() {
+            self.state = other_state;
+            self.reason = other_reason;
+            return;
+        }
+        if other_state.usable() {
+            // 两边都能用：Substituted 让位给 Ok（有一个真用了所选模型就够了）
+            if other_state == AvailState::Ok {
+                self.state = AvailState::Ok;
+                self.reason = AvailReason::None;
+            }
+            return;
+        }
+        if self.state.usable() {
+            return;
+        }
+        // 都不可用：取修复代价更低的原因；Gone 让位给 Blocked（能修优先）
+        self.reason = self.reason.prefer(other_reason);
+        if other_state == AvailState::Blocked && self.state == AvailState::Gone {
+            self.state = AvailState::Blocked;
+        }
+    }
+
+    /// TTL 规则的唯一实现：距上次探测是否已超过 ttl（last_ts == 0 视为从未探测）。
+    pub fn should_scan(&self, now_ms: f64, ttl_ms: f64) -> bool {
+        if self.last_ts <= 0.0 { return true; }
+        now_ms - self.last_ts >= ttl_ms
+    }
+
+    pub fn touch(&mut self, now_ms: f64) { self.last_ts = now_ms; }
+    pub fn last_ts(&self) -> f64 { self.last_ts }
+    pub fn state(&self) -> AvailState { self.state }
+    pub fn reason(&self) -> AvailReason { self.reason }
+    pub fn http(&self) -> u16 { self.http }
+    pub fn latency(&self) -> u32 { self.latency }
+    pub fn served(&self) -> &str { &self.served }
+    pub fn requested(&self) -> &str { &self.requested }
+
+    pub fn set_requested(&mut self, m: &str) { self.requested = m.to_string(); }
+
+    /// 括号文案。**可用态返回空串**——满屏括号是噪音，只有需要解释时才出现。
+    pub fn bracket(&self) -> String {
+        match self.state {
+            AvailState::Unknown | AvailState::Ok => String::new(),
+            AvailState::Probing => "检测中…".to_string(),
+            AvailState::Substituted => {
+                if self.served.is_empty() {
+                    "上游换家".to_string()
+                } else {
+                    format!("上游实为 {}", self.served)
+                }
+            }
+            AvailState::Blocked | AvailState::Gone => self.reason.text().to_string(),
+        }
+    }
+}
+
+
 // ---- FSM 的 WASM ABI（仅 wasm32；宿主 cargo test 走下方单测） ----
 #[cfg(target_arch = "wasm32")]
 mod fsm_abi {
@@ -779,6 +1028,152 @@ mod modelsel_abi {
     #[no_mangle]
     pub extern "C" fn modelsel_applied_len(h: i32) -> i32 {
         SEL_REG.lock().unwrap().get(h as usize).and_then(|x| x.as_ref()).map(|f| f.applied().len() as i32).unwrap_or(0)
+    }
+}
+
+// ---- 模型可用性状态机的 WASM ABI（仅 wasm32；宿主 cargo test 走下方单测） ----
+#[cfg(target_arch = "wasm32")]
+mod avail_abi {
+    use super::*;
+    use std::sync::Mutex;
+
+    static AVAIL_REG: Mutex<Vec<Option<ModelAvailFSM>>> = Mutex::new(Vec::new());
+    static AVAIL_SCRATCH: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+
+    unsafe fn read_input(ptr: i32, len: i32) -> &'static [u8] {
+        std::slice::from_raw_parts(ptr as *const u8, len.max(0) as usize)
+    }
+    fn scratch_copy(s: &str) -> i32 {
+        let mut buf = AVAIL_SCRATCH.lock().unwrap();
+        buf.clear();
+        buf.extend_from_slice(s.as_bytes());
+        buf.as_ptr() as i32
+    }
+    fn with<F: FnOnce(&mut ModelAvailFSM)>(h: i32, f: F) {
+        let mut reg = AVAIL_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) {
+            if let Some(fsm) = slot.as_mut() { f(fsm); }
+        }
+    }
+    fn read_str(h: i32, f: impl Fn(&ModelAvailFSM) -> String) -> i32 {
+        let s = {
+            let reg = AVAIL_REG.lock().unwrap();
+            reg.get(h as usize).and_then(|x| x.as_ref()).map(f).unwrap_or_default()
+        };
+        scratch_copy(&s)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_new() -> i32 {
+        let mut reg = AVAIL_REG.lock().unwrap();
+        reg.push(Some(ModelAvailFSM::new()));
+        (reg.len() as i32) - 1
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_drop(h: i32) {
+        let mut reg = AVAIL_REG.lock().unwrap();
+        if let Some(slot) = reg.get_mut(h as usize) { *slot = None; }
+    }
+
+    /// 绑定被探测的模型名（用于判断上游是否换家）
+    #[no_mangle]
+    pub extern "C" fn avail_set_requested(h: i32, ptr: i32, len: i32) {
+        let s = String::from_utf8_lossy(unsafe { read_input(ptr, len) }).to_string();
+        with(h, |f| f.set_requested(&s));
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_begin(h: i32) { with(h, |f| f.begin()); }
+
+    /// 配置级短路：1 = 渠道未启用，2 = 未配置 Key
+    #[no_mangle]
+    pub extern "C" fn avail_mark(h: i32, kind: i32) {
+        with(h, |f| match kind {
+            1 => f.mark_disabled(),
+            2 => f.mark_no_key(),
+            _ => {}
+        });
+    }
+
+    /// 上游结果：http = 0 表示传输层失败，此时 reason 由调用方指定
+    #[no_mangle]
+    pub extern "C" fn avail_result(h: i32, http: u32, latency_ms: u32, served_ptr: i32, served_len: i32) {
+        let served = String::from_utf8_lossy(unsafe { read_input(served_ptr, served_len) }).to_string();
+        with(h, |f| f.result(http as u16, latency_ms, &served));
+    }
+
+    /// 传输层失败：reason 传 AvailReason 的码值（6 超时 / 7 网络）
+    #[no_mangle]
+    pub extern "C" fn avail_fail(h: i32, reason: i32, latency_ms: u32) {
+        with(h, |f| f.fail(AvailReason::from_code(reason), latency_ms));
+    }
+
+    /// 并入另一个渠道的结论
+    #[no_mangle]
+    pub extern "C" fn avail_merge(h: i32, state: i32, reason: i32) {
+        with(h, |f| f.merge(AvailState::from_code(state), AvailReason::from_code(reason)));
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_state(h: i32) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.state().code()).unwrap_or(-1)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_reason(h: i32) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.reason().code()).unwrap_or(0)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_http(h: i32) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.http() as i32).unwrap_or(0)
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_latency(h: i32) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.latency() as i32).unwrap_or(0)
+    }
+
+    /// 括号文案（可用态为空串）
+    #[no_mangle]
+    pub extern "C" fn avail_bracket_ptr(h: i32) -> i32 { read_str(h, |f| f.bracket()) }
+    #[no_mangle]
+    pub extern "C" fn avail_bracket_len(h: i32) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.bracket().len() as i32).unwrap_or(0)
+    }
+
+    /// 上游自报的模型名
+    #[no_mangle]
+    pub extern "C" fn avail_served_ptr(h: i32) -> i32 { read_str(h, |f| f.served().to_string()) }
+    #[no_mangle]
+    pub extern "C" fn avail_served_len(h: i32) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.served().len() as i32).unwrap_or(0)
+    }
+
+    /// TTL 规则：1 = 该扫，0 = 命中缓存不扫
+    #[no_mangle]
+    pub extern "C" fn avail_should_scan(h: i32, now_ms: f64, ttl_ms: f64) -> i32 {
+        let reg = AVAIL_REG.lock().unwrap();
+        match reg.get(h as usize).and_then(|x| x.as_ref()) {
+            Some(f) => if f.should_scan(now_ms, ttl_ms) { 1 } else { 0 },
+            None => 1,
+        }
+    }
+
+    #[no_mangle]
+    pub extern "C" fn avail_touch(h: i32, now_ms: f64) { with(h, |f| f.touch(now_ms)); }
+
+    #[no_mangle]
+    pub extern "C" fn avail_last_ts(h: i32) -> f64 {
+        let reg = AVAIL_REG.lock().unwrap();
+        reg.get(h as usize).and_then(|x| x.as_ref()).map(|f| f.last_ts()).unwrap_or(0.0)
     }
 }
 
@@ -1183,6 +1578,179 @@ mod fsm_tests {
             (4, SelState::Locked),
         ] {
             assert_eq!(SelState::from_code(code), st);
+        }
+    }
+
+    // ---- ModelAvailFSM：TTL / 判定 / 原因优先级 / 文案 ----
+
+    const TTL: f64 = 2.0 * 3600.0 * 1000.0; // 2 小时
+
+    /// 2 小时内再进页面不重扫——这是"不打扰、不耗额度"的核心规则
+    #[test]
+    fn avail_ttl_blocks_rescan() {
+        let mut f = ModelAvailFSM::new();
+        let t0 = 1_700_000_000_000.0;
+        f.touch(t0);
+        assert!(!f.should_scan(t0, TTL), "刚扫完不该再扫");
+        assert!(!f.should_scan(t0 + 3600_000.0, TTL), "1 小时后仍不该扫");
+        assert!(!f.should_scan(t0 + TTL - 1.0, TTL), "差 1ms 到 2 小时仍不该扫");
+    }
+
+    /// 超过 2 小时必须重扫
+    #[test]
+    fn avail_ttl_allows_rescan() {
+        let mut f = ModelAvailFSM::new();
+        let t0 = 1_700_000_000_000.0;
+        f.touch(t0);
+        assert!(f.should_scan(t0 + TTL, TTL), "正好 2 小时应重扫");
+        assert!(f.should_scan(t0 + TTL + 1.0, TTL), "超过 2 小时应重扫");
+        // 从未探测过（last_ts == 0）必须扫
+        let fresh = ModelAvailFSM::new();
+        assert!(fresh.should_scan(t0, TTL), "从未探测过应扫");
+    }
+
+    /// 上游自报 == 所选 → Ok，且**不加括号**（满屏括号是噪音）
+    #[test]
+    fn avail_ok_when_served_matches() {
+        let mut f = ModelAvailFSM::new();
+        f.set_requested("cohere/north-mini-code:free");
+        f.begin();
+        assert_eq!(f.state(), AvailState::Probing);
+        assert_eq!(f.bracket(), "检测中…");
+        f.result(200, 980, "cohere/north-mini-code:free");
+        assert_eq!(f.state(), AvailState::Ok);
+        assert_eq!(f.bracket(), "", "可用态不得有括号");
+        assert!(f.state().usable());
+    }
+
+    /// 上游换家 → Substituted：能用但警示，括号写明实际是谁
+    #[test]
+    fn avail_substituted_when_served_differs() {
+        let mut f = ModelAvailFSM::new();
+        f.set_requested("google/gemma-4-31b-it:free");
+        f.result(200, 700, "qwen/qwen3-8b:free");
+        assert_eq!(f.state(), AvailState::Substituted);
+        assert_eq!(f.bracket(), "上游实为 qwen/qwen3-8b:free");
+        assert!(f.state().usable(), "换家仍算可用，只是警示");
+
+        // 上游没自报模型名 → 视为正常，不误报换家
+        let mut g = ModelAvailFSM::new();
+        g.set_requested("a/b:free");
+        g.result(200, 500, "");
+        assert_eq!(g.state(), AvailState::Ok);
+    }
+
+    /// 401/403/429 都是 Blocked，但原因不同（文案要能指导动作）
+    #[test]
+    fn avail_blocked_on_401_403_429() {
+        for (http, want) in [
+            (401u16, "Key 无效"),
+            (403, "Key 无效"),
+            (429, "限流中"),
+            (502, "上游异常"),
+        ] {
+            let mut f = ModelAvailFSM::new();
+            f.set_requested("m");
+            f.result(http, 300, "");
+            assert_eq!(f.state(), AvailState::Blocked, "HTTP {http} 应判受限");
+            assert_eq!(f.bracket(), want, "HTTP {http} 文案不对");
+            assert!(!f.state().usable());
+        }
+    }
+
+    /// 404 → Gone（用户改不了，只能删掉/改名）
+    #[test]
+    fn avail_gone_on_404() {
+        let mut f = ModelAvailFSM::new();
+        f.set_requested("nope/not-a-model:free");
+        f.result(404, 200, "");
+        assert_eq!(f.state(), AvailState::Gone);
+        assert_eq!(f.bracket(), "模型不存在");
+        assert!(!f.state().usable());
+    }
+
+    /// 多渠道全挂时取"修复代价最低"的原因：未启用 > 未配 Key > Key 无效 > 限流
+    #[test]
+    fn avail_reason_priority() {
+        // 单看 prefer
+        assert_eq!(AvailReason::RateLimited.prefer(AvailReason::Disabled), AvailReason::Disabled);
+        assert_eq!(AvailReason::Disabled.prefer(AvailReason::RateLimited), AvailReason::Disabled);
+        assert_eq!(AvailReason::None.prefer(AvailReason::NoKey), AvailReason::NoKey);
+        assert_eq!(AvailReason::Auth.prefer(AvailReason::None), AvailReason::Auth);
+
+        // 合并：A 渠道限流、B 渠道未配 Key → 展示"未配置 Key"（更可行动）
+        let mut f = ModelAvailFSM::new();
+        f.set_requested("m");
+        f.result(429, 100, "");
+        f.merge(AvailState::Blocked, AvailReason::NoKey);
+        assert_eq!(f.reason(), AvailReason::NoKey);
+        assert_eq!(f.bracket(), "未配置 Key");
+
+        // 任一渠道可用 → 整体可用（不被别的渠道的失败拖累）
+        let mut g = ModelAvailFSM::new();
+        g.set_requested("m");
+        g.result(429, 100, "");
+        g.merge(AvailState::Ok, AvailReason::None);
+        assert_eq!(g.state(), AvailState::Ok);
+        assert_eq!(g.bracket(), "");
+
+        // Gone 让位给 Blocked：能修的优先告诉用户
+        let mut k = ModelAvailFSM::new();
+        k.set_requested("m");
+        k.result(404, 100, "");
+        assert_eq!(k.state(), AvailState::Gone);
+        k.merge(AvailState::Blocked, AvailReason::Disabled);
+        assert_eq!(k.state(), AvailState::Blocked);
+        assert_eq!(k.bracket(), "渠道未启用");
+    }
+
+    /// 配置级短路不发请求：未启用 / 未配 Key 直接出结论
+    #[test]
+    fn avail_config_shortcircuit() {
+        let mut f = ModelAvailFSM::new();
+        f.mark_disabled();
+        assert_eq!(f.state(), AvailState::Blocked);
+        assert_eq!(f.bracket(), "渠道未启用");
+        assert_eq!(f.http(), 0, "短路不得有 HTTP 状态");
+
+        let mut g = ModelAvailFSM::new();
+        g.mark_no_key();
+        assert_eq!(g.state(), AvailState::Blocked);
+        assert_eq!(g.bracket(), "未配置 Key");
+
+        // 传输层失败
+        let mut h = ModelAvailFSM::new();
+        h.fail(AvailReason::Timeout, 8000);
+        assert_eq!(h.state(), AvailState::Blocked);
+        assert_eq!(h.bracket(), "超时");
+        h.fail(AvailReason::Network, 0);
+        assert_eq!(h.bracket(), "网络不通");
+    }
+
+    /// 状态码 roundtrip（前端按数字读）
+    #[test]
+    fn avail_state_code_roundtrip() {
+        for (code, st) in [
+            (0, AvailState::Unknown),
+            (1, AvailState::Probing),
+            (2, AvailState::Ok),
+            (3, AvailState::Substituted),
+            (4, AvailState::Blocked),
+            (5, AvailState::Gone),
+        ] {
+            assert_eq!(AvailState::from_code(code), st);
+        }
+        for (code, rs) in [
+            (1, AvailReason::Disabled),
+            (2, AvailReason::NoKey),
+            (3, AvailReason::Auth),
+            (4, AvailReason::RateLimited),
+            (5, AvailReason::Upstream),
+            (6, AvailReason::Timeout),
+            (7, AvailReason::Network),
+            (8, AvailReason::NotFound),
+        ] {
+            assert_eq!(AvailReason::from_code(code), rs);
         }
     }
 }
