@@ -789,6 +789,8 @@
     background: var(--bg); border-radius: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11.5px; line-height: 1.55; color: var(--txt); max-height: 46vh; overflow: auto;
     white-space: pre-wrap; word-break: break-all; }
+  /* v0.19.34 调试浮层日志区：比状态面板更高，实时滚动（自动贴底显示最新一行） */
+  .dbg-body { max-height: 52vh; }
   /* 模型行：两行结构。名称长短不齐时行高与徽章位置都稳定——
      单行 flex 会让长名称挤成多行、徽章被顶到下一行、meta 溢出屏幕。 */
   .model-opt { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; cursor: pointer; min-width: 0; }
@@ -988,6 +990,8 @@
       <button class="icon-btn" id="btn-call" onclick="openCall()" aria-label="语音通话" title="语音通话（按住说话，AI 语音回答）">📞</button>
       <!-- v0.19.33 控制台（隐藏功能）：输入框发 `/console: zsj` 才出现 -->
       <button class="icon-btn" id="btn-console" onclick="openConsole()" aria-label="控制台" title="控制台（调试状态速览）" hidden>⌗</button>
+      <!-- v0.19.34 调试日志浮层按钮：输入框发 `/debug on` 才出现。iOS PWA（添加到主屏幕）无 F12，日志只能源生显示在页面内 -->
+      <button class="icon-btn" id="btn-debug" onclick="openDebug()" aria-label="调试日志" title="调试日志（/debug on 开启；iOS 主屏 PWA 无 F12，点此看日志）" hidden>🐞</button>
       <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新建会话" title="新建会话">＋</button>
     </header>
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
@@ -1474,6 +1478,22 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   </div>
 </dialog>
 
+<!-- ==================== 调试日志浮层（v0.19.34，iOS PWA 友好） ==================== -->
+<!-- 痛点：iOS 把站点加到主屏幕后是 standalone 模式，没有地址栏、没有 F12，浏览器原生
+     开发者控制台根本打不开。所以 /debug on 不再只靠 DevTools——日志同时显示在页面内此浮层
+     （顶栏 🐞 打开）。桌面端仍可按 F12 看 DevTools 的 [gw-debug] 输出。 -->
+<dialog id="debug-dlg">
+  <button class="dlg-back" onclick="debugDlg.close()" aria-label="返回" title="返回">←</button>
+  <h3>调试日志</h3>
+  <p class="dlg-sub">魔法指令 <code>/debug on</code> 开启、<code>/debug off</code> 关闭。iOS 主屏 PWA 无 F12，日志显示在页面内（实时滚动，最近 500 条）。桌面端也可按 F12 看 DevTools。</p>
+  <pre id="dbg-body" class="console-body dbg-body"></pre>
+  <div class="dlg-actions">
+    <button onclick="clearDbgLog()">清空</button>
+    <button onclick="copyDbgLog()">复制</button>
+    <button class="primary" onclick="debugDlg.close()">关闭</button>
+  </div>
+</dialog>
+
 <!-- ==================== 对话框 ==================== --><dialog id="channel-dlg">
   <button class="dlg-back" onclick="channelDlg.close()" aria-label="返回" title="返回">←</button>
   <h3 id="drawer-title">添加服务商</h3>
@@ -1660,7 +1680,7 @@ const BUILD_MARK = "__BUILD_VERSION__";
 
 // ================= 基础 =================
 const $ = (id) => document.getElementById(id);
-const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), skillDlg = $("skill-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg"), consoleDlg = $("console-dlg");
+const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), skillDlg = $("skill-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg"), consoleDlg = $("console-dlg"), debugDlg = $("debug-dlg");
 // 模型弹窗关闭时停掉「多久前自检」的定时器，避免后台空转
 modelDlg.addEventListener("close", () => stopScanAgoTimer());
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -5289,6 +5309,7 @@ async function loadAll() {
   startNetMonitor(); // v0.19.29 网络状态栏：首屏探测 + 60s 心跳 + online/offline 事件
   registerSW();     // v0.19.29 离线韧性：SW 注册（预缓存主 UI，失败不阻塞）
   renderConsoleBtn(); // v0.19.33 控制台按钮：按 localStorage 开关恢复显示
+  renderDebugBtn();   // v0.19.34 调试按钮：按 gw_debug 开关恢复显示（iOS 也能看浮层）
   // 管理页不可见时也刷新聊天首页的渠道可用性提示
   if (currentView() === "chat") renderMessages();
 }
@@ -7272,20 +7293,56 @@ function renderConsoleBtn() {
   if (b) b.hidden = !consoleOn();
 }
 
-// ================= v0.19.34 浏览器调试控制台开关（独立于 v0.19.33 的 in-app ⌗ 面板） =================
+// ================= v0.19.34 调试开关 + 应用内调试浮层（独立于 v0.19.33 的 ⌗ 状态面板） =================
 // 魔法指令：`/debug on`（或 /debug: on、/debug 1）开启、`/debug off`（或 /debug 0）关闭。
-// 开启后：所有 dbg(...) 调试日志输出到浏览器 DevTools 控制台；并触发一次 debugger 断点
-// （若 DevTools 已打开则自动停在这里；否则按 F12 打开即可看到日志）。
-// 说明：浏览器出于安全限制**无法用脚本直接打开 DevTools**，所以此"开关"= 启用日志 + 断点 +
-// 持久化 gw_debug，实际查看按 F12。与聊天/发送完全解耦，普通用户无感知。
+// 开启后：dbg(...) 日志既打到 DevTools 控制台（桌面端 F12 可看），也写入**页面内调试浮层**
+// （#debug-dlg，顶栏 🐞 打开）——因为 iOS 把站点加到主屏幕后是 standalone 模式，没有地址栏、
+// 没有 F12，浏览器原生开发者控制台根本打不开，只能靠页面内浮层查看。
+// 说明：浏览器出于安全限制无法用脚本直接打开 DevTools，所以此"开关"= 启用日志 + 页面内浮层 +
+// 持久化 gw_debug。与聊天/发送完全解耦，普通用户无感知。
 const DEBUG_KEY = "gw_debug";
+const DBG_MAX = 500;            // 内存里最多保留最近 500 条，防无限增长
+let DBG_LOG = [];
 function debugOn() { return localStorage.getItem(DEBUG_KEY) === "1"; }
+function renderDebugBtn() { const b = $("btn-debug"); if (b) b.hidden = !debugOn(); }
 function setDebug(v) {
-  if (v) localStorage.setItem(DEBUG_KEY, "1"); else localStorage.removeItem(DEBUG_KEY);
-  toast(v ? "调试已开启：日志输出到浏览器控制台（DevTools）。按 F12 打开查看；若已开会自动断点" : "调试已关闭", v ? "ok" : "");
+  if (v) localStorage.setItem(DEBUG_KEY, "1"); else { localStorage.removeItem(DEBUG_KEY); DBG_LOG = []; }
+  renderDebugBtn();
+  if (v) openDebug();           // 开启即自动弹出浮层——iOS 用户立刻能看到，不必找按钮
+  toast(v ? "调试已开启：日志显示在页面内（点顶栏 🐞 查看）。iOS 主屏 PWA 无 F12，用此面板；桌面端也可按 F12 看 DevTools"
+          : "调试已关闭", v ? "ok" : "");
 }
-/// 调试日志：仅 debug 模式（/debug on）下打印到浏览器控制台，避免污染正常用户。
-function dbg(...a) { if (debugOn()) { try { console.log("[gw-debug]", ...a); } catch {} } }
+/// 调试日志：仅 debug 模式（/debug on）下输出。同时写 DevTools 与页面内浮层。
+function dbg(...a) {
+  if (!debugOn()) return;
+  const line = a.map(x => {
+    if (typeof x === "string") return x;
+    if (x && x.stack) return x.stack;          // Error 直接给堆栈，排查 VPN 断流有用
+    try { return JSON.stringify(x); } catch { return String(x); }
+  }).join(" ");
+  const d = new Date();
+  const ts = d.toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+  DBG_LOG.push(ts + " " + line);
+  if (DBG_LOG.length > DBG_MAX) DBG_LOG.splice(0, DBG_LOG.length - DBG_MAX);
+  try { console.log("[gw-debug]", ...a); } catch {}
+  renderDbgLog();
+}
+function renderDbgLog() {
+  const el = $("dbg-body");
+  if (!el) return;
+  el.textContent = DBG_LOG.length ? DBG_LOG.join("\n") : "（暂无日志，操作或等待网络探测后会出现）";
+  el.scrollTop = el.scrollHeight;   // 自动滚到底：浮层开着时最新日志始终可见
+}
+function clearDbgLog() { DBG_LOG = []; renderDbgLog(); toast("已清空调试日志", "ok"); }
+function copyDbgLog() {
+  navigator.clipboard.writeText(DBG_LOG.join("\n"))
+    .then(() => toast("已复制调试日志", "ok")).catch(() => toast("复制失败", "err"));
+}
+function openDebug() {
+  if (!debugDlg) return;
+  renderDbgLog();
+  try { debugDlg.showModal(); } catch { debugDlg.show(); }
+}
 
 /// 解析魔法指令（纯函数，无副作用）。返回 { kind, ... } 或 null。
 /// 兼容全角斜杠 ／（中文输入法易误触）与半角 /。
@@ -7302,9 +7359,10 @@ function handleMagicCommand(text) {
   const p = parseMagic(text);
   if (!p) return false;
   if (p.kind === "debug") {
-    // v0.19.34 浏览器调试控制台开关：/debug on|off（冒号可选、大小写/空格容错）
+    // v0.19.34 调试开关：/debug on|off（冒号可选、大小写/空格容错）。
+    // 开启即弹出页面内浮层（setDebug 内 openDebug）——iOS 主屏 PWA 无 F12，靠此面板看日志。
+    // 不再用 debugger 断点：iOS 上完全无效，桌面端又会意外打断正常流程。
     setDebug(p.on);
-    if (p.on) { try { debugger; } catch {} }   // 已开 DevTools 则自动断点；否则 F12 后看日志
   } else if (p.arg === "zsj" || p.arg === "on") {
     setConsoleOn(true);
     toast("控制台已开启——顶栏出现 ⌗ 按钮", "ok");
