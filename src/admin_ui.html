@@ -261,7 +261,11 @@
   /* 「回到最新」：用户上翻阅读时不抢滚动条，只在这里提示有新内容 */
   #to-bottom { position: absolute; right: 16px; top: -40px; z-index: 6; padding: 5px 13px; font-size: 12px; line-height: 1.5; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--txt); box-shadow: 0 4px 14px var(--shadow); cursor: pointer; white-space: nowrap; }
   #to-bottom:hover { border-color: var(--acc); color: var(--acc); }
-  #composer { max-width: var(--chat-max); margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; background: var(--panel2); border: 1px solid var(--border); border-radius: 22px; padding: 8px 8px 8px 16px; }
+  /* v0.19.22：composer 从单行 flex 改为「附件区 + 按钮行」两段列向布局——
+     附件缩略图住在文本框内左上部（#attach-bar 是 composer 的第一个子元素），
+     「未发送」语义一眼可辨；按钮行保持原来的贴底横排。 */
+  #composer { max-width: var(--chat-max); margin: 0 auto; display: flex; flex-direction: column; background: var(--panel2); border: 1px solid var(--border); border-radius: 22px; padding: 8px 8px 8px 16px; }
+  #composer .composer-row { display: flex; gap: 8px; align-items: flex-end; }
   /* 输入区模型选择：与 + 号同款圆形图标按钮 */
   .composer-model { flex: none; width: 34px; height: 34px; border-radius: 50%; font-size: 17px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; margin-bottom: 2px; border: 1px solid var(--border); background: var(--panel); color: var(--dim); }
   .composer-model:hover { background: var(--panel); color: var(--fg); }
@@ -300,6 +304,8 @@
   .mo-hint b { color: var(--txt); font-weight: 600; }
   .mo-hint:hover { border-color: var(--acc); }
   .mp-pager { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--dim); position: relative; }
+  /* 模型专属控件在 SKILL 标签隐藏：作者的 display:flex 会覆盖 UA 的 [hidden]，需显式重置 */
+  #model-dlg .mp-model-only[hidden] { display: none !important; }
   .mp-pager button { width: 32px; height: 30px; min-height: 0; border-radius: 8px; font-size: 15px; line-height: 1; }
   .mp-pager button:disabled { opacity: .35; }
   .mp-ctx-toggle { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--dim); cursor: pointer; }
@@ -318,23 +324,33 @@
   /* 窄屏：三个圆形小按钮统一降到 32px，把宽度让给输入框（320px 屏只剩 ~124px 时可回到 ~130px） */
   @media (max-width: 420px) {
     #btn-attach, #btn-voice, .composer-model { width: 32px; height: 32px; font-size: 15px; }
-    #composer { gap: 6px; padding: 7px 7px 7px 12px; }
+    #composer .composer-row { gap: 6px; }
+    #composer { padding: 7px 7px 7px 12px; }
   }
   @keyframes rec-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }
-  /* 附件 chips（输入框上方） */
-  #attach-bar { max-width: var(--chat-max); margin: 0 auto 8px; display: flex; gap: 8px; overflow-x: auto; padding: 2px; scrollbar-width: none; }
+  /* 附件 chips（v0.19.22 起在文本框内左上部，不再悬在输入框外面）：
+     小尺寸、可换行堆叠、× 可删——「未发送」与「已发送」一眼可辨。 */
+  #attach-bar { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; margin: 0 0 6px; padding: 0; max-width: none; }
   #attach-bar[hidden] { display: none; } /* 作者的 display:flex 会覆盖 UA 的 [hidden] 规则，需显式重置 */
-  #attach-bar::-webkit-scrollbar { display: none; }
-  .att-chip { position: relative; flex: none; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); padding: 4px; display: flex; flex-direction: column; align-items: center; gap: 3px; width: 66px; }
-  .att-chip img { width: 58px; height: 58px; object-fit: cover; border-radius: 6px; }
-  .att-chip .att-ic { width: 58px; height: 58px; display: flex; align-items: center; justify-content: center; font-size: 22px; border-radius: 6px; background: var(--panel); }
-  .att-chip .att-nm { font-size: 10px; color: var(--dim); max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .att-chip .att-x { position: absolute; top: 6px; right: 6px; width: 19px; height: 19px; border-radius: 50%; background: rgba(0, 0, 0, .55); border: none; color: #fff; font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
-  /* 附件 chip 的媒体状态机徽标（就绪/处理中/完成/失败，见 MediaFSM） */
-  .att-chip .att-st { position: absolute; top: 6px; left: 6px; min-width: 19px; height: 19px; padding: 0 4px; border-radius: 10px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 10px; line-height: 19px; text-align: center; display: none; }
+  /* 附件 chip 双形态（v0.19.22 缩略图入框后的小尺寸化）：
+     ① att-pic（图片/视频有缩略图）：42×42 小方片，名称收进 title，不占版面；
+     ② att-file（音频/文件无缩略图）：小 pill —— 图标 + 名称 + 行内 ×。
+     两态徽标（st / ×）一律外浮在角落（负 offset），不遮挡内容本体。 */
+  .att-chip { position: relative; flex: none; border: 1px solid var(--border); background: var(--panel2); }
+  .att-chip.att-pic { width: 42px; height: 42px; border-radius: 9px; padding: 0; }
+  .att-chip.att-pic img { width: 100%; height: 100%; object-fit: cover; border-radius: 8px; display: block; }
+  .att-chip.att-file { display: flex; align-items: center; gap: 5px; height: 26px; padding: 0 3px 0 8px; border-radius: 13px; }
+  .att-chip.att-file .att-ic { font-size: 13px; line-height: 1; flex: none; }
+  .att-chip.att-file .att-nm { font-size: 11px; color: var(--dim); max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 删除钮：图片方片外浮右上角；文件 pill 行内尾部 */
+  .att-chip .att-x { flex: none; width: 17px; height: 17px; border-radius: 50%; background: rgba(0, 0, 0, .55); border: none; color: #fff; font-size: 11px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+  .att-chip.att-pic .att-x { position: absolute; top: -6px; right: -6px; }
+  /* 附件 chip 的媒体状态机徽标（就绪/处理中/完成/失败，见 MediaFSM）——外浮左上角 */
+  .att-chip .att-st { position: absolute; top: -6px; left: -6px; min-width: 17px; height: 17px; padding: 0 3px; border-radius: 9px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 9px; line-height: 17px; text-align: center; display: none; }
   .att-chip[data-st="working"] .att-st { display: block; background: var(--acc); animation: att-st-pulse 1s ease-in-out infinite; }
   .att-chip[data-st="done"] .att-st { display: block; background: var(--ok); }
   .att-chip[data-st="failed"] .att-st { display: block; background: var(--err, #e5534b); }
+  .att-chip[data-st="skipped"] .att-st { display: block; background: #5a5470; }
   .att-chip[data-st="working"] { border-color: var(--acc); }
   .att-chip[data-st="failed"] { border-color: var(--err, #e5534b); opacity: .75; }
   @keyframes att-st-pulse { 50% { opacity: .55; } }
@@ -457,7 +473,8 @@
     display: flex; align-items: center; gap: 6px; padding: 6px 10px; margin-bottom: 6px;
     background: #1d1740; border: 1px solid #4a3d85; border-radius: 9px; font-size: 12.5px; color: #d8cffb;
   }
-  .skill-chip .sk-ic { font-size: 14px; flex: none; }
+  .skill-chip .sk-ic { font-size: 14px; flex: none; display: flex; align-items: center; }
+  .skill-chip .sk-ic .sk-logo { width: 14px; height: 14px; display: block; }
   .skill-chip .sk-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .skill-chip .sk-x { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 1px solid #4a3d85; background: transparent; color: #d8cffb; cursor: pointer; font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; }
   .skill-chip .sk-x:hover { border-color: var(--acc); color: var(--acc); }
@@ -477,6 +494,7 @@
   .sk-item:hover { border-color: #4a3d85; }
   .sk-item.sel { border-color: var(--acc); background: #1d1740; }
   .sk-item .sk-rank { flex: none; width: 20px; height: 20px; border-radius: 50%; background: #2c2750; color: #cfc4ff; font-size: 10px; display: flex; align-items: center; justify-content: center; }
+  .sk-item .sk-rank .sk-logo { width: 12px; height: 12px; display: block; }
   .sk-item .sk-main { flex: 1 1 auto; min-width: 0; }
   .sk-item .sk-ttl { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* 简介行：≤30 字提示词简略说明，选择器与管理页共用 */
@@ -521,10 +539,9 @@
 
   /* ---- 极简页头 ----
      作用域页只有一行字：不吸顶、无边框、无背景，滚走就滚走。
-     设置子页多一个 ‹（分区 → 菜单 → 聊天是两级，不能只靠系统返回）。 */
-  .mgmt-top.bare { display: block; position: static; padding: 18px 16px 6px; padding-top: calc(18px + env(safe-area-inset-top, 0px)); border-bottom: none; background: none; backdrop-filter: none; }
-  .mgmt-top.bare .ttl { font-size: 17px; font-weight: 700; letter-spacing: .2px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .mgmt-top.bare .ttl:active { opacity: .55; }
+     slim 变体多一个 ‹ 回退键（模型管理 / 设置子页都是两级入口，
+     不能只靠系统返回或把标题伪装成按钮）。v0.19.22 起 bare 变体弃用
+     （两个作用域页统一 slim），规则保留至下个大版本清理。 */
   .mgmt-top.slim { display: flex; align-items: center; gap: 4px; position: static; padding: 14px 16px 6px; padding-top: calc(14px + env(safe-area-inset-top, 0px)); border-bottom: none; background: none; backdrop-filter: none; }
   .mgmt-top.slim .ttl { font-size: 17px; font-weight: 700; letter-spacing: .2px; }
   .mgmt-top.slim .back { border: none; background: none; color: var(--dim); font-size: 19px; line-height: 1; padding: 2px 8px 4px 0; cursor: pointer; }
@@ -546,7 +563,7 @@
   .ov-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   @media (max-width: 430px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
 
-  /* ---- 模型标签头部信息区（v0.19.19 起承接原概览） ---- */
+  /* ---- 所有模型标签头部信息区（v0.19.19 起承接原概览） ---- */
   .mh-cur-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .mh-cur-name { font-size: 14.5px; font-weight: 700; }
   .mh-cur-sub { font-size: 11.5px; color: var(--dim); }
@@ -829,10 +846,9 @@
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
     <div class="composer-wrap">
       <button id="to-bottom" type="button" hidden onclick="jumpToBottom()" title="回到最新内容">↓ 回到最新</button>
-      <div id="attach-bar" hidden></div>
       <div id="pipe-bar" class="pipe-bar" hidden></div>
       <div id="skill-chip" class="skill-chip" hidden>
-        <span class="sk-ic">🧩</span>
+        <span class="sk-ic"><svg class="sk-logo" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 1.6 15.1 9.2v6H8.9v-6Z"/><rect x="6.1" y="15.6" width="11.8" height="1.8" rx=".9"/><rect x="10.7" y="17.4" width="2.6" height="3.4" rx=".8" opacity=".8"/><circle cx="12" cy="21.7" r="1.2"/></svg></span>
         <span class="sk-t" id="skill-chip-title"></span>
         <button class="sk-x" onclick="clearActiveSkill()" aria-label="取消 skill" title="取消 skill">✕</button>
       </div>
@@ -841,12 +857,18 @@
         <span class="ed-t" id="edit-chip-title"></span>
         <button class="ed-x" onclick="cancelEdit()" aria-label="取消修改" title="取消修改">✕</button>
       </div>
+      <!-- v0.19.22：附件缩略图移入文本框内左上部（att-bar 在 composer 里），
+           小尺寸 + × 可删 + 可继续补发——「没发送」一眼可辨，消除已发送误会。
+           流水线期间同样渲染在框内（PIPE.atts 回退），状态徽标持续可见。 -->
       <div id="composer">
-        <button id="btn-attach" type="button" onclick="pickFiles()" aria-label="添加附件" title="照片 / 视频 / 文件">+</button>
-        <button id="btn-model" class="composer-model" onclick="openModelPicker()" aria-label="选择模型" title="选择模型（按积分排序）">⋯</button>
-        <textarea id="input" rows="1" title="Enter 发送 / Shift+Enter 换行"></textarea>
-        <button id="btn-voice" type="button" aria-label="长按发语音" title="长按发语音">🎙</button>
-        <button id="btn-send" onclick="sendOrStop()" aria-label="发送">↑</button>
+        <div id="attach-bar" hidden></div>
+        <div class="composer-row">
+          <button id="btn-attach" type="button" onclick="pickFiles()" aria-label="添加附件" title="照片 / 视频 / 文件">+</button>
+          <button id="btn-model" class="composer-model" onclick="openModelPicker()" aria-label="选择模型" title="选择模型（按积分排序）">⋯</button>
+          <textarea id="input" rows="1" title="Enter 发送 / Shift+Enter 换行"></textarea>
+          <button id="btn-voice" type="button" aria-label="长按发语音" title="长按发语音">🎙</button>
+          <button id="btn-send" onclick="sendOrStop()" aria-label="发送">↑</button>
+        </div>
       </div>
       <input type="file" id="file-input" multiple hidden accept="image/*,video/*,audio/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xlsx,.zip">
       <div class="composer-hint" id="route-hint">模型请求由网关自动路由到最优免费渠道 · 降权自动切换</div>
@@ -900,9 +922,12 @@
 
 <!-- ==================== 模型管理（作用域页 · 只看当前模型） ==================== -->
 <div id="view-models" hidden>
-  <header class="mgmt-top bare">
-    <div class="ttl" role="button" tabindex="0" title="返回聊天" onclick="navigate('chat')"
-         onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();navigate('chat')}">模型管理</div>
+  <!-- v0.19.22：头部从 bare（标题假装可点）改为 slim 范式——与设置页同构：
+       左上角 ‹ 回退键回聊天，侧栏靠左缘右滑/遮罩开合（bindEdgeSwipe 全局生效）。
+       原来把标题做成返回入口没有任何可见性提示，用户根本发现不了。 -->
+  <header class="mgmt-top slim">
+    <button class="back" onclick="navigate('chat')" aria-label="返回聊天" title="返回聊天">‹</button>
+    <div class="ttl">模型管理</div>
   </header>
 
   <div class="mgmt-wrap">
@@ -913,11 +938,13 @@
       <button style="margin-top:10px" onclick="showDiag()">查看部署自检</button>
     </div>
 
-    <!-- 5 标签：模型 / 模型服务商 / skill 管理 / 用量 / 积分榜。
+    <!-- 5 标签：所有模型 / 模型服务商 / skill 管理 / 用量 / 积分榜。
          v0.19.19 撤销「概览」标签——其信息区（当前模型 + 统计 banner +
-         渠道健康速览 + 最近事件）整体并入「模型」标签头部，少一层跳转。 -->
+         渠道健康速览 + 最近事件）整体并入「所有模型」标签头部，少一层跳转。
+         v0.19.22「模型」改名「所有模型」——与服务商标签对仗（池 vs 源），
+         且头部信息区本就是全量模型的总览。 -->
     <div class="tabbar" id="mgmt-tabs">
-      <button class="tab sel" data-mtab="models" onclick="setMgmtTab('models')">模型</button>
+      <button class="tab sel" data-mtab="models" onclick="setMgmtTab('models')">所有模型</button>
       <button class="tab" data-mtab="resources" onclick="setMgmtTab('resources')" title="已登记的模型服务商（渠道）">模型服务商</button>
       <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="skill 提示词：独立于模型的表达线">skill 管理</button>
       <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')" title="模型用量">用量</button>
@@ -1304,22 +1331,22 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
 
 <dialog id="model-dlg">
   <button class="dlg-back" onclick="modelDlg.close()" aria-label="返回" title="返回">←</button>
-  <h3>选择模型<span id="mp-scan-ago"></span><button class="icon-btn mp-mgmt" onclick="openModelScope()" aria-label="模型管理" title="模型管理">⚙</button></h3>
+  <h3><span id="mp-ttl">选择模型</span><span id="mp-scan-ago"></span><button class="icon-btn mp-mgmt" onclick="openModelScope()" aria-label="模型管理" title="模型管理">⚙</button></h3>
   <div class="tabbar" id="mp-tabs">
     <button class="tab sel" data-mtab="text" onclick="setMpTab('text')">文本模型</button>
-    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')" title="skill 提示词：独立于模型的表达线">skill 提示词</button>
+    <button class="tab" data-mtab="skill" onclick="setMpTab('skill')" title="SKILL：独立于模型的表达线">SKILL</button>
     <button class="tab" data-mtab="audio" onclick="setMpTab('audio')">音频模型</button>
     <button class="tab" data-mtab="mm" onclick="setMpTab('mm')">图视模型</button>
   </div>
   <input id="model-search" type="search" placeholder="🔍 搜索模型名 / 渠道 / 供应商…" autocomplete="off">
-  <div id="avail-banner" class="avail-banner" hidden></div>
+  <div id="avail-banner" class="avail-banner mp-model-only" hidden></div>
   <div id="model-list"></div>
   <div class="mp-pager" id="model-pager" hidden><button onclick="turnModelPage(-1)">‹</button><span id="model-page-n"></span><button onclick="turnModelPage(1)">›</button></div>
-  <div class="mp-pager" style="margin-top:4px">
+  <div class="mp-pager mp-model-only" style="margin-top:4px">
     <button style="width:auto;padding:0 12px;font-size:12px" onclick="availRescan()" title="忽略 2 小时缓存，立即重新探测本页">↻ 重新检测本页</button>
     <span id="avail-ts" style="font-size:11px"></span>
   </div>
-  <label class="mp-ctx-toggle" title="换模型时把上下文边界重置，避免新模型照抄上一个模型的回答（例如「我是 ChatGLM」）">
+  <label class="mp-ctx-toggle mp-model-only" title="换模型时把上下文边界重置，避免新模型照抄上一个模型的回答（例如「我是 ChatGLM」）">
     <input type="checkbox" id="ctx-reset-toggle" onchange="setCtxReset(this.checked)">
     <span>换模型时重置上下文<em>防止新模型照抄上一个模型的自我描述</em></span>
   </label>
@@ -3142,10 +3169,13 @@ function renderAttachments() {
     const stHtml = (a.st && chipMark[a.st])
       ? `<span class="att-st"${a.stNote ? ` title="${esc(a.stNote)}"` : ""}>${chipMark[a.st]}</span>` : "";
     const xHtml = inPipe ? "" : `<button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button>`;
-    const descTip = a.desc ? ` title="理解：${esc(a.desc.slice(0, 80))}"` : "";
+    // 名称 + 理解产出收进 title：缩略图尽量小，不占版面；发送后气泡里有全量信息
+    const tip = ` title="${esc(a.name)}${a.desc ? " · 理解：" + esc(a.desc.slice(0, 80)) : ""}"`;
     return thumb
-      ? `<div class="att-chip" data-st="${a.st || ""}"${descTip}><img src="${thumb}" alt="">${stHtml}<div class="att-nm">${esc(a.name)}</div>${xHtml}</div>`
-      : `<div class="att-chip" data-st="${a.st || ""}"${descTip}><div class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎"}</div>${stHtml}<div class="att-nm">${esc(a.name)}</div>${xHtml}</div>`;
+      // ① 图片 / 视频（有缩略图）：42×42 小方片
+      ? `<div class="att-chip att-pic" data-st="${a.st || ""}"${tip}><img src="${thumb}" alt="">${stHtml}${xHtml}</div>`
+      // ② 音频 / 文件（无缩略图）：小 pill —— 图标 + 名称 + 行内 ×
+      : `<div class="att-chip att-file" data-st="${a.st || ""}"${tip}><span class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎"}</span><span class="att-nm">${esc(a.name)}</span>${stHtml}${xHtml}</div>`;
   }).join("");
   bar.hidden = list.length === 0;
 }
@@ -4566,6 +4596,7 @@ async function availRescan() {
 const availScanDebounced = debounce(() => availScanVisible(), 700);
 function renderAvailBanner() {
   const el = $("avail-banner"); if (!el) return;
+  if (mpTab === "skill") { el.hidden = true; el.textContent = ""; return; }  // SKILL 标签不看模型可用性
   const av = curModel ? AVAIL_MEM[curModel] : null;
   // 已选中的模型变受限：不清除用户的选择，只明确告知（选择权优先于一次快照结论）
   if (av && (av.state === 4 || av.state === 5)) {
@@ -4621,6 +4652,7 @@ function setMpTab(k) {
   mpQuery = "";                       // 切标签清掉搜索词，避免"搜不到"误判为空列表
   const s = $("model-search"); if (s) s.value = "";
   document.querySelectorAll("#mp-tabs .tab").forEach(b => b.classList.toggle("sel", b.dataset.mtab === k));
+  mpTitle(k); mpSearchPh(k); mpModelOnly(k);
   renderModelList();
   availScanVisible();
 }
@@ -4648,6 +4680,7 @@ function openModelPicker() {
     if (idx >= 0) mpPages[mpTab] = Math.floor(idx / MP_PAGE_SIZE) + 1;
   }
   const s = $("model-search"); if (s) s.value = "";
+  mpTitle(mpTab); mpSearchPh(mpTab); mpModelOnly(mpTab);
   const ct = $("ctx-reset-toggle"); if (ct) ct.checked = ctxResetOn();
   const ctLabel = ct?.closest("label"); if (ctLabel) ctLabel.hidden = false;
   renderModelList(); modelDlg.showModal();
@@ -4708,7 +4741,23 @@ function mpBuild() {
     || String(it.ch && it.ch.provider || "").toLowerCase().includes(mpQuery);
   return { items, autoItem: items.find(it => it.auto) || null, rest: items.filter(it => !it.auto).filter(hit) };
 }
-const MP_TAB_LABEL = { text: "文本模型", audio: "音频模型", mm: "图视模型", skill: "skill 提示词" };
+const MP_TAB_LABEL = { text: "文本模型", audio: "音频模型", mm: "图视模型", skill: "SKILL" };
+/// 大分页（对话框标题）跟随小标签名：选哪个标签，标题就叫「选择 + 标签名」
+function mpTitle(k) {
+  const t = $("mp-ttl");
+  if (t) t.textContent = "选择" + (MP_TAB_LABEL[k] || k);
+}
+/// 搜索框占位符同样跟随标签（SKILL 页搜的是标题/简介，不是模型名）
+function mpSearchPh(k) {
+  const s = $("model-search");
+  if (!s) return;
+  s.placeholder = k === "skill" ? "🔍 搜索 SKILL 标题 / 简介…" : "🔍 搜索模型名 / 渠道 / 供应商…";
+}
+/// 模型专属控件（可用性检测条 / 重新检测 / 换模型重置上下文）只在模型标签出现，
+/// SKILL 标签是表达线不是模型，露出这些控件只会让人困惑。
+function mpModelOnly(k) {
+  document.querySelectorAll("#model-dlg .mp-model-only").forEach(el => { el.hidden = (k === "skill"); });
+}
 function renderModelList(sel, onPick) {
   sel = sel === undefined ? curModel : sel;
   modelPickCb = onPick || pickModel;
@@ -4985,15 +5034,33 @@ function summarizePrompt(p) {
   return s;
 }
 
-/// 选择器 skill 标签：每条三行（标题 / 简介≤30字 / 已用 N 次），按使用频次取前 6 条；
-/// 末行「＋ 扩展 skill」直接弹出新增对话框（不再跳管理页——新增是高频操作）。
+/// SKILL 徽标：几何匕首（刀形）——取「力量增强」意象，替代原来的 🧩 puzzle
+/// （拼装语义弱，且与工作流参数的 🧩 撞车）。选择器条目与 composer chip 共用。
+const SKILL_LOGO = `<svg class="sk-logo" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 1.6 15.1 9.2v6H8.9v-6Z"/><rect x="6.1" y="15.6" width="11.8" height="1.8" rx=".9"/><rect x="10.7" y="17.4" width="2.6" height="3.4" rx=".8" opacity=".8"/><circle cx="12" cy="21.7" r="1.2"/></svg>`;
+
+/// 选择器 SKILL 标签：每条三行（标题 / 简介≤30字 / 已用 N 次），按使用频次排序；
+/// **与模型列表同一范式**：每页最多 MP_PAGE_SIZE(5) 条 + 分页条 + 搜索过滤；
+/// 末行「＋ 扩展 SKILL」直接弹出新增对话框（不再跳管理页——新增是高频操作）。
 function renderSkillPicker() {
+  const q = (mpQuery || "").trim().toLowerCase();
   const list = SKILLS.slice()
-    .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
-  const top = list.slice(0, 6);
+    .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)))
+    // 搜索：标题 / 简介 / 提示词正文任一命中即保留（与模型列表的模糊搜索同口径）
+    .filter(s => !q
+      || String(s.title || "").toLowerCase().includes(q)
+      || String(s.summary || "").toLowerCase().includes(q)
+      || String(s.prompt || "").toLowerCase().includes(q));
+  const pages = Math.max(1, Math.ceil(list.length / MP_PAGE_SIZE));
+  if (mpPages.skill > pages) mpPages.skill = pages;
+  if (mpPages.skill < 1) mpPages.skill = 1;
+  const cur = mpPages.skill;
+  const top = list.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
   let html = "";
   if (top.length === 0) {
-    html = `<div class="empty">还没有 skill —— 点下面的「＋ 扩展 skill」登记第一个（标题 + 提示词 + 简介）。<br>内置「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL）会在你首次进入时自动种子化。</div>`;
+    // 区分「真的一条都没有」与「搜索没命中」——后者显示"还没有"会误导用户去新增
+    html = SKILLS.length === 0
+      ? `<div class="empty">还没有 SKILL —— 点下面的「＋ 扩展 SKILL」登记第一个（标题 + 提示词 + 简介）。<br>内置「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL）会在你首次进入时自动种子化。</div>`
+      : `<div class="empty">没有匹配「${esc(mpQuery)}」的 SKILL —— 换个关键词试试</div>`;
   } else {
     for (const s of top) {
       const isDef = s.id === defaultSkillId();
@@ -5001,7 +5068,7 @@ function renderSkillPicker() {
       // 已停用（enabled=false）的 skill 在选择器里灰显且不可点 —— 让「启用」成为真正的开关
       const off = !s.enabled;
       html += `<div class="sk-item${sel}${off ? " off" : ""}"${off ? "" : ` onclick="selectSkill('${esc(s.id)}')"`}>
-        <span class="sk-rank">🧩</span>
+        <span class="sk-rank">${SKILL_LOGO}</span>
         <div class="sk-main">
           <div class="sk-ttl">${esc(s.title)}${isDef ? ' <span class="sk-badge">默认对话</span>' : ""}</div>
           <div class="sk-desc">${esc(s.summary || summarizePrompt(s.prompt))}</div>
@@ -5013,11 +5080,19 @@ function renderSkillPicker() {
       </div>`;
     }
   }
-  html += `<button type="button" class="sk-add" onclick="openSkillDialog()">＋ 扩展 skill（新增）</button>`;
+  html += `<button type="button" class="sk-add" onclick="openSkillDialog()">＋ 扩展 SKILL（新增）</button>`;
   const box = $("model-list");
   if (box) box.innerHTML = html;
+  // 分页条与模型列表完全同构：仅一页时隐藏，避免"1/1"这种无意义控件
   const pager = $("model-pager");
-  if (pager) pager.hidden = true;
+  if (pages > 1) {
+    pager.hidden = false;
+    $("model-page-n").textContent = `${cur} / ${pages} · 共 ${list.length} 个`;
+    pager.querySelectorAll("button")[0].disabled = cur <= 1;
+    pager.querySelectorAll("button")[1].disabled = cur >= pages;
+  } else {
+    pager.hidden = true;
+  }
 }
 
 /// 管理页 skill 面板：完整 CRUD 列表（新增走模型选择器的「＋ 扩展 skill」入口）。
@@ -5028,7 +5103,7 @@ function renderSkillPane() {
     .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
   let html = "";
   if (list.length === 0) {
-    html = `<div class="empty">还没有 skill。去<b>模型选择器 › skill 提示词</b>标签点「＋ 扩展 skill」新增——只需填「标题」「提示词」和「简介」。</div>`;
+    html = `<div class="empty">还没有 skill。去<b>模型选择器 › SKILL</b>标签点「＋ 扩展 SKILL」新增——只需填「标题」「提示词」和「简介」。</div>`;
   } else {
     for (const s of list) {
       html += `<div class="sk-row">
@@ -5573,11 +5648,15 @@ function renderModelsHead() {
         <button onclick="openResources()">模型服务商 →</button>
       </div>`;
   } else {
+    // 无有效当前模型（未选 / 已下架）：两个导航按钮依然要在位——
+    // 「回到对话」「模型服务商」是用户在管理页的高频出口，不能随数据态消失。
     cur.innerHTML = `<div class="mh-cur-row">
         <span class="mh-cur-name">${curModel ? esc(curModel) : "未选择模型"}</span>
         <span class="mh-cur-sub">${curModel ? "在已登记渠道里没找到这个模型（可能已被删除或改名）" : "去选一个模型开始对话"}</span>
         <span class="sp"></span>
         <button onclick="openModelPicker()">选择模型</button>
+        <button onclick="navigate('chat')">回到对话</button>
+        <button onclick="openResources()">模型服务商 →</button>
       </div>`;
   }
 

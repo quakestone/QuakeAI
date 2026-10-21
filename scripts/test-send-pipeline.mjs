@@ -203,5 +203,74 @@ console.log("== ④ modelHasVision：智能混合路由决策 ==");
   check("空模型 + 池无视觉模型 → 降级", noVision("") === false);
 }
 
+// ⑤ v0.19.22 UI 优化抽测：SKILL 列表分页/搜索 + 附件双形态 markup。
+//    这两个函数是纯渲染（输入 → HTML 字符串），用 stub DOM 真跑，比 grep 结实。
+console.log("== ⑤ v0.19.22：SKILL 分页/搜索 + 附件双形态 ==");
+{
+  const mkPicker = new Function("$", "SKILLS", "activeSkill", "defaultSkillId", "mpQuery",
+    "mpPages", "MP_PAGE_SIZE", "esc", "openSkillDialog", "summarizePrompt", "SKILL_LOGO",
+    extractFn("renderSkillPicker") + "\nreturn renderSkillPicker;");
+  const mkBtn = () => ({ disabled: false });
+  const mkEl = () => ({ innerHTML: "", textContent: "", hidden: false, querySelectorAll: () => [mkBtn(), mkBtn()] });
+  const els = { "model-list": mkEl(), "model-pager": mkEl(), "model-page-n": mkEl() };
+  const $ = (id) => els[id] || null;
+  const esc = (s) => String(s);
+  const mkSkills = (n) => Array.from({ length: n }, (_, i) =>
+    ({ id: "s" + i, title: "技能" + i, prompt: "p" + i, summary: "简" + i, used_count: n - i, enabled: true }));
+  const run = (skills, q, page) => {
+    const mpPages = { skill: page || 1 };
+    // 双调用：先以桩参数取到内层函数，再执行（内层函数自身无参，全靠闭包读桩）
+    mkPicker.call(null, $, skills, null, () => "", q || "", mpPages, 5, esc, () => {}, (p) => "摘要", "<svg/>")();
+    return { list: els["model-list"].innerHTML, pager: els["model-pager"].hidden, pageN: els["model-page-n"].textContent };
+  };
+  const nItem = (h) => (h.match(/sk-item/g) || []).length;
+  const r8 = run(mkSkills(8), "", 1);
+  check("⑤ 8 条 SKILL 首页只渲染 5 条（限 5）", nItem(r8.list) === 5, "got " + nItem(r8.list));
+  check("⑤ 分页条显示且标注「1 / 2 · 共 8 个」", r8.pager === false && r8.pageN === "1 / 2 · 共 8 个", r8.pageN);
+  const r8p2 = run(mkSkills(8), "", 2);
+  check("⑤ 第 2 页渲染剩余 3 条", nItem(r8p2.list) === 3 && r8p2.pageN === "2 / 2 · 共 8 个", r8p2.pageN);
+  const r3 = run(mkSkills(3), "", 1);
+  check("⑤ 3 条 SKILL 单页隐藏分页条", r3.pager === true && nItem(r3.list) === 3);
+  const rq = run(mkSkills(8), "技能7", 1);
+  check("⑤ 搜索命中 1 条且隐藏分页条", nItem(rq.list) === 1 && rq.pager === true);
+  const rmiss = run(mkSkills(8), "不存在", 1);
+  check("⑤ 搜索无命中给空态提示（不展示陈旧列表）", rmiss.list.includes("没有匹配") && nItem(rmiss.list) === 0);
+  const r1 = run(mkSkills(1), "", 1);
+  check("⑤ 条目用 SKILL_LOGO 徽标（非 🧩）", r1.list.includes('<span class="sk-rank"><svg/></span>') && !r1.list.includes("🧩"));
+  check("⑤ 新增入口为大写「＋ 扩展 SKILL」", r1.list.includes("＋ 扩展 SKILL（新增）"));
+  const rOver = run(mkSkills(2), "", 9);
+  // 页码越界钳到末页：条目数与隐藏态是契约；page-n 的陈旧文本在隐藏态不可见
+  // （与模型列表渲染器同模式，不苛求）
+  check("⑤ 页码越界钳到末页（渲染全部条目且分页条隐藏）", nItem(rOver.list) === 2 && rOver.pager === true, JSON.stringify(rOver));
+}
+{
+  const mkAtts = new Function("$", "PIPE", "attachments", "esc",
+    extractFn("renderAttachments") + "\nreturn renderAttachments;");
+  const bar = { innerHTML: "", hidden: true };
+  const $ = (id) => (id === "attach-bar" ? bar : null);
+  const esc = (s) => String(s);
+  const PIPE = { visible: false, atts: [] };
+  const atts = [
+    { kind: "image", name: "a.png", dataUrl: "data:image/png;base64,xx", st: "working" },
+    { kind: "audio", name: "b.wav", st: "" },
+    { kind: "video", name: "c.mp4", poster: "data:image/jpeg;base64,yy" },
+  ];
+  const render = (list) => mkAtts.call(null, $, PIPE, list, esc)();
+  render(atts);
+  check("⑤ 图片走 att-pic 小方片", bar.innerHTML.includes('class="att-chip att-pic"'));
+  check("⑤ 视频首帧也走 att-pic 小方片", (bar.innerHTML.match(/att-pic/g) || []).length === 2);
+  check("⑤ 音频走 att-file 小 pill 且带文件名", bar.innerHTML.includes('class="att-chip att-file"') && bar.innerHTML.includes(">b.wav<"));
+  check("⑤ 图片 chip 无名称行（名称收进 title）", !/<div class="att-nm">/.test(bar.innerHTML) && bar.innerHTML.includes('title="a.png"'));
+  check("⑤ working 态徽标渲染", bar.innerHTML.includes('data-st="working"') && bar.innerHTML.includes('class="att-st"'));
+  check("⑤ 有附件时附件栏展开", bar.hidden === false);
+  PIPE.visible = true; PIPE.atts = atts;   // 流水线期间：输入区 attachments 已清空
+  render([]);
+  check("⑤ 流水线期间回退渲染 PIPE.atts（chip 不消失）", bar.innerHTML.includes("att-pic"));
+  check("⑤ 流水线期间不渲染删除钮（防误删）", !bar.innerHTML.includes("att-x"));
+  PIPE.visible = false;
+  render([]);
+  check("⑤ 无附件时附件栏收起", bar.hidden === true);
+}
+
 console.log(`\n结果: PASS=${PASS} FAIL=${FAIL}`);
 process.exit(FAIL > 0 ? 1 : 0);

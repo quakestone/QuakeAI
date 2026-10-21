@@ -979,15 +979,16 @@ check "流循环里不再整列重绘" $? "renderMessages still in stream loop"
 echo "$UI" | grep -q 'id="mp-tabs"'; check "模型选择页有 4 标签栏" $? "no mp tabs"
 
 echo "$UI" | grep -q 'const MP_TABS = \["text", "skill", "audio", "mm"\]'; check "选择页共 4 个标签" $? "bad MP_TABS"
-# v0.19.13：输入区顺序（+ ⋯ 输入框 🎙 ↑）、修改态提示条、模型页定位
+# v0.19.22：输入区结构改为「附件栏（框内左上部）+ 按钮行」两段——
+# 顺序：attach-bar → + ⋯ 输入框 🎙 ↑。缩略图住进文本框内，"未发送"一眼可辨。
 python3 - <<'PYX'
 import re, sys
 s = open('src/admin_ui.html', encoding='utf-8').read()
-m = re.search(r'<div id="composer">(.*?)</div>', s, re.S)
+m = re.search(r'<div id="composer">(.*?)</div>\s*<input type="file"', s, re.S)
 ids = re.findall(r'id="([^"]+)"', m.group(1)) if m else []
-sys.exit(0 if ids == ["btn-attach", "btn-model", "input", "btn-voice", "btn-send"] else 1)
+sys.exit(0 if ids == ["attach-bar", "btn-attach", "btn-model", "input", "btn-voice", "btn-send"] else 1)
 PYX
-check "输入区顺序：+ ⋯ 输入框 🎙 ↑" $? "wrong composer order"
+check "输入区顺序：附件栏（框内）→ + ⋯ 输入框 🎙 ↑" $? "wrong composer order"
 grep -q 'id="edit-chip"' "$ROOT/src/admin_ui.html"; check "有「修改中」提示条" $? "no edit chip"
 grep -q 'function cancelEdit' "$ROOT/src/admin_ui.html"; check "修改可取消" $? "no cancelEdit"
 grep -q 'if (editCtx) {' "$ROOT/src/admin_ui.html"; check "发送前处理修改态" $? "edit not applied on send"
@@ -1021,7 +1022,10 @@ echo "$UI" | grep -q 'function turnConvoPage(d)'; check "会话翻页函数" $? 
 echo "$UI" | grep -q 'convoPage = Math.floor(i / CONVO_PAGE_SIZE) + 1'; check "打开会话自动跳到所在页" $? "no jump"
 if echo "$UI" | grep -q '"store: error"'; then check "store 徽章不再显示 error" 1 "error still shown"; else check "store 徽章不再显示 error" 0 ""; fi
 if echo "$UI" | grep -q 'id="store-badge"'; then check "store 徽章已从页头移除" 1 "store-badge still there"; else check "store 徽章已从页头移除" 0 ""; fi
-echo "$UI" | grep -q 'class="mgmt-top bare"'; check "模型管理页头极简（只留「模型管理」字样、其余留白）" $? "no bare header"
+# v0.19.22：模型管理页头从 bare（标题伪装返回）改为 slim 范式——左上角 ‹ 回退键
+# （与设置页同构；原来把标题做成返回入口没有任何可见性提示）
+echo "$UI" | grep -q '<button class="back" onclick="navigate('"'"'chat'"'"')" aria-label="返回聊天" title="返回聊天">‹</button>'; check "模型管理页头有 ‹ 回退键（v0.19.22 弃用 bare）" $? "no back button in models header"
+if echo "$UI" | grep -q 'mgmt-top bare'; then check "bare 页头已弃用" 1 "bare header still present"; else check "bare 页头已弃用" 0 ""; fi
 echo "$UI" | grep -q 'class="mgmt-top slim"'; check "设置页页头 slim（只留返回+标题）" $? "no slim header"
 echo "$UI" | grep -q 'tabbar'; check "标签栏样式存在（横向滚动不换行）" $? "no tabbar css"
 echo "$UI" | grep -q 'flex-wrap: wrap; min-width: 0; }'; check "模型行允许换行防溢出" $? "m-row overflow"
@@ -1062,7 +1066,7 @@ echo "$UI" | grep -q 'id="sk-summary"'; check "前端 skill 对话框含简介�
 echo "$UI" | grep -q 'maxlength="30"'; check "简介输入框限长 30 字" $? "no maxlength 30"
 echo "$UI" | grep -q 'function summarizePrompt'; check "前端简介兜底截取函数存在" $? "no summarizePrompt"
 echo "$UI" | grep -q 'sk-desc'; check "前端选择器列表含简介行 DOM" $? "no sk-desc"
-echo "$UI" | grep -q 'onclick="openSkillDialog()">＋ 扩展 skill（新增）'; check "扩展 skill 按钮直接弹新增对话框" $? "extend button not bound to openSkillDialog"
+echo "$UI" | grep -q 'onclick="openSkillDialog()">＋ 扩展 SKILL（新增）'; check "扩展 SKILL 按钮直接弹新增对话框（大写 SKILL）" $? "extend button not bound to openSkillDialog"
 echo "$UI" | grep -q '＋ 新增 skill'; [ $? -ne 0 ]; check "管理页 skill 面板不再有新增按钮" $? "add button still in pane"
 echo "$UI" | grep -q 'title="skill 提示词：独立于模型的表达线">skill 管理'; check "管理页提示词标签改名 skill 管理" $? "tab not renamed"
 echo "$UI" | grep -q 'for (const s of SKILLS) if (!s.summary) s.summary = summarizePrompt(s.prompt);'; check "旧 skill 无 summary 时前端兜底生成" $? "no legacy fallback"
@@ -1096,9 +1100,47 @@ echo "$UI" | grep -q '理解：${a.desc}'; check "buildApiContent 渲染理解�
 echo "$UI" | grep -q 'pipeFinishChat(true)'; check "流式结束收尾流水线⑤阶段" $? "no chat stage finish"
 echo "$UI" | grep -q 'const inPipe = PIPE.visible'; check "流水线期间输入区 chip 持续可见" $? "no inPipe fallback"
 
+echo "== 25. v0.19.22 UI 优化：SKILL 页大写化/刀形 logo/限5分页 + 管理页改名回退 + 缩略图入文本框 =="
+# —— 需求 1：选择器 SKILL 页 ——
+echo "$UI" | grep -q 'data-mtab="skill" onclick="setMpTab('"'"'skill'"'"')" title="SKILL：独立于模型的表达线">SKILL'; check "1a 选择器 skill 小标签改大写 SKILL" $? "tab not uppercased"
+echo "$UI" | grep -q '<span id="mp-ttl">选择模型</span>'; check "1a 对话框标题容器存在（大分页名）" $? "no mp-ttl"
+echo "$UI" | grep -q 'function mpTitle(k)'; check "1a 标题跟随小标签函数存在" $? "no mpTitle"
+echo "$UI" | grep -q 'skill: "SKILL" };'; check "1a MP_TAB_LABEL skill 项为大写 SKILL" $? "label not SKILL"
+echo "$UI" | grep -q 'const SKILL_LOGO'; check "1b SKILL 刀形几何 logo 常量存在" $? "no SKILL_LOGO"
+echo "$UI" | grep -q 'M12 1.6 15.1 9.2v6H8.9v-6Z'; check "1b logo 为匕首刀形路径" $? "not knife path"
+echo "$UI" | grep -q '<span class="sk-rank">${SKILL_LOGO}</span>'; check "1b 选择器条目用刀形 logo" $? "picker logo not swapped"
+echo "$UI" | grep -q 'class="sk-ic"><svg class="sk-logo"'; check "1b composer skill chip 也用刀形 logo" $? "chip logo not swapped"
+echo "$UI" | grep -q 'id="skill-chip-title"'; check "1b chip 标题容器仍在（logo 替换不影响结构）" $? "no chip title"
+echo "$UI" | grep -q 'const top = list.slice((cur - 1) \* MP_PAGE_SIZE, cur \* MP_PAGE_SIZE);'; check "1c skill 列表按 MP_PAGE_SIZE(5) 分页切片" $? "no page size slice"
+echo "$UI" | grep -q 'if (mpPages.skill > pages) mpPages.skill = pages;'; check "1c skill 页码钳制存在" $? "no skill page clamp"
+echo "$UI" | grep -q 'function mpModelOnly'; check "1 SKILL 标签隐藏模型专属控件" $? "no mpModelOnly"
+echo "$UI" | grep -q '🔍 搜索 SKILL 标题 / 简介…'; check "1a 搜索占位符跟随标签" $? "no skill placeholder"
+# —— 需求 2：管理页改名 + 回退 + 按钮常驻 ——
+echo "$UI" | grep -q 'data-mtab="models" onclick="setMgmtTab('"'"'models'"'"')">所有模型'; check "2a 管理页模型标签改名「所有模型」" $? "tab not renamed"
+echo "$UI" | grep -q '<header class="mgmt-top slim">'; check "2b 管理页头部改 slim 范式" $? "header not slim"
+echo "$UI" | grep -q '<button class="back" onclick="navigate('"'"'chat'"'"')" aria-label="返回聊天"'; check "2b 管理页有 ‹ 回退键" $? "no back button"
+echo "$UI" | grep -q '<button onclick="navigate('"'"'chat'"'"')">回到对话</button>'; check "2a 无当前模型分支也有「回到对话」" $? "no chat btn in else branch"
+echo "$UI" | grep -q '<button onclick="openResources()">模型服务商 →</button>'; check "2a 无当前模型分支也有「模型服务商」" $? "no resources btn in else branch"
+# —— 需求 3：附件缩略图入文本框 ——
+# 注意：此处 $UI 是 812 行抓取的在线 HTML 内容（非路径），先落临时文件再解析
+printf '%s' "$UI" > "$ROOT/.ui-snapshot.html"
+ATT_IN=$(python3 - "$ROOT/.ui-snapshot.html" <<'PYEOF'
+import re, sys
+html = open(sys.argv[1], encoding="utf-8").read()
+m = re.search(r'<div id="composer">(.*?)</div>\s*<input type="file"', html, re.S)
+print("1" if (m and 'id="attach-bar"' in m.group(1) and 'class="composer-row"' in m.group(1)) else "0")
+PYEOF
+)
+[ "$ATT_IN" = "1" ]; check "3 附件栏移入 #composer 内（按钮行包 composer-row）" $? "attach-bar not inside composer"
+echo "$UI" | grep -q '\.att-chip\.att-pic { width: 42px; height: 42px;'; check "3 图片 chip 为 42×42 小方片" $? "no 42px pic chip"
+echo "$UI" | grep -q '\.att-chip\.att-file {'; check "3 音频/文件 chip 为小 pill" $? "no file pill"
+echo "$UI" | grep -q '#attach-bar { display: flex; flex-wrap: wrap;'; check "3 附件栏在框内左上部换行堆叠" $? "attach-bar not wrapping"
+echo "$UI" | grep -q 'att-chip att-pic" data-st'; check "3 renderAttachments 输出小方片 markup" $? "no att-pic markup"
+echo "$UI" | grep -q 'att-chip att-file" data-st'; check "3 renderAttachments 输出小 pill markup" $? "no att-file markup"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null
 stop_workerd
-rm -f "$ROOT/workerd.retry.capnp" "$ROOT/workerd.retry2.capnp" "$ROOT/workerd.flaky.capnp"
+rm -f "$ROOT/workerd.retry.capnp" "$ROOT/workerd.retry2.capnp" "$ROOT/workerd.flaky.capnp" "$ROOT/.ui-snapshot.html"
 [ "$FAIL" -eq 0 ]
