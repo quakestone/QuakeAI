@@ -13,8 +13,8 @@
 //!   GET    /admin/api/usage/export    对账 CSV 导出（列名对齐 DeepSeek 官方 cost-*.csv）
 //!   GET    /admin/api/diag            部署自检（DO 绑定/env 状态，排障用）
 //!   GET    /admin/api/skills           skill 列表（按 used_count 倒序）
-//!   POST   /admin/api/skills          登记新 skill（title + prompt 必填）
-//!   PUT    /admin/api/skills/{id}     更新（title / prompt / enabled / used_count 按字段覆盖）
+//!   POST   /admin/api/skills          登记新 skill（title + prompt 必填；category/tier 选填，v0.19.23）
+//!   PUT    /admin/api/skills/{id}     更新（title / prompt / summary / category / tier / enabled / used_count 按字段覆盖）
 //!   DELETE /admin/api/skills/{id}     删除
 //!   POST   /admin/api/skills/{id}/use 累加 used_count（被应用到对话时调用）
 //!
@@ -493,12 +493,36 @@ async fn api_create_skill(mut req: Request, env: &Env) -> Result<Response> {
     } else {
         want_id
     };
-    let sk = crate::channels::Skill {
+    let mut sk = crate::channels::Skill {
         id,
         title,
         prompt,
         // 简介（≤30 字）：前端留空时自动截取生成后随表单提交；直调 API 缺省空串。
         summary: v.get("summary").and_then(|x| x.as_str()).unwrap_or("").trim().to_string(),
+        // 二级分类（v0.19.23）：缺省「日常应用」；显式传非法值 → 400（前端只有四个标签，不会传错）
+        category: {
+            let c = v.get("category").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            if c.is_empty() {
+                crate::channels::default_category()
+            } else if crate::channels::SKILL_CATEGORIES.contains(&c.as_str()) {
+                c
+            } else {
+                return json_error(400, "invalid_category", &format!(
+                    "category must be one of {:?}", crate::channels::SKILL_CATEGORIES
+                ));
+            }
+        },
+        // 台（v0.19.23）：缺省 normal（非系统级）；显式传非法值 → 400
+        tier: {
+            let t = v.get("tier").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            if t.is_empty() {
+                crate::channels::default_tier()
+            } else if crate::channels::skill_tier_valid(&t) {
+                t
+            } else {
+                return json_error(400, "invalid_tier", "tier must be 'system' or 'normal'");
+            }
+        },
         enabled: v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
         used_count: 0,
         created_at: now.clone(),
@@ -540,6 +564,30 @@ async fn api_update_skill(mut req: Request, env: &Env, id: &str) -> Result<Respo
     // 简介按字段覆盖：显式传空串 = 清空（前端会在展示层兜底截取，不回写）。
     if let Some(s) = v.get("summary").and_then(|x| x.as_str()) {
         sk.summary = s.trim().to_string();
+    }
+    // 二级分类按字段覆盖（v0.19.23）：显式传空串 = 回退默认分类；非法值 → 400
+    if let Some(s) = v.get("category").and_then(|x| x.as_str()) {
+        let c = s.trim();
+        if c.is_empty() {
+            sk.category = crate::channels::default_category();
+        } else if crate::channels::SKILL_CATEGORIES.contains(&c) {
+            sk.category = c.to_string();
+        } else {
+            return json_error(400, "invalid_category", &format!(
+                "category must be one of {:?}", crate::channels::SKILL_CATEGORIES
+            ));
+        }
+    }
+    // 台按字段覆盖（v0.19.23）：显式传空串 = 回退 normal；非法值 → 400
+    if let Some(s) = v.get("tier").and_then(|x| x.as_str()) {
+        let t = s.trim();
+        if t.is_empty() {
+            sk.tier = crate::channels::default_tier();
+        } else if crate::channels::skill_tier_valid(t) {
+            sk.tier = t.to_string();
+        } else {
+            return json_error(400, "invalid_tier", "tier must be 'system' or 'normal'");
+        }
     }
     if let Some(b) = v.get("enabled").and_then(|x| x.as_bool()) {
         sk.enabled = b;

@@ -175,6 +175,9 @@ pub struct Channel {
 /// `summary` 是提示词的 ≤30 字简略说明，选择器列表第二行展示；缺省空串
 /// （旧账本零迁移，前端对空 summary 自动从 prompt 兜底截取）。
 /// `used_count` 累计被应用到对话的次数，决定列表里「使用最频繁的前 6 条」。
+/// v0.19.23 起新增 `category`（二级分类：日常应用/专业场景/笔记整理/模型整理）
+/// 与 `tier`（台：系统级默认使用 vs 非系统级默认使用）——旧账本零迁移，
+/// 缺省「日常应用 / 非系统级」。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Skill {
     pub id: String,
@@ -186,6 +189,15 @@ pub struct Skill {
     /// 新增/编辑时留空由前端自动截取生成；后端不强制（兼容旧数据与直接调 API）。
     #[serde(default)]
     pub summary: String,
+    /// 二级分类标签（v0.19.23）：管理页与选择器的 SKILL 二级分类。
+    /// 合法值见 `SKILL_CATEGORIES`；旧账本缺省「日常应用」。
+    #[serde(default = "default_category")]
+    pub category: String,
+    /// 台（v0.19.23）：`system` = 系统级默认使用（系统硬编码，不罗列前端列表流，
+    /// 如深度思考/智能搜索）；`normal` = 非系统级默认使用（用户自建，列表流可见）。
+    /// 旧账本缺省 `normal`。
+    #[serde(default = "default_tier")]
+    pub tier: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// 使用次数（被应用到对话的累计次数），缺省 0
@@ -193,6 +205,24 @@ pub struct Skill {
     pub used_count: u64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// skill 二级分类的合法值（v0.19.23）：管理页/选择器的四个二级标签。
+pub const SKILL_CATEGORIES: [&str; 4] = ["日常应用", "专业场景", "笔记整理", "模型整理"];
+
+/// 旧账本零迁移的缺省分类：全部归入「日常应用」。
+pub fn default_category() -> String {
+    "日常应用".to_string()
+}
+
+/// 旧账本零迁移的缺省台：非系统级（用户自建，列表流可见）。
+pub fn default_tier() -> String {
+    "normal".to_string()
+}
+
+/// 台是否合法：仅 `system` / `normal` 两态。
+pub fn skill_tier_valid(tier: &str) -> bool {
+    tier == "system" || tier == "normal"
 }
 
 /// 模型名是否支持视觉（图片输入）。覆盖主流国内免费资源的视觉模型命名：

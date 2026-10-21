@@ -203,24 +203,30 @@ console.log("== ④ modelHasVision：智能混合路由决策 ==");
   check("空模型 + 池无视觉模型 → 降级", noVision("") === false);
 }
 
-// ⑤ v0.19.22 UI 优化抽测：SKILL 列表分页/搜索 + 附件双形态 markup。
-//    这两个函数是纯渲染（输入 → HTML 字符串），用 stub DOM 真跑，比 grep 结实。
-console.log("== ⑤ v0.19.22：SKILL 分页/搜索 + 附件双形态 ==");
+// ⑤ v0.19.23 SKILL 选择器抽测：二级分类过滤 + 系统级不罗列 + 各分类独立页码 + 分页/搜索。
+//    v0.19.22 起这里是纯渲染（输入 → HTML 字符串），用 stub DOM 真跑，比 grep 结实。
+console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
 {
-  const mkPicker = new Function("$", "SKILLS", "activeSkill", "defaultSkillId", "mpQuery",
-    "mpPages", "MP_PAGE_SIZE", "esc", "openSkillDialog", "summarizePrompt", "SKILL_LOGO",
-    extractFn("renderSkillPicker") + "\nreturn renderSkillPicker;");
+  const mkPicker = new Function("$", "SKILLS", "SKILL_CATS", "activeSkill", "defaultSkillId", "mpQuery",
+    "mpSkillCat", "mpSkillPages", "MP_PAGE_SIZE", "esc", "openSkillDialog", "summarizePrompt", "SKILL_LOGO",
+    "skillCat", "skillListable",
+    extractFn("skCatBar") + "\n" + extractFn("setSkCat") + "\n" + extractFn("renderSkillPicker") + "\nreturn renderSkillPicker;");
   const mkBtn = () => ({ disabled: false });
   const mkEl = () => ({ innerHTML: "", textContent: "", hidden: false, querySelectorAll: () => [mkBtn(), mkBtn()] });
   const els = { "model-list": mkEl(), "model-pager": mkEl(), "model-page-n": mkEl() };
   const $ = (id) => els[id] || null;
   const esc = (s) => String(s);
-  const mkSkills = (n) => Array.from({ length: n }, (_, i) =>
-    ({ id: "s" + i, title: "技能" + i, prompt: "p" + i, summary: "简" + i, used_count: n - i, enabled: true }));
-  const run = (skills, q, page) => {
-    const mpPages = { skill: page || 1 };
+  const SKILL_CATS = ["日常应用", "专业场景", "笔记整理", "模型整理"];
+  const skillCat = (s) => SKILL_CATS.includes(s.category) ? s.category : SKILL_CATS[0];
+  const skillTier = (s) => s.tier === "system" ? "system" : "normal";
+  const skillListable = (s) => skillTier(s) !== "system";
+  const mkSkills = (n, cat, tier) => Array.from({ length: n }, (_, i) =>
+    ({ id: "s" + i, title: "技能" + i, prompt: "p" + i, summary: "简" + i, used_count: n - i, enabled: true, category: cat || "日常应用", tier: tier || "normal" }));
+  const run = (skills, q, page, cat) => {
+    const c = cat || "日常应用";
+    const mpSkillPages = { [c]: page || 1 };
     // 双调用：先以桩参数取到内层函数，再执行（内层函数自身无参，全靠闭包读桩）
-    mkPicker.call(null, $, skills, null, () => "", q || "", mpPages, 5, esc, () => {}, (p) => "摘要", "<svg/>")();
+    mkPicker.call(null, $, skills, SKILL_CATS, null, () => "", q || "", c, mpSkillPages, 5, esc, () => {}, (p) => "摘要", "<svg/>", skillCat, skillListable)();
     return { list: els["model-list"].innerHTML, pager: els["model-pager"].hidden, pageN: els["model-page-n"].textContent };
   };
   const nItem = (h) => (h.match(/sk-item/g) || []).length;
@@ -235,6 +241,18 @@ console.log("== ⑤ v0.19.22：SKILL 分页/搜索 + 附件双形态 ==");
   check("⑤ 搜索命中 1 条且隐藏分页条", nItem(rq.list) === 1 && rq.pager === true);
   const rmiss = run(mkSkills(8), "不存在", 1);
   check("⑤ 搜索无命中给空态提示（不展示陈旧列表）", rmiss.list.includes("没有匹配") && nItem(rmiss.list) === 0);
+  // —— v0.19.23 新增：二级分类 + 台属性 ——
+  const nCat = (h) => (h.match(/class="sk-cat[\s"]/g) || []).length;
+  check("⑤ 分类标签条渲染四个二级分类", nCat(r8.list) === 4, "got " + nCat(r8.list));
+  check("⑤ 当前分类高亮（sel）", (r8.list.match(/sk-cat sel/g) || []).length === 1);
+  const rOther = run(mkSkills(3, "专业场景"), "", 1, "专业场景");
+  check("⑤ 按分类过滤：专业场景分类只渲染该分类条目", nItem(rOther.list) === 3);
+  const rMixed = run([...mkSkills(2, "日常应用"), ...mkSkills(3, "专业场景")], "", 1, "专业场景");
+  check("⑤ 混合数据按当前分类过滤（只出 3 条专业场景）", nItem(rMixed.list) === 3, "got " + nItem(rMixed.list));
+  const rSys = run([...mkSkills(2, "日常应用"), ...mkSkills(2, "日常应用", "system")], "", 1, "日常应用");
+  check("⑤ 系统级 skill 不罗列在列表流", nItem(rSys.list) === 2, "got " + nItem(rSys.list));
+  const rEmpty = run([], "", 1);
+  check("⑤ 分类下真空态给分类名提示", rEmpty.list.includes("「日常应用」分类下还没有 SKILL"));
   const r1 = run(mkSkills(1), "", 1);
   check("⑤ 条目用 SKILL_LOGO 徽标（非 🧩）", r1.list.includes('<span class="sk-rank"><svg/></span>') && !r1.list.includes("🧩"));
   check("⑤ 新增入口为大写「＋ 扩展 SKILL」", r1.list.includes("＋ 扩展 SKILL（新增）"));

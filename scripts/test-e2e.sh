@@ -1068,8 +1068,8 @@ echo "$UI" | grep -q 'function summarizePrompt'; check "前端简介兜底截取
 echo "$UI" | grep -q 'sk-desc'; check "前端选择器列表含简介行 DOM" $? "no sk-desc"
 echo "$UI" | grep -q 'onclick="openSkillDialog()">＋ 扩展 SKILL（新增）'; check "扩展 SKILL 按钮直接弹新增对话框（大写 SKILL）" $? "extend button not bound to openSkillDialog"
 echo "$UI" | grep -q '＋ 新增 skill'; [ $? -ne 0 ]; check "管理页 skill 面板不再有新增按钮" $? "add button still in pane"
-echo "$UI" | grep -q 'title="skill 提示词：独立于模型的表达线">skill 管理'; check "管理页提示词标签改名 skill 管理" $? "tab not renamed"
-echo "$UI" | grep -q 'for (const s of SKILLS) if (!s.summary) s.summary = summarizePrompt(s.prompt);'; check "旧 skill 无 summary 时前端兜底生成" $? "no legacy fallback"
+echo "$UI" | grep -q 'title="SKILL 管理：独立于模型的表达线，二级分类 + 分页">SKILL 管理'; check "管理页提示词标签改名 SKILL 管理（v0.19.23）" $? "tab not renamed"
+echo "$UI" | grep -q 'if (!s.summary) s.summary = summarizePrompt(s.prompt);'; check "旧 skill 无 summary 时前端兜底生成" $? "no legacy fallback"
 echo "$UI" | grep -q 'summary: "回答前三角度自辩，再统一作答"'; check "内置种子 skill 带简介" $? "seed has no summary"
 
 echo "== 24. v0.19.21 发送流水线：文本/图片/音频/视频状态机 + 工作流小引擎串行流 =="
@@ -1112,15 +1112,17 @@ echo "$UI" | grep -q '<span class="sk-rank">${SKILL_LOGO}</span>'; check "1b 选
 echo "$UI" | grep -q 'class="sk-ic"><svg class="sk-logo"'; check "1b composer skill chip 也用刀形 logo" $? "chip logo not swapped"
 echo "$UI" | grep -q 'id="skill-chip-title"'; check "1b chip 标题容器仍在（logo 替换不影响结构）" $? "no chip title"
 echo "$UI" | grep -q 'const top = list.slice((cur - 1) \* MP_PAGE_SIZE, cur \* MP_PAGE_SIZE);'; check "1c skill 列表按 MP_PAGE_SIZE(5) 分页切片" $? "no page size slice"
-echo "$UI" | grep -q 'if (mpPages.skill > pages) mpPages.skill = pages;'; check "1c skill 页码钳制存在" $? "no skill page clamp"
+echo "$UI" | grep -q 'mpSkillPages\[cat\] = Math.min(Math.max(1, mpSkillPages\[cat\] || 1), pages);'; check "1c skill 页码钳制存在（v0.19.23 改按二级分类）" $? "no skill page clamp"
 echo "$UI" | grep -q 'function mpModelOnly'; check "1 SKILL 标签隐藏模型专属控件" $? "no mpModelOnly"
 echo "$UI" | grep -q '🔍 搜索 SKILL 标题 / 简介…'; check "1a 搜索占位符跟随标签" $? "no skill placeholder"
 # —— 需求 2：管理页改名 + 回退 + 按钮常驻 ——
 echo "$UI" | grep -q 'data-mtab="models" onclick="setMgmtTab('"'"'models'"'"')">所有模型'; check "2a 管理页模型标签改名「所有模型」" $? "tab not renamed"
 echo "$UI" | grep -q '<header class="mgmt-top slim">'; check "2b 管理页头部改 slim 范式" $? "header not slim"
 echo "$UI" | grep -q '<button class="back" onclick="navigate('"'"'chat'"'"')" aria-label="返回聊天"'; check "2b 管理页有 ‹ 回退键" $? "no back button"
-echo "$UI" | grep -q '<button onclick="navigate('"'"'chat'"'"')">回到对话</button>'; check "2a 无当前模型分支也有「回到对话」" $? "no chat btn in else branch"
-echo "$UI" | grep -q '<button onclick="openResources()">模型服务商 →</button>'; check "2a 无当前模型分支也有「模型服务商」" $? "no resources btn in else branch"
+# —— v0.19.23 需求：「所有模型」标签去掉「回到对话 / 模型服务商」两按钮（反向断言） ——
+absent() { if echo "$UI" | grep -q "$1"; then return 1; else return 0; fi; }
+absent '<button onclick="navigate('"'"'chat'"'"')">回到对话</button>'; check "2a-v0.19.23 「所有模型」已去掉「回到对话」" $? "chat btn still present"
+absent '<button onclick="openResources()">模型服务商 →</button>'; check "2a-v0.19.23 「所有模型」已去掉「模型服务商」" $? "resources btn still present"
 # —— 需求 3：附件缩略图入文本框 ——
 # 注意：此处 $UI 是 812 行抓取的在线 HTML 内容（非路径），先落临时文件再解析
 printf '%s' "$UI" > "$ROOT/.ui-snapshot.html"
@@ -1137,6 +1139,40 @@ echo "$UI" | grep -q '\.att-chip\.att-file {'; check "3 音频/文件 chip 为�
 echo "$UI" | grep -q '#attach-bar { display: flex; flex-wrap: wrap;'; check "3 附件栏在框内左上部换行堆叠" $? "attach-bar not wrapping"
 echo "$UI" | grep -q 'att-chip att-pic" data-st'; check "3 renderAttachments 输出小方片 markup" $? "no att-pic markup"
 echo "$UI" | grep -q 'att-chip att-file" data-st'; check "3 renderAttachments 输出小 pill markup" $? "no att-file markup"
+
+echo "== 26. v0.19.23 SKILL 管理：二级分类 + 台属性 + 分页 + 选择器趋同 =="
+# —— 前端：分类/台常量与工具 ——
+echo "$UI" | grep -q 'const SKILL_CATS = \["日常应用", "专业场景", "笔记整理", "模型整理"\];'; check "1 SKILL 二级分类四标签常量" $? "no SKILL_CATS"
+echo "$UI" | grep -q 'const SKILL_TIER_SYSTEM = "system";'; check "1 台属性系统级常量" $? "no SKILL_TIER_SYSTEM"
+echo "$UI" | grep -q 'function skillListable(s) { return skillTier(s) !== SKILL_TIER_SYSTEM; }'; check "1 系统级 skill 不罗列列表流的判定函数" $? "no skillListable"
+echo "$UI" | grep -q 'function skCatBar(scope, cur)'; check "1 二级分类标签条渲染函数" $? "no skCatBar"
+echo "$UI" | grep -q 'function setSkCat(scope, cat)'; check "1 二级分类切换函数（mp/mgmt 分流）" $? "no setSkCat"
+# —— 前端：选择器 SKILL 子页趋同（分类过滤 + 独立页码）——
+echo "$UI" | grep -q 'SKILLS.filter(s => skillListable(s) && skillCat(s) === cat)'; check "2 选择器 SKILL 列表按分类过滤且排除系统级" $? "picker no cat filter"
+echo "$UI" | grep -q 'mpSkillPages\[cat\] = Math.min(Math.max(1, mpSkillPages\[cat\] || 1), pages);'; check "2 选择器 SKILL 各分类独立页码钳制" $? "no per-cat page clamp"
+echo "$UI" | grep -q 'let mpSkillCat = SKILL_CATS\[0\];'; check "2 选择器 SKILL 当前分类状态" $? "no mpSkillCat"
+echo "$UI" | grep -q 'if (mpTab === "skill") mpSkillPages\[mpSkillCurCat()\] = 1;'; check "2 搜索词变更重置当前分类页码" $? "search no cat reset"
+# —— 前端：管理页 SKILL 管理（分页条 + 翻页函数）——
+echo "$UI" | grep -q 'id="skill-pager" hidden'; check "3 管理页 SKILL 独立分页条容器" $? "no skill-pager"
+echo "$UI" | grep -q 'function turnMgmtSkillPage(d)'; check "3 管理页 SKILL 翻页函数" $? "no turnMgmtSkillPage"
+echo "$UI" | grep -q 'mgmtSkillPages\[cat\] = Math.min(Math.max(1, mgmtSkillPages\[cat\] || 1), pages);'; check "3 管理页各分类独立页码钳制" $? "no mgmt per-cat clamp"
+echo "$UI" | grep -q 'let mgmtSkillCat = SKILL_CATS\[0\];'; check "3 管理页 SKILL 当前分类状态" $? "no mgmtSkillCat"
+# —— 前端：对话框分类/台字段 + 提交 ——
+echo "$UI" | grep -q '<select id="sk-category">'; check "4 skill 对话框分类下拉" $? "no sk-category"
+echo "$UI" | grep -q '<select id="sk-tier">'; check "4 skill 对话框台下拉" $? "no sk-tier"
+echo "$UI" | grep -q 'const body = { title, prompt, summary, enabled, category, tier };'; check "4 提交带 category/tier" $? "body missing fields"
+# —— 前端：零迁移兜底 ——
+echo "$UI" | grep -q 'if (!SKILL_CATS.includes(s.category)) s.category = SKILL_CATS\[0\];'; check "5 旧账本 category 内存兜底（不回写）" $? "no cat fallback"
+echo "$UI" | grep -q 'if (s.tier !== SKILL_TIER_SYSTEM) s.tier = "normal";'; check "5 旧账本 tier 内存兜底" $? "no tier fallback"
+# —— 后端：数据模型 + API 校验 ——
+grep -q 'pub const SKILL_CATEGORIES' src/channels.rs; check "6 后端 SKILL_CATEGORIES 合法值表" $? "no SKILL_CATEGORIES"
+grep -q 'pub fn default_category() -> String' src/channels.rs; check "6 后端缺省分类函数" $? "no default_category"
+grep -q 'pub fn skill_tier_valid(tier: &str) -> bool' src/channels.rs; check "6 后端 tier 合法性函数" $? "no skill_tier_valid"
+grep -q '#\[serde(default = "default_category")\]' src/channels.rs; check "6 Skill.category serde 缺省（零迁移）" $? "no category serde default"
+grep -q '#\[serde(default = "default_tier")\]' src/channels.rs; check "6 Skill.tier serde 缺省（零迁移）" $? "no tier serde default"
+grep -q '"invalid_category"' src/admin.rs; check "6 创建/更新 category 非法值 400" $? "no invalid_category"
+grep -q '"invalid_tier"' src/admin.rs; check "6 创建/更新 tier 非法值 400" $? "no invalid_tier"
+grep -q 'const category = SKILL_CATS.includes($("sk-category").value)' src/admin_ui.html; check "4 提交前分类白名单校验" $? "no client cat whitelist"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

@@ -503,6 +503,11 @@
   .sk-item .sk-act { flex: none; display: flex; gap: 6px; }
   .sk-item .sk-act button { border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 7px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
   .sk-item .sk-act button:hover { border-color: var(--acc); color: var(--acc); }
+  /* v0.19.23：SKILL 二级分类标签条（管理页与选择器共用） */
+  .sk-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .sk-cat { flex: none; border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  .sk-cat:hover { border-color: var(--acc); color: var(--acc); }
+  .sk-cat.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); font-weight: 600; }
   .sk-item.off { opacity: .45; cursor: not-allowed; }
   .sk-item.off:hover { border-color: var(--border); }
   .sk-badge { font-size: 10px; color: var(--acc); border: 1px solid var(--acc); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
@@ -946,7 +951,7 @@
     <div class="tabbar" id="mgmt-tabs">
       <button class="tab sel" data-mtab="models" onclick="setMgmtTab('models')">所有模型</button>
       <button class="tab" data-mtab="resources" onclick="setMgmtTab('resources')" title="已登记的模型服务商（渠道）">模型服务商</button>
-      <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="skill 提示词：独立于模型的表达线">skill 管理</button>
+      <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="SKILL 管理：独立于模型的表达线，二级分类 + 分页">SKILL 管理</button>
       <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')" title="模型用量">用量</button>
       <button class="tab" data-mtab="points" onclick="setMgmtTab('points')" title="模型积分榜">积分榜</button>
     </div>
@@ -1015,8 +1020,13 @@
     <!-- 面板 2：skill 子系统（独立于模型的对象） -->
     <div id="pane-skill" hidden>
       <div class="card">
-        <div class="hint" style="margin-bottom:10px">skill 是<b>独立于模型</b>的表达线：只登记「标题 + 提示词正文」。选中并发送时，skill 的提示词会作为 <code>system</code> 消息注入本轮对话，模型按它的指令作答——与选哪个模型无关。列表按使用频次展示。</div>
+        <div class="hint" style="margin-bottom:10px">skill 是<b>独立于模型</b>的表达线：只登记「标题 + 提示词正文」。选中并发送时，skill 的提示词会作为 <code>system</code> 消息注入本轮对话，模型按它的指令作答——与选哪个模型无关。v0.19.23 起按二级分类管理，每页 5 条；<b>系统级</b> skill 由系统硬编码，不在此列表罗列。</div>
         <div class="mg-pane-body" id="skill-card-body"></div>
+        <div class="mp-pager" id="skill-pager" hidden>
+          <button type="button" onclick="turnMgmtSkillPage(-1)">‹</button>
+          <span id="skill-page-n"></span>
+          <button type="button" onclick="turnMgmtSkillPage(1)">›</button>
+        </div>
       </div>
     </div>
 
@@ -1310,6 +1320,13 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
     <div class="full"><label>标题 *</label><input id="sk-title" placeholder="例：三个诸葛亮 / 中英双语润色 / 代码审查"></div>
     <div class="full"><label>提示词正文 *</label><textarea id="sk-prompt" class="sk-prompt" placeholder="描述这个 skill 要模型怎么做……"></textarea></div>
     <div class="full"><label>简介（≤30 字，选择器列表展示）</label><input id="sk-summary" maxlength="30" placeholder="留空自动按提示词首行截取"><div class="hint" style="margin-top:4px">不填也能保存——自动截取提示词第一行生成；之后想改随时编辑。</div></div>
+    <div><label>分类（二级标签）</label><select id="sk-category">
+      <option>日常应用</option><option>专业场景</option><option>笔记整理</option><option>模型整理</option>
+    </select></div>
+    <div><label>台</label><select id="sk-tier">
+      <option value="normal">非系统级（用户自建，列表可见）</option>
+      <option value="system">系统级（硬编码，不在列表罗列）</option>
+    </select></div>
     <div><label>启用</label><select id="sk-enabled"><option value="1">启用</option><option value="0">停用</option></select></div>
   </div>
   <div class="dlg-actions">
@@ -4642,8 +4659,17 @@ function updateAvailTs() {
   el.textContent = availLastRun() ? "2 小时内不再自动检测" : "";
 }
 
-function mpPage() { return mpPages[mpTab] || 1; }
-function setMpPage(p) { mpPages[mpTab] = Math.max(1, p); renderModelList(); availScanVisible(); }
+/// 选择器页码读写（v0.19.23 起 skill 标签按二级分类各自独立页码：
+/// SKILL 标签的页码状态在 mpSkillPages[分类]，模型标签仍在 mpPages[标签]）。
+function mpSkillCurCat() { return SKILL_CATS.includes(mpSkillCat) ? mpSkillCat : SKILL_CATS[0]; }
+function mpPage() {
+  return mpTab === "skill" ? (mpSkillPages[mpSkillCurCat()] || 1) : (mpPages[mpTab] || 1);
+}
+function setMpPage(p) {
+  if (mpTab === "skill") mpSkillPages[mpSkillCurCat()] = Math.max(1, p);
+  else mpPages[mpTab] = Math.max(1, p);
+  renderModelList(); availScanVisible();
+}
 function turnModelPage(d) { setMpPage(mpPage() + d); }
 function setMpTab(k) {
   if (!MP_TABS.includes(k)) return;
@@ -4658,7 +4684,9 @@ function setMpTab(k) {
 }
 function setModelQuery(q) {
   mpQuery = (q || "").trim().toLowerCase();
-  mpPages[mpTab] = 1;     // 换搜索词回到当前标签的第 1 页
+  // 换搜索词回到当前标签/分类的第 1 页（skill 标签按二级分类各自重置）
+  if (mpTab === "skill") mpSkillPages[mpSkillCurCat()] = 1;
+  else mpPages[mpTab] = 1;
   renderModelList();
   availScanDebounced();   // 防抖：边打字边扫会把额度打光
 }
@@ -4668,6 +4696,7 @@ function openModelPicker() {
   // 每次打开都重置搜索词，避免上次的过滤残留
   mpQuery = "";
   mpPages = { text: 1, skill: 1, audio: 1, mm: 1 };
+  mpSkillPages = {};   // v0.19.23：skill 二级分类页码随打开一并重置（分类保留上次选择）
   // 定位（v0.19.13）：直接落到「当前模型所在的标签 + 所在的页」，
   // 不再固定文本标签第 1 页、也不再靠分页条右侧的「当前在第 N 页 ›」手动跳。
   // modelTabOf 只认具体模型；自动（空名）或已下架的模型落文本标签第 1 页。
@@ -4874,6 +4903,20 @@ let STORE_STATE = "unknown";
 // skill 子系统：与模型完全独立的表达线（标题 + 提示词正文）
 let SKILLS = [];
 let activeSkill = null;   // 当前选中的 skill（composer chip 显示，发送时注入 system 消息）
+// v0.19.23：skill 二级分类（管理页与选择器共用四个标签）与台属性。
+// 二级分类：管理页/选择器 SKILL 标签下的分类标签；旧账本零迁移归入「日常应用」。
+// 台：system=系统级默认使用（系统硬编码，不罗列列表流）；normal=非系统级（用户自建，列表流可见）。
+const SKILL_CATS = ["日常应用", "专业场景", "笔记整理", "模型整理"];
+const SKILL_TIER_SYSTEM = "system";
+let mgmtSkillCat = SKILL_CATS[0];        // 管理页 SKILL 管理：当前二级分类
+let mgmtSkillPages = {};                 // 管理页：各二级分类独立页码 {日常应用:1, …}
+let mpSkillCat = SKILL_CATS[0];          // 选择器 SKILL 标签：当前二级分类
+let mpSkillPages = {};                   // 选择器：各二级分类独立页码
+/// 旧账本零迁移 + API 兜底：缺省 category/tier 时补默认值（不立即回写 DO）。
+function skillCat(s) { return SKILL_CATS.includes(s.category) ? s.category : SKILL_CATS[0]; }
+function skillTier(s) { return s.tier === SKILL_TIER_SYSTEM ? SKILL_TIER_SYSTEM : "normal"; }
+/// 列表流可见性：系统级 skill 不罗列在前端列表流（管理页与选择器同口径）。
+function skillListable(s) { return skillTier(s) !== SKILL_TIER_SYSTEM; }
 // 默认对话 skill：用户「启用」后持久化，新对话自动带上（无需每次手动点选）。
 // 这是真正让「启用」生效的开关——之前 enabled 只是个展示标签，点了对话里也不会带。
 const GW_DEFAULT_SKILL_KEY = "gw_default_skill";
@@ -4998,6 +5041,8 @@ async function loadSkills() {
           title: "三个诸葛亮",
           prompt: DRILL_PROMPT,
           summary: "回答前三角度自辩，再统一作答",
+          category: "日常应用",
+          tier: "normal",
           enabled: true,
         });
         const data2 = await api("/skills");
@@ -5009,7 +5054,12 @@ async function loadSkills() {
   }
   // 旧账本零迁移：v0.19.19 前的 skill 没有 summary 字段——内存里从 prompt
   // 兜底截取一份（≤30 字），不立即回写 DO；下次编辑保存时自然带上。
-  for (const s of SKILLS) if (!s.summary) s.summary = summarizePrompt(s.prompt);
+  // v0.19.23 起同理补 category/tier 缺省值（旧 skill 全部归入「日常应用 / 非系统级」）。
+  for (const s of SKILLS) {
+    if (!s.summary) s.summary = summarizePrompt(s.prompt);
+    if (!SKILL_CATS.includes(s.category)) s.category = SKILL_CATS[0];
+    if (s.tier !== SKILL_TIER_SYSTEM) s.tier = "normal";
+  }
   // 恢复默认对话 skill：用户在管理面板「启用」后，新对话自动带上，不必每次点选。
   // 仅在当前没手动选中时才回退到默认，避免覆盖用户当轮临时切的 skill。
   const def = defaultSkillId();
@@ -5038,12 +5088,27 @@ function summarizePrompt(p) {
 /// （拼装语义弱，且与工作流参数的 🧩 撞车）。选择器条目与 composer chip 共用。
 const SKILL_LOGO = `<svg class="sk-logo" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 1.6 15.1 9.2v6H8.9v-6Z"/><rect x="6.1" y="15.6" width="11.8" height="1.8" rx=".9"/><rect x="10.7" y="17.4" width="2.6" height="3.4" rx=".8" opacity=".8"/><circle cx="12" cy="21.7" r="1.2"/></svg>`;
 
+/// SKILL 二级分类标签条（管理页与选择器共用，v0.19.23）：四个分类 chip + 选中态。
+/// scope: "mp"（模型选择器）| "mgmt"（管理页）——点击回调分流到各自的状态与重渲染。
+function skCatBar(scope, cur) {
+  return `<div class="sk-cats">` + SKILL_CATS.map(c =>
+    `<button type="button" class="sk-cat${c === cur ? " sel" : ""}" onclick="setSkCat('${scope}','${esc(c)}')">${esc(c)}</button>`
+  ).join("") + `</div>`;
+}
+function setSkCat(scope, cat) {
+  if (!SKILL_CATS.includes(cat)) return;
+  if (scope === "mp") { mpSkillCat = cat; if (mpTab === "skill") renderModelList(); }
+  else { mgmtSkillCat = cat; if (mgmtTab === "skill") renderSkillPane(); }
+}
+
 /// 选择器 SKILL 标签：每条三行（标题 / 简介≤30字 / 已用 N 次），按使用频次排序；
 /// **与模型列表同一范式**：每页最多 MP_PAGE_SIZE(5) 条 + 分页条 + 搜索过滤；
-/// 末行「＋ 扩展 SKILL」直接弹出新增对话框（不再跳管理页——新增是高频操作）。
+/// v0.19.23 起叠加二级分类标签（日常应用/专业场景/笔记整理/模型整理，各分类独立页码），
+/// 系统级 skill（tier=system）不罗列在列表流；末行「＋ 扩展 SKILL」直接弹新增对话框。
 function renderSkillPicker() {
   const q = (mpQuery || "").trim().toLowerCase();
-  const list = SKILLS.slice()
+  const cat = SKILL_CATS.includes(mpSkillCat) ? mpSkillCat : SKILL_CATS[0];
+  const list = SKILLS.filter(s => skillListable(s) && skillCat(s) === cat)
     .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)))
     // 搜索：标题 / 简介 / 提示词正文任一命中即保留（与模型列表的模糊搜索同口径）
     .filter(s => !q
@@ -5051,15 +5116,14 @@ function renderSkillPicker() {
       || String(s.summary || "").toLowerCase().includes(q)
       || String(s.prompt || "").toLowerCase().includes(q));
   const pages = Math.max(1, Math.ceil(list.length / MP_PAGE_SIZE));
-  if (mpPages.skill > pages) mpPages.skill = pages;
-  if (mpPages.skill < 1) mpPages.skill = 1;
-  const cur = mpPages.skill;
+  mpSkillPages[cat] = Math.min(Math.max(1, mpSkillPages[cat] || 1), pages);
+  const cur = mpSkillPages[cat];
   const top = list.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
-  let html = "";
+  let html = skCatBar("mp", cat);
   if (top.length === 0) {
-    // 区分「真的一条都没有」与「搜索没命中」——后者显示"还没有"会误导用户去新增
-    html = SKILLS.length === 0
-      ? `<div class="empty">还没有 SKILL —— 点下面的「＋ 扩展 SKILL」登记第一个（标题 + 提示词 + 简介）。<br>内置「三个诸葛亮」（PRE-ANSWER DRILL PROTOCOL）会在你首次进入时自动种子化。</div>`
+    // 区分「该分类真没有」与「搜索没命中」——后者显示"还没有"会误导用户去新增
+    html += (list.length === 0 && !q)
+      ? `<div class="empty">「${esc(cat)}」分类下还没有 SKILL —— 点下面的「＋ 扩展 SKILL」登记第一个（标题 + 提示词 + 简介）。</div>`
       : `<div class="empty">没有匹配「${esc(mpQuery)}」的 SKILL —— 换个关键词试试</div>`;
   } else {
     for (const s of top) {
@@ -5095,15 +5159,22 @@ function renderSkillPicker() {
   }
 }
 
-/// 管理页 skill 面板：完整 CRUD 列表（新增走模型选择器的「＋ 扩展 skill」入口）。
+/// 管理页 skill 面板：完整 CRUD 列表（新增走模型选择器的「＋ 扩展 SKILL」入口）。
+/// v0.19.23：二级分类标签（与选择器同范式，各分类独立页码）+ 每页 5 条分页；
+/// 系统级 skill（tier=system，系统硬编码）不罗列在列表流。
 function renderSkillPane() {
   const el = $("skill-card-body");
   if (!el) return;
-  const list = SKILLS.slice()
+  const cat = SKILL_CATS.includes(mgmtSkillCat) ? mgmtSkillCat : SKILL_CATS[0];
+  const all = SKILLS.filter(s => skillListable(s) && skillCat(s) === cat)
     .sort((a, b) => (b.used_count - a.used_count) || String(a.title).localeCompare(String(b.title)));
-  let html = "";
-  if (list.length === 0) {
-    html = `<div class="empty">还没有 skill。去<b>模型选择器 › SKILL</b>标签点「＋ 扩展 SKILL」新增——只需填「标题」「提示词」和「简介」。</div>`;
+  const pages = Math.max(1, Math.ceil(all.length / MP_PAGE_SIZE));
+  mgmtSkillPages[cat] = Math.min(Math.max(1, mgmtSkillPages[cat] || 1), pages);
+  const cur = mgmtSkillPages[cat];
+  const list = all.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
+  let html = skCatBar("mgmt", cat);
+  if (all.length === 0) {
+    html += `<div class="empty">「${esc(cat)}」分类下还没有 skill。去<b>模型选择器 › SKILL</b>标签点「＋ 扩展 SKILL」新增——只需填「标题」「提示词」和「简介」，分类选「${esc(cat)}」。</div>`;
   } else {
     for (const s of list) {
       html += `<div class="sk-row">
@@ -5124,6 +5195,25 @@ function renderSkillPane() {
     }
   }
   el.innerHTML = html;
+  // 管理页独立分页条（与选择器 model-pager 同构）：仅一页时隐藏
+  const pager = $("skill-pager");
+  if (pager) {
+    if (pages > 1) {
+      pager.hidden = false;
+      $("skill-page-n").textContent = `${cur} / ${pages} · 共 ${all.length} 个`;
+      pager.querySelectorAll("button")[0].disabled = cur <= 1;
+      pager.querySelectorAll("button")[1].disabled = cur >= pages;
+    } else {
+      pager.hidden = true;
+    }
+  }
+}
+
+/// 管理页 SKILL 列表翻页（二级分类各自独立页码）。
+function turnMgmtSkillPage(d) {
+  const cat = SKILL_CATS.includes(mgmtSkillCat) ? mgmtSkillCat : SKILL_CATS[0];
+  mgmtSkillPages[cat] = Math.max(1, (mgmtSkillPages[cat] || 1) + d);
+  renderSkillPane();
 }
 
 /// 在模型选择器里点 skill 标题：设为当前表达线，关闭选择器，composer 显示 chip。
@@ -5200,6 +5290,8 @@ function openSkillDialog(editId) {
   $("sk-prompt").value = s ? s.prompt : "";
   $("sk-summary").value = s ? (s.summary || summarizePrompt(s.prompt)) : "";
   $("sk-enabled").value = s ? (s.enabled ? "1" : "0") : "1";
+  $("sk-category").value = s ? skillCat(s) : SKILL_CATS[0];
+  $("sk-tier").value = s ? skillTier(s) : "normal";
   dlg.dataset.editId = s ? s.id : "";
   try { dlg.showModal(); } catch {}
 }
@@ -5214,9 +5306,11 @@ function submitSkill() {
   if (summary.length > 30) summary = summary.slice(0, 30);
   if (!summary) summary = summarizePrompt(prompt);
   const enabled = $("sk-enabled").value === "1";
+  const category = SKILL_CATS.includes($("sk-category").value) ? $("sk-category").value : SKILL_CATS[0];
+  const tier = $("sk-tier").value === "system" ? "system" : "normal";
   if (!title) { toast("标题不能为空", "err"); return; }
   if (!prompt.trim()) { toast("提示词正文不能为空", "err"); return; }
-  const body = { title, prompt, summary, enabled };
+  const body = { title, prompt, summary, enabled, category, tier };
   const run = editId
     ? api("/skills/" + encodeURIComponent(editId), "PUT", body)
     : api("/skills", "POST", body);
@@ -5644,19 +5738,16 @@ function renderModelsHead() {
         <span class="tag">${esc(modelTabOf(curModel) || "文本")}</span>
         <span class="mh-cur-sub">来自「${esc(curRow.c.name)}」${curRow.m.enabled === false ? " · <span style='color:var(--warn)'>该模型已停用</span>" : ""}</span>
         <span class="sp"></span>
-        <button onclick="navigate('chat')">回到对话</button>
-        <button onclick="openResources()">模型服务商 →</button>
       </div>`;
   } else {
-    // 无有效当前模型（未选 / 已下架）：两个导航按钮依然要在位——
-    // 「回到对话」「模型服务商」是用户在管理页的高频出口，不能随数据态消失。
+    // 无有效当前模型（未选 / 已下架）：只留「选择模型」——「回到对话 / 模型服务商」
+    // 快捷按钮按 v0.19.23 需求去掉（v0.19.22 刚加上，用户反馈主标签不要这两个按钮）；
+    // 导航仍有页头 ‹ 回退键与顶部标签栏，不会断路径。
     cur.innerHTML = `<div class="mh-cur-row">
         <span class="mh-cur-name">${curModel ? esc(curModel) : "未选择模型"}</span>
         <span class="mh-cur-sub">${curModel ? "在已登记渠道里没找到这个模型（可能已被删除或改名）" : "去选一个模型开始对话"}</span>
         <span class="sp"></span>
         <button onclick="openModelPicker()">选择模型</button>
-        <button onclick="navigate('chat')">回到对话</button>
-        <button onclick="openResources()">模型服务商 →</button>
       </div>`;
   }
 
