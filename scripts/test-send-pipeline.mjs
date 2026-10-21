@@ -367,18 +367,19 @@ console.log("== ⑥ v0.19.25：系统级流开关 + 三流展示渲染 ==");
   // —— 一键不带上总开关 ——
   const f2 = mk(["s1"]);
   renderAll(f2);
-  check("⑥ 默认带上态：开关实底 + 文案「默认 · 带上」",
-    els["sf-skip"]._cls.on === true && els["sf-skip"].textContent === "默认 · 带上");
+  check("⑥ 默认带上态：开关点亮（与系统级同构 .on）",
+    els["sf-skip"]._cls.on === true && String(els["sf-skip"].title).includes("每次发送必带"));
   f2.toggleSkipDefault();
-  check("⑥ 一键不带上：暂停持久化 + 文案提示恢复",
-    store["gw_skip_default"] === "1" && els["sf-skip"].textContent.includes("不带上默认"));
+  check("⑥ 一键不带上：暂停持久化 + 熄灭 + title 提示恢复",
+    store["gw_skip_default"] === "1" && els["sf-skip"]._cls.on === false
+    && String(els["sf-skip"].title).includes("点击恢复"));
   renderAll(f2);
   check("⑥ 暂停态：chips 组变暗（paused）且 chip title 标注已暂停",
     els["sf-defaults"]._cls.paused === true && els["sf-defaults"].innerHTML.includes("（已暂停，不带上）"));
   const f3 = mk(["s1"]);
   f3.toggleSkipDefault();   // 再点恢复
-  check("⑥ 恢复带上：key 移除 + 文案回到带上态",
-    !("gw_skip_default" in store) && els["sf-skip"].textContent === "默认 · 带上");
+  check("⑥ 恢复带上：key 移除 + 重新点亮",
+    !("gw_skip_default" in store) && els["sf-skip"]._cls.on === true);
 }
 
 // ⑦ v0.19.29 网络探测插件三态：trace 成功（线上 CF）/ trace 404 降级 health / 全失败。

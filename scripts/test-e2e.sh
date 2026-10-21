@@ -1183,7 +1183,7 @@ echo "$UI" | grep -q 'function saveDefaultSkillIds(ids)'; check "1 多选保存�
 echo "$UI" | grep -q 'function isDefaultSkill(id)'; check "1 单选判定改多选口径" $? "no isDefaultSkill"
 echo "$UI" | grep -q 'const old = localStorage.getItem(GW_DEFAULT_SKILL_KEY) || "";'; check "1 旧单选 key 只读迁移" $? "no legacy migration"
 # —— 管理页：计数行 + 切换按钮 + 上限禁用 ——
-echo "$UI" | grep -q 'class="sk-def-count">默认对话 skill：'; check "2 管理页默认对话计数行" $? "no def count"
+echo "$UI" | grep -q 'class="sk-def-badge" title="每次发送自动带上的 skill'; check "2 管理页默认对话计数徽标（轻量）" $? "no def badge"
 echo "$UI" | grep -q 'function toggleDefaultSkill(id)'; check "2 默认对话切换函数（加/减）" $? "no toggleDefaultSkill"
 echo "$UI" | grep -q 'disabled title="默认对话最多 ' ; check "2 达上限时按钮禁用并提示" $? "no cap disable"
 echo "$UI" | grep -q 'toast(`默认对话最多 ${MAX_DEFAULT_SKILLS} 个 —— 先取消一个再加`, "err")'; check "2 超上限 toast 提示" $? "no cap toast"
@@ -1372,6 +1372,43 @@ grep -q 'include_str!("offline.html")' src/lib.rs; check "5 后端 /offline.html
 grep -q 'req.mode === "navigate"' src/sw.js; check "6 SW 导航请求 network-first" $? "no navigate strategy"
 grep -q 'caches.match("/")' src/sw.js; check "6 失败回缓存主 UI（UI 不变）" $? "no shell fallback"
 grep -q 'stale-while-revalidate' src/sw.js; check "6 静态资源 SWR" $? "no SWR"
+
+echo "== 33. v0.19.31 底部信息行紧密化 + SKILL UI 四项 =="
+# —— A. 底部信息行（提示语 + 网络状态同排，占高缩小）——
+echo "$UI" | grep -q '<div class="composer-foot">'; check "1 底部信息行容器" $? "no composer-foot"
+echo "$UI" | grep -q '\.composer-foot { display: flex; align-items: center; justify-content: space-between'; check "1 左提示右状态同排" $? "no flex row"
+echo "$UI" | grep -q '<span class="composer-hint" id="route-hint">自动路由最优免费渠道'; check "1 提示文案缩短" $? "hint too long"
+echo "$UI" | grep -q '\.composer-foot \.composer-hint { margin-top: 0;'; check "1 提示语零上边距（紧密）" $? "loose margin"
+echo "$UI" | grep -q '\.net-bar { display: flex; align-items: center; justify-content: center; gap: 5px;' ; check "1 网络状态并入底部行" $? "net-bar not merged"
+echo "$UI" | grep -q 'padding: 0; font-size: 10.5px; color: var(--dim);'; check "1 状态栏零内边距占高最小" $? "net-bar padding"
+# —— B1. 「？」帮助浮层（原大段说明收进来）——
+echo "$UI" | grep -q '<div class="sk-head">'; check "2 SKILL 管理头部行" $? "no sk-head"
+echo "$UI" | grep -q 'class="sk-help" id="sk-help-btn" onclick="toggleSkillHelp()"'; check "2 「？」帮助按钮" $? "no sk-help btn"
+echo "$UI" | grep -q '<div class="sk-help-pop" id="sk-help-pop" hidden>'; check "2 二级浮层默认收起" $? "no help pop"
+echo "$UI" | grep -q '<b>什么是 SKILL</b>'; check "2 浮层含「什么是 SKILL」" $? "no what-is"
+echo "$UI" | grep -q '<b>默认对话 skill</b>'; check "2 浮层含默认对话说明" $? "no default sec"
+echo "$UI" | grep -q '<b>二级分类</b>'; check "2 浮层含分类含义" $? "no cat sec"
+echo "$UI" | grep -q 'function toggleSkillHelp()'; check "2 浮层开关函数" $? "no toggle"
+absent 'v0.19.23 起按二级分类管理，每页 5 条'; check "2 旧整段文本介绍已移除（面板内）" $? "old hint remains"
+echo "$UI" | grep -q 'class="sk-def-badge"'; check "2 计数改轻量徽标" $? "no badge"
+# —— B2. 分类标签一体化（segmented control）——
+echo "$UI" | grep -q '\.sk-cats { display: flex; gap: 0; margin-bottom: 10px; border: 1px solid var(--border);'; check "3 分类条单一外框" $? "no segmented frame"
+echo "$UI" | grep -q '\.sk-cat { flex: 1 1 0; min-width: 64px; border: none; border-right: 1px solid var(--border);'; check "3 四段等分无缝相邻" $? "no equal segments"
+echo "$UI" | grep -q '\.sk-cat:last-child { border-right: none; }'; check "3 末段无分隔线" $? "no last-child"
+absent '.sk-cat { flex: none; border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 999px;'; check "3 旧独立胶囊已移除" $? "old pill remains"
+# —— B3. 标签栏加高 + 默认态绿色 ——
+echo "$UI" | grep -q '\.sk-row \.sk-foot { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dim); min-height: 36px; }'; check "4 标签栏加高 36px" $? "no min-height"
+echo "$UI" | grep -q 'border-radius: 7px; padding: 7px 12px; font-size: 12px; cursor: pointer;'; check "4 按钮点击区加大" $? "btn small"
+echo "$UI" | grep -q '\.sk-row \.sk-foot button\.def-on { border-color: var(--ok);'; check "4 默认态绿色强区分" $? "no green"
+echo "$UI" | grep -q '★ 默认对话中 · 点击取消'; check "4 默认态带 ★ 标识" $? "no star"
+# —— B4. 依附区动效统一 + toast 上移 ——
+echo "$UI" | grep -q '\.sf-skip { display: inline-flex; align-items: center; gap: 5px; height: 28px;'; check "5 默认开关与系统级同高 28px" $? "no same height"
+absent '.sf-skip { display: inline-flex; align-items: center; gap: 5px; height: 26px;'; check "5 旧 26px 高度已移除" $? "old height"
+[ "$(echo "$UI" | grep -c 'border: 1px dashed #4a3d85')" = "1" ]; check "5 旧虚线框只剩扩展按钮（.sf-skip 已同构）" $? "dashed count"
+echo "$UI" | grep -q '<span>默认 skill</span>'; check "5 固定文字「默认 skill」" $? "no fixed label"
+echo "$UI" | grep -q '#toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(12px'; check "6 toast 移到顶部" $? "toast bottom"
+echo "$UI" | grep -q 'flex-direction: column-reverse; gap: 8px; z-index: 60;'; check "6 新消息贴最上" $? "no reverse"
+echo "$UI" | grep -q '@keyframes tin { from { transform: translateY(-8px); opacity: 0; } }'; check "6 toast 从上方滑入" $? "no top anim"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

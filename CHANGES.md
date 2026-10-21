@@ -1,4 +1,35 @@
-## v0.19.30（本版）—— 心跳改空闲窗口调度：requestIdleCallback + timeout 兜底
+## v0.19.31（本版）—— 底部信息行紧密化 + SKILL 管理四项 UI 优化
+
+> 需求来源（用户 2026-10-21）：①「底部文本与网络状态表达不够紧密 占位高度要缩小」；② SKILL 管理四项（说明收进「？」浮层 / 分类标签一体化 / 标签栏加高 + 默认态色彩 / 依附区动效与 toast 上移）。
+
+### A. 底部信息行紧密化
+- `.composer-foot` 容器：提示语（左）+ 网络状态（右）同排，`justify-content: space-between`、`flex-wrap` 兜底窄屏。
+- 提示文案缩短为「自动路由最优免费渠道 · 降权自动切换」，字号 10.5px、`margin-top: 0`；`.net-bar` 内边距归零、字号同步 10.5px。
+- 占高从「hint 一行 + 状态栏一行（含 8px 下内边距）」压缩为一行。
+
+### B1. 说明文本 → 「？」二级浮层
+- 移除面板内整段 hint（「skill 是独立于模型的表达线…v0.19.23 起按二级分类管理…」）。
+- 新增 `.sk-head`（标题「SKILL 管理」+ 圆形「？」按钮）与 `.sk-help-pop` 浮层：三段（什么是 SKILL / 默认对话 skill / 二级分类），`toggleSkillHelp()` 开关，默认收起。
+- `sk-def-count` 整行说明 → `sk-def-badge` 轻量徽标（`默认对话 1/3：三个诸葛亮`，数字绿色）。
+
+### B2. 分类标签一体化
+- `.sk-cats` 从 `flex-wrap + gap:6px` 的独立胶囊改为 **segmented control**：单一外框（`border-radius:10px` + `overflow-x:auto`）、`.sk-cat` `flex:1 1 0` 等分、段间 1px 分隔线（末段无）、选中段 `--sel` 实底加粗。
+- 管理页与选择器共用 `skCatBar`，一处改两处生效。
+
+### B3. 列表标签栏加高 + 默认态色彩
+- `.sk-foot` `min-height:36px`、`gap:8px`；按钮 `padding:7px 12px`、字号 12px。
+- 默认态按钮 `class="primary"` → `class="def-on"`：绿色描边 + 浅绿底 + 加粗 + `★` 前缀「★ 默认对话中 · 点击取消」，hover 转绿实底白字。
+
+### B4. 依附区动效统一 + toast 上移
+- `.sf-skip` 与 `.sf-sys` 完全同构：同 28px 高、同 `1px solid var(--border)` 描边、同 `.on` 点亮态（acc 描边 + 深底），固定图标（星形）+ 固定文字「默认 skill」；状态靠点亮/灰灭表达，文案靠 `title` 切换——不再整句换文案。
+- `#toast` 从 `bottom` 移到 `top: calc(12px + safe-area)`，`flex-direction: column-reverse`（新消息贴最上），`@keyframes tin` 改为从上方滑入（`translateY(-8px)`）。
+
+### 测试
+- e2e：663 → **693/693**（+30：底部行结构/文案/零边距、浮层三段与开关、旧 hint 反向断言、segmented 三段式样式与旧胶囊反向断言、标签栏 36px/按钮尺寸/绿色 def-on/★、sf-skip 同构与固定文案、toast 顶部/反向排列/上滑动画）
+- 单测 32/32、行为测试 69/69（⑥ 段断言从「文案变化」改为「点亮态 + title」，与新交互对齐）
+- 浏览器实测：桌面截图确认底部同行紧凑、依附区三个开关同构；管理页截图确认「？」浮层三段展开、绿色 ★ 默认态、一体化分类条、加高标签栏、顶部 toast
+
+## v0.19.30 —— 心跳改空闲窗口调度：requestIdleCallback + timeout 兜底
 
 > 需求来源（用户 2026-10-21）：「用 requestIdleCallback 调度：将心跳这种非关键任务委托给 requestIdleCallback，它只在浏览器空闲时执行，对主线程的抢占极低。若必须保底，可设置 timeout 强制兜底。」
 

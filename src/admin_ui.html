@@ -482,11 +482,18 @@
   .att-row .att-img-wrap, .att-row .att-file-wrap { display: flex; flex-direction: column; }
   .composer-hint { text-align: center; font-size: 11px; color: var(--dim); margin-top: 6px; }
 
-  /* v0.19.29 网络状态栏：底部细栏，四态指示灯 + 地球图标 + 文案。
+  /* v0.19.31 底部信息行：提示语（左）+ 网络状态（右）同排，间距压缩、占高最小。
+     小屏（<380px）自动换行仍保持紧凑（gap 4px）。 */
+  .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    margin-top: 3px; flex-wrap: wrap; }
+  .composer-foot .composer-hint { margin-top: 0; text-align: left; flex: 0 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+
+  /* v0.19.29 网络状态栏：四态指示灯 + 地球图标 + 文案（v0.19.31 起并入底部信息行）。
      红/白两态=缓存模式（发送禁用、播音降级本地合成），文案第二格显示「缓存」。 */
-  .net-bar { display: flex; align-items: center; justify-content: center; gap: 6px;
-    padding: 4px 12px 8px; font-size: 11px; color: var(--dim);
-    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .net-bar { display: flex; align-items: center; justify-content: center; gap: 5px;
+    padding: 0; font-size: 10.5px; color: var(--dim);
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; flex: none; }
   .net-bar .nb-led { width: 7px; height: 7px; border-radius: 50%; background: #777; flex: none; transition: background .2s; }
   .net-bar .nb-ic { width: 12px; height: 12px; flex: none; }
   .net-bar[data-st="ok"] .nb-led { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
@@ -539,12 +546,15 @@
   .sf-chip .sk-x:hover { border-color: var(--acc); color: var(--acc); }
   .sf-group { display: inline-flex; flex-wrap: wrap; gap: 6px; }
   .sf-group.paused { opacity: .45; }
-  /* 「一键不带上默认」总开关：带上=实底强调，暂停=描边幽灵 */
-  .sf-skip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px;
-    border: 1px dashed #4a3d85; background: transparent; border-radius: 8px;
+  /* 「默认 skill」总开关（v0.19.31）：与系统级 .sf-sys 完全同构——同高 28px、
+     同描边/点亮动效，只差图标与文字。固定的文字 + 点亮/灰灭表达带上/不带上，
+     不再靠整句换文案（两套范式并存看着不一体）。 */
+  .sf-skip { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px;
+    border: 1px solid var(--border); background: var(--panel); border-radius: 8px;
     color: var(--dim); font-size: 12px; cursor: pointer; flex: none; }
-  .sf-skip:hover { border-color: var(--acc); color: #cfc4ff; }
-  .sf-skip.on { border-style: solid; border-color: var(--acc); color: var(--acc); background: #1d1740; }
+  .sf-skip svg { width: 14px; height: 14px; display: block; }
+  .sf-skip:hover { border-color: #4a3d85; color: #cfc4ff; }
+  .sf-skip.on { border-color: var(--acc); color: var(--acc); background: #1d1740; }
 
   /* 模型选择器里 skill 标签的条目 */
   .sk-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; cursor: pointer; min-width: 0; }
@@ -561,13 +571,23 @@
   .sk-item .sk-act button { border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 7px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
   .sk-item .sk-act button:hover { border-color: var(--acc); color: var(--acc); }
   /* v0.19.23：SKILL 二级分类标签条（管理页与选择器共用） */
-  .sk-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-  .sk-cat { flex: none; border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
-  .sk-cat:hover { border-color: var(--acc); color: var(--acc); }
-  .sk-cat.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); font-weight: 600; }
+  /* v0.19.31 二级分类改 segmented control：一个外框包住四段、等分无缝相邻——
+     原来是四个散落的圆角胶囊（flex-wrap + gap），看着不像一个控件。窄屏横向滚动不换行。 */
+  .sk-cats { display: flex; gap: 0; margin-bottom: 10px; border: 1px solid var(--border);
+    border-radius: 10px; overflow-x: auto; overflow-y: hidden; background: var(--panel2); scrollbar-width: none; }
+  .sk-cats::-webkit-scrollbar { display: none; }
+  .sk-cat { flex: 1 1 0; min-width: 64px; border: none; border-right: 1px solid var(--border);
+    background: transparent; color: var(--dim); border-radius: 0; padding: 8px 6px; font-size: 12px;
+    cursor: pointer; white-space: nowrap; }
+  .sk-cat:last-child { border-right: none; }
+  .sk-cat:hover { color: var(--acc); background: rgba(108,140,255,.06); }
+  .sk-cat.sel { background: var(--sel); color: var(--fg); font-weight: 600; }
   /* v0.19.24：管理页默认对话 skill 计数行（多选 ≤3） */
   .sk-def-count { font-size: 12px; color: var(--dim); margin: -4px 0 10px; line-height: 1.5; }
   .sk-def-count b { color: var(--acc); }
+  /* v0.19.31：轻量计数徽标（替代整行说明句），绿色=已生效 */
+  .sk-def-badge { font-size: 11px; color: var(--dim); margin: -4px 0 10px; }
+  .sk-def-badge b { color: var(--ok); }
   .sk-item.off { opacity: .45; cursor: not-allowed; }
   .sk-item.off:hover { border-color: var(--border); }
   .sk-badge { font-size: 10px; color: var(--acc); border: 1px solid var(--acc); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
@@ -578,11 +598,29 @@
   .sk-row .sk-ttl { flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .sk-row .sk-desc { font-size: 11.5px; color: #a9a3c9; margin: 4px 0 2px; line-height: 1.45; }
   .sk-row .sk-body { font-size: 11.5px; color: var(--dim); margin: 6px 0 8px; max-height: 56px; overflow: hidden; line-height: 1.5; }
-  .sk-row .sk-foot { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--dim); }
+  /* v0.19.31 标签栏（条目底部操作行）加高：min-height 36px、按钮 7×12/12px ——
+     点击区更大；「默认对话中」用绿色实底强区分（绿=已生效，灰=未生效）。 */
+  .sk-row .sk-foot { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--dim); min-height: 36px; }
   .sk-row .sk-foot .sp { flex: 1 1 auto; }
-  .sk-row .sk-foot button { border: 1px solid var(--border); background: var(--panel2); color: var(--txt); border-radius: 7px; padding: 4px 9px; font-size: 11px; cursor: pointer; }
+  .sk-row .sk-foot button { border: 1px solid var(--border); background: var(--panel2); color: var(--txt); border-radius: 7px; padding: 7px 12px; font-size: 12px; cursor: pointer; }
   .sk-row .sk-foot button:hover { border-color: var(--acc); color: var(--acc); }
+  .sk-row .sk-foot button.def-on { border-color: var(--ok); color: var(--ok); background: rgba(65,192,138,.12); font-weight: 600; }
+  .sk-row .sk-foot button.def-on:hover { border-color: var(--ok); background: var(--ok); color: #fff; }
   .sk-row .sk-foot button.danger:hover { border-color: var(--bad); color: var(--bad); }
+
+  /* v0.19.31 SKILL 管理头部：「？」帮助入口 + 二级浮层（原大段文本介绍收进来） */
+  .sk-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .sk-head .sk-head-ttl { font-size: 13px; font-weight: 600; color: var(--fg); }
+  .sk-help { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 1px solid var(--border);
+    background: var(--panel2); color: var(--dim); font-size: 12px; line-height: 1; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; padding: 0; min-height: 0; font-weight: 600; }
+  .sk-help:hover, .sk-help.on { border-color: var(--acc); color: var(--acc); }
+  .sk-help-pop { border: 1px solid var(--border); background: var(--panel2); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 10px; font-size: 12px; color: var(--dim); line-height: 1.6; }
+  .sk-help-pop[hidden] { display: none; }
+  .sk-help-pop .shp-sec + .shp-sec { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+  .sk-help-pop b { color: var(--fg); }
+  .sk-help-pop code { font-size: 11px; padding: 0 4px; border-radius: 4px; background: var(--bg3); }
   .sk-add { width: 100%; padding: 9px; border: 1px dashed #4a3d85; background: transparent; color: #cfc4ff; border-radius: 10px; cursor: pointer; font-size: 13px; }
   .sk-add:hover { background: #1d1740; }
   textarea.sk-prompt { width: 100%; min-height: 200px; resize: vertical; }
@@ -806,14 +844,16 @@
   .pts-neg { color: var(--bad); }
   .pts-rank { color: var(--dim); width: 28px; }
 
-  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 8px; z-index: 60; width: min(92vw, 420px); pointer-events: none; }
+  /* v0.19.31 toast 移到顶部：从上方滑入——不再压在输入框上影响打字。
+     column-reverse 让「最新一条」贴最上方（视觉焦点从上往下堆）。 */
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); top: calc(12px + env(safe-area-inset-top, 0px)); display: flex; flex-direction: column-reverse; gap: 8px; z-index: 60; width: min(92vw, 420px); pointer-events: none; }
   /* toast 是纯通知：绝不拦截点击（#toast 容器 pointer-events:none，子元素继承）。
      曾因 .toast 单独开 pointer-events:auto，底部输入区 4.6s 内点不动——
      用户视角就是「界面卡了/按钮失灵」。 */
   .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--acc); border-radius: 10px; padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px var(--shadow); animation: tin .18s ease-out; overflow-wrap: anywhere; }
   .toast.ok { border-left-color: var(--ok); }
   .toast.err { border-left-color: var(--bad); }
-  @keyframes tin { from { transform: translateY(8px); opacity: 0; } }
+  @keyframes tin { from { transform: translateY(-8px); opacity: 0; } }
 
   /* ================= 移动端（<=900px） ================= */
   @media (max-width: 900px) {
@@ -961,7 +1001,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.6 15.6 21 21"/><path d="M10.5 7.4v6.2M7.4 10.5h6.2" opacity=".55"/></svg><span>智能搜索</span>
         </button>
         <span class="sf-group" id="sf-defaults"></span>
-        <button type="button" class="sf-skip" id="sf-skip" onclick="toggleSkipDefault()" title="一键不带上默认 skill（设置保留，随时恢复）"></button>
+        <button type="button" class="sf-skip" id="sf-skip" onclick="toggleSkipDefault()" title="默认 skill 每次发送必带，点击暂停/恢复"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.3-4.1 5.9-.9Z"/></svg><span>默认 skill</span></button>
         <div id="skill-chip" class="skill-chip" hidden style="margin-bottom:0;margin-left:auto">
           <span class="sk-ic"><svg class="sk-logo" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 1.6 15.1 9.2v6H8.9v-6Z"/><rect x="6.1" y="15.6" width="11.8" height="1.8" rx=".9"/><rect x="10.7" y="17.4" width="2.6" height="3.4" rx=".8" opacity=".8"/><circle cx="12" cy="21.7" r="1.2"/></svg></span>
           <span class="sk-t" id="skill-chip-title"></span>
@@ -988,15 +1028,16 @@
         </div>
       </div>
       <input type="file" id="file-input" multiple hidden accept="image/*,video/*,audio/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xlsx,.zip">
-      <div class="composer-hint" id="route-hint">模型请求由网关自动路由到最优免费渠道 · 降权自动切换</div>
-    </div>
-    <!-- v0.19.29 网络状态栏（仅聊天首页底部）：由 WASM net_probe 工作流驱动。
-         四态：🟢<300ms · 🟡300-800ms · 🔴>800ms 切缓存模式 · ⚪离线切缓存模式；
-         红/白两态第二格显示「缓存」，协议与国家取上次成功快照。点击手动重探。 -->
-    <div id="net-bar" class="net-bar" data-st="idle" onclick="probeNet('manual')" title="点击重新检测网络（落到哪个 CF 边缘、延迟多少）">
-      <span class="nb-led" id="nb-led"></span>
-      <svg class="nb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.2 12h17.6"/><path d="M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>
-      <span class="nb-txt" id="nb-txt">检测中…</span>
+      <!-- v0.19.31 底部信息行：提示语与网络状态合并一行（左提示 / 右状态），
+           小屏自动换行——替代原来上下两行、间距松散占高。 -->
+      <div class="composer-foot">
+        <span class="composer-hint" id="route-hint">自动路由最优免费渠道 · 降权自动切换</span>
+        <div id="net-bar" class="net-bar" data-st="idle" onclick="probeNet('manual')" title="点击重新检测网络（落到哪个 CF 边缘、延迟多少）">
+          <span class="nb-led" id="nb-led"></span>
+          <svg class="nb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.2 12h17.6"/><path d="M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>
+          <span class="nb-txt" id="nb-txt">检测中…</span>
+        </div>
+      </div>
     </div>
     <div id="rec-overlay" hidden>
       <div class="rec-panel">
@@ -1140,7 +1181,17 @@
     <!-- 面板 2：skill 子系统（独立于模型的对象） -->
     <div id="pane-skill" hidden>
       <div class="card">
-        <div class="hint" style="margin-bottom:10px">skill 是<b>独立于模型</b>的表达线：只登记「标题 + 提示词正文」。选中并发送时，skill 的提示词会作为 <code>system</code> 消息注入本轮对话，模型按它的指令作答——与选哪个模型无关。v0.19.23 起按二级分类管理，每页 5 条；<b>系统级</b> skill 由系统硬编码，不在此列表罗列。</div>
+        <!-- v0.19.31：原来的大段文本介绍收进「？」二级浮层——页面只留标题与问号，
+             点开才展开「什么是 SKILL / 默认对话 / 分类」三段说明。 -->
+        <div class="sk-head">
+          <span class="sk-head-ttl">SKILL 管理</span>
+          <button type="button" class="sk-help" id="sk-help-btn" onclick="toggleSkillHelp()" aria-label="什么是 SKILL" title="什么是 SKILL">?</button>
+        </div>
+        <div class="sk-help-pop" id="sk-help-pop" hidden>
+          <div class="shp-sec"><b>什么是 SKILL</b><br>独立于模型的<b>表达线</b>：只登记「标题 + 提示词正文」。选中并发送时，它的提示词作为 <code>system</code> 消息注入本轮对话，模型按它的指令作答——与选哪个模型无关。</div>
+          <div class="shp-sec"><b>默认对话 skill</b><br>设为默认的会在<b>每次发送自动带上</b>（最多 3 个），首页「默认 skill」开关可一键暂停。系统级 skill（深度思考 / 智能搜索）由系统硬编码，<b>不在此列表罗列</b>，只在首页以图标开关出现。</div>
+          <div class="shp-sec"><b>二级分类</b><br>日常应用 / 专业场景 / 笔记整理 / 模型整理——各分类独立分页，每页 5 条；系统级不参与列表。</div>
+        </div>
         <div class="mg-pane-body" id="skill-card-body"></div>
         <div class="mp-pager" id="skill-pager" hidden>
           <button type="button" onclick="turnMgmtSkillPage(-1)">‹</button>
@@ -5417,7 +5468,8 @@ function renderSkillFlows() {
   if (sk) {
     const skip = skipDefault();
     sk.classList.toggle("on", !skip);
-    sk.textContent = skip ? "⏸ 不带上默认（点此恢复）" : "默认 · 带上";
+    // 固定文字 + 点亮/灰灭（与系统级同构），不再整句换文案
+    sk.title = skip ? "当前不带上默认 skill · 点击恢复" : "默认 skill 每次发送必带 · 点击暂停";
   }
 }
 
@@ -5498,6 +5550,15 @@ function skCatBar(scope, cur) {
     `<button type="button" class="sk-cat${c === cur ? " sel" : ""}" onclick="setSkCat('${scope}','${esc(c)}')">${esc(c)}</button>`
   ).join("") + `</div>`;
 }
+/// v0.19.31 「？」帮助浮层开关：原来铺在页面上的大段说明（什么是 SKILL /
+/// 默认对话 / 分类含义）收进二级浮层，按需展开，不占常驻版面。
+function toggleSkillHelp() {
+  const pop = $("sk-help-pop"), btn = $("sk-help-btn");
+  if (!pop) return;
+  pop.hidden = !pop.hidden;
+  if (btn) btn.classList.toggle("on", !pop.hidden);
+}
+
 function setSkCat(scope, cat) {
   if (!SKILL_CATS.includes(cat)) return;
   if (scope === "mp") { mpSkillCat = cat; if (mpTab === "skill") renderModelList(); }
@@ -5576,9 +5637,10 @@ function renderSkillPane() {
   const cur = mgmtSkillPages[cat];
   const list = all.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
   let html = skCatBar("mgmt", cat);
-  // 默认对话 skill 计数行（v0.19.24 多选，上限 3）：让「必带流」在管理页可见可感
+  // v0.19.31：默认对话计数从「整行说明句」收成轻量徽标（说明在「？」浮层里）；
+  // 有默认时仍列出标题，一眼看到带的是哪几个。
   const defIds = defaultSkillIds().filter(id => SKILLS.some(s => s.id === id));
-  html += `<div class="sk-def-count">默认对话 skill：<b>${defIds.length} / ${MAX_DEFAULT_SKILLS}</b> —— 每次发送自动带上${defIds.length ? "（" + defIds.map(id => { const s = SKILLS.find(x => x.id === id); return s ? esc(s.title) : id; }).join("、") + "）" : ""}</div>`;
+  html += `<div class="sk-def-badge" title="每次发送自动带上的 skill（上限 ${MAX_DEFAULT_SKILLS} 个）">默认对话 <b>${defIds.length}/${MAX_DEFAULT_SKILLS}</b>${defIds.length ? "：" + defIds.map(id => { const s = SKILLS.find(x => x.id === id); return s ? esc(s.title) : id; }).join("、") : ""}</div>`;
   if (all.length === 0) {
     html += `<div class="empty">「${esc(cat)}」分类下还没有 skill。去<b>模型选择器 › SKILL</b>标签点「＋ 扩展 SKILL」新增——只需填「标题」「提示词」和「简介」，分类选「${esc(cat)}」。</div>`;
   } else {
@@ -5592,7 +5654,7 @@ function renderSkillPane() {
           <span class="sp"></span>
           <button type="button" onclick="toggleSkillEnabled('${esc(s.id)}')">${s.enabled ? "停用" : "启用"}</button>
           ${isDefaultSkill(s.id)
-            ? '<button type="button" class="primary" onclick="toggleDefaultSkill(\'' + esc(s.id) + '\')">默认对话中 · 点击取消</button>'
+            ? '<button type="button" class="def-on" onclick="toggleDefaultSkill(\'' + esc(s.id) + '\')">★ 默认对话中 · 点击取消</button>'
             : `<button type="button" onclick="toggleDefaultSkill('${esc(s.id)}')" ${defIds.length >= MAX_DEFAULT_SKILLS ? 'disabled title="默认对话最多 ' + MAX_DEFAULT_SKILLS + ' 个，先取消一个"' : ""}>设为默认对话</button>`}
           <button type="button" onclick="openSkillDialog('${esc(s.id)}')">编辑</button>
           <button type="button" class="danger" onclick="deleteSkill('${esc(s.id)}')">删除</button>
