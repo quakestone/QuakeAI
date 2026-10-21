@@ -30,6 +30,20 @@ const server = createServer((req, res) => {
         authorization: req.headers["authorization"] ?? null,
         contentType: req.headers["content-type"] ?? null,
         bodyLength: body.length,
+        // v0.19.25 测试基建：chat 请求摘要——验证网关侧系统级流参数注入
+        // （thinking / web_search tools）与三流 system 消息合并。
+        chatDigest: (req.url?.includes("/chat/completions") ? (() => {
+          try {
+            const p = JSON.parse(body);
+            return {
+              model: p.model ?? null,
+              thinking: p.thinking ?? null,
+              tools: p.tools ?? null,
+              systemCount: (p.messages || []).filter(m => m.role === "system").length,
+              systemHeads: (p.messages || []).filter(m => m.role === "system").map(m => String(m.content).slice(0, 20)),
+            };
+          } catch { return null; }
+        })() : undefined),
       }) + "\n"
     );
 

@@ -27,7 +27,9 @@ function extractFn(name) {
   const end = html.indexOf("\n}", start);
   return html.slice(start, end + 2);
 }
-/// 抽 `const NAME = <字面量>;`：括号配平扫描（兼容单行对象与多行数组，不吃后续代码）
+/// 抽 `const NAME = <字面量>;`：括号配平扫描（兼容单行对象与多行数组，不吃后续代码）。
+/// depth 始终为 0（无括号的单行常量，如 `const KEY = "v";`）时，遇到第一个 `;` 即收尾——
+/// 否则会把后面的注释/其他声明一起卷进 slice（行内注释里的引号还会打乱字符串跟踪）。
 function extractConst(name) {
   const start = html.indexOf("const " + name + " =");
   if (start < 0) return null;
@@ -36,6 +38,7 @@ function extractConst(name) {
     const c = html[i];
     if (inStr) { if (c === inStr && html[i - 1] !== "\\") inStr = null; continue; }
     if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
+    if (depth === 0 && c === ';') break;
     if (c === "{" || c === "[") depth++;
     else if (c === "}" || c === "]") { depth--; if (depth === 0) break; }
   }
@@ -293,6 +296,79 @@ console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
   PIPE.visible = false;
   render([]);
   check("⑤ 无附件时附件栏收起", bar.hidden === true);
+}
+
+// ⑥ v0.19.25 首页 skill 三流展示抽测：系统级开关（深度思考/智能搜索）+
+//    默认流 chips + 一键不带上总开关。stub DOM + localStorage 真跑逻辑。
+console.log("== ⑥ v0.19.25：系统级流开关 + 三流展示渲染 ==");
+{
+  // 一起抽出互相依赖的函数族（sysSkillOn/toggleSysSkill/skipDefault/toggleSkipDefault/renderSkillFlows），
+  // 连同它们引用的常量定义（两个系统级 id + 三个 localStorage key + 两份提示词 + SYS_SKILLS 表）一起抽；
+  // 其余外部依赖（SKILLS/esc/SKILL_LOGO/$/defaultSkillIds/toast/localStorage）走 new Function 桩。
+  const src = ["SYS_THINK_ID", "SYS_SEARCH_ID", "GW_SYS_THINK_KEY", "GW_SYS_SEARCH_KEY",
+      "GW_SKIP_DEFAULT_KEY", "DEEP_THINK_PROMPT", "WEB_SEARCH_PROMPT", "SYS_SKILLS"]
+      .map(extractConst).join("\n") + "\n" +
+    ["sysSkillOn", "toggleSysSkill", "skipDefault", "toggleSkipDefault", "renderSkillFlows"]
+    .map(extractFn).join("\n");
+  const store = {};
+  const localStorage = {
+    getItem: (k) => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: (k) => { delete store[k]; },
+  };
+  const mkEl = () => {
+    const cls = {};
+    return { innerHTML: "", textContent: "", classList: { toggle: (c, on) => { cls[c] = !!on; }, _cls: cls }, _cls: cls };
+  };
+  const els = { "sf-think": mkEl(), "sf-search": mkEl(), "sf-defaults": mkEl(), "sf-skip": mkEl() };
+  const $ = (id) => els[id] || null;
+  const SKILLS = [{ id: "s1", title: "润色", prompt: "p1" }, { id: "s2", title: "审查", prompt: "p2" }];
+  let defIds = ["s1"];
+  const mk = (ids) => new Function("$", "SKILLS", "esc", "SKILL_LOGO", "defaultSkillIds", "toast", "localStorage",
+    src + "\nreturn { renderSkillFlows, toggleSysSkill, toggleSkipDefault, sysSkillOn, skipDefault };")
+    .call(null, $, SKILLS, (s) => String(s), "<svg/>", () => ids, () => {}, localStorage);
+  const renderAll = (f) => f.renderSkillFlows();
+
+  // —— 系统级开关状态与切换 ——
+  const f0 = mk([]);
+  renderAll(f0);
+  check("⑥ 未开启时系统图标不点亮", els["sf-think"]._cls.on === false && els["sf-search"]._cls.on === false);
+  f0.toggleSysSkill("think");
+  check("⑥ 开启深度思考：图标点亮 + 持久化 gw_sys_think=1",
+    els["sf-think"]._cls.on === true && store["gw_sys_think"] === "1");
+  f0.toggleSysSkill("search");
+  check("⑥ 开启智能搜索：独立 key 持久化", els["sf-search"]._cls.on === true && store["gw_sys_search"] === "1");
+  check("⑥ 两开关互不干扰（think 仍开）", els["sf-think"]._cls.on === true);
+  f0.toggleSysSkill("think");
+  check("⑥ 再点关闭：图标熄灭 + key 移除", els["sf-think"]._cls.on === false && !("gw_sys_think" in store));
+
+  // —— 默认流 chips 渲染 ——
+  const f1 = mk(["s1", "s2"]);
+  renderAll(f1);
+  check("⑥ 默认流 chips 按序渲染（匕首 logo + 标题 + 移出按钮）",
+    els["sf-defaults"].innerHTML.indexOf("润色") < els["sf-defaults"].innerHTML.indexOf("审查")
+    && els["sf-defaults"].innerHTML.includes('<span class="sk-ic"><svg/></span>')
+    && els["sf-defaults"].innerHTML.includes("toggleDefaultSkill('s1')"));
+  const fMiss = mk(["s1", "ghost"]);
+  renderAll(fMiss);
+  check("⑥ 默认 skill 已不存在时 chip 兜底显示 id（不静默丢失）",
+    els["sf-defaults"].innerHTML.includes("ghost") && els["sf-defaults"].innerHTML.includes("toggleDefaultSkill('ghost')"));
+
+  // —— 一键不带上总开关 ——
+  const f2 = mk(["s1"]);
+  renderAll(f2);
+  check("⑥ 默认带上态：开关实底 + 文案「默认 · 带上」",
+    els["sf-skip"]._cls.on === true && els["sf-skip"].textContent === "默认 · 带上");
+  f2.toggleSkipDefault();
+  check("⑥ 一键不带上：暂停持久化 + 文案提示恢复",
+    store["gw_skip_default"] === "1" && els["sf-skip"].textContent.includes("不带上默认"));
+  renderAll(f2);
+  check("⑥ 暂停态：chips 组变暗（paused）且 chip title 标注已暂停",
+    els["sf-defaults"]._cls.paused === true && els["sf-defaults"].innerHTML.includes("（已暂停，不带上）"));
+  const f3 = mk(["s1"]);
+  f3.toggleSkipDefault();   // 再点恢复
+  check("⑥ 恢复带上：key 移除 + 文案回到带上态",
+    !("gw_skip_default" in store) && els["sf-skip"].textContent === "默认 · 带上");
 }
 
 console.log(`\n结果: PASS=${PASS} FAIL=${FAIL}`);

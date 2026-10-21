@@ -489,6 +489,34 @@
   .edit-chip .ed-x { flex: none; width: 20px; height: 20px; border-radius: 50%; border: 1px solid #7a5a2e; background: transparent; color: #f0d3a8; cursor: pointer; font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; }
   .edit-chip .ed-x:hover { border-color: var(--acc); color: var(--acc); }
 
+  /* v0.19.25 首页 skill 三流展示区：系统级图标开关 + 默认流 chips + 一键不带上 + 手选 chip。
+     三流同区一行排布（flex wrap），系统级图标常驻可见——「删后再加」即点亮/灰灭切换。 */
+  .skill-flows { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .skill-flows[hidden] { display: none; }
+  /* 系统级图标开关：未开启灰态、开启点亮（acc 色 + 描边） */
+  .sf-sys { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px;
+    border: 1px solid var(--border); background: var(--panel); border-radius: 8px;
+    color: var(--dim); font-size: 12px; cursor: pointer; flex: none; }
+  .sf-sys svg { width: 14px; height: 14px; display: block; }
+  .sf-sys:hover { border-color: #4a3d85; color: #cfc4ff; }
+  .sf-sys.on { border-color: var(--acc); color: var(--acc); background: #1d1740; }
+  /* 默认流 chips：与 skill-chip 同构小一号；暂停态整组变暗 */
+  .sf-chip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 4px 0 8px;
+    border: 1px solid #4a3d85; background: #1d1740; border-radius: 8px; font-size: 12px; color: #d8cffb; flex: none; max-width: 180px; }
+  .sf-chip .sk-ic { display: flex; align-items: center; flex: none; }
+  .sf-chip .sk-ic .sk-logo { width: 12px; height: 12px; display: block; }
+  .sf-chip .sk-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sf-chip .sk-x { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1px solid #4a3d85; background: transparent; color: #d8cffb; cursor: pointer; font-size: 11px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+  .sf-chip .sk-x:hover { border-color: var(--acc); color: var(--acc); }
+  .sf-group { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+  .sf-group.paused { opacity: .45; }
+  /* 「一键不带上默认」总开关：带上=实底强调，暂停=描边幽灵 */
+  .sf-skip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px;
+    border: 1px dashed #4a3d85; background: transparent; border-radius: 8px;
+    color: var(--dim); font-size: 12px; cursor: pointer; flex: none; }
+  .sf-skip:hover { border-color: var(--acc); color: #cfc4ff; }
+  .sf-skip.on { border-style: solid; border-color: var(--acc); color: var(--acc); background: #1d1740; }
+
   /* 模型选择器里 skill 标签的条目 */
   .sk-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); border-radius: 10px; cursor: pointer; min-width: 0; }
   .sk-item:hover { border-color: #4a3d85; }
@@ -855,10 +883,24 @@
     <div class="composer-wrap">
       <button id="to-bottom" type="button" hidden onclick="jumpToBottom()" title="回到最新内容">↓ 回到最新</button>
       <div id="pipe-bar" class="pipe-bar" hidden></div>
-      <div id="skill-chip" class="skill-chip" hidden>
-        <span class="sk-ic"><svg class="sk-logo" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 1.6 15.1 9.2v6H8.9v-6Z"/><rect x="6.1" y="15.6" width="11.8" height="1.8" rx=".9"/><rect x="10.7" y="17.4" width="2.6" height="3.4" rx=".8" opacity=".8"/><circle cx="12" cy="21.7" r="1.2"/></svg></span>
-        <span class="sk-t" id="skill-chip-title"></span>
-        <button class="sk-x" onclick="clearActiveSkill()" aria-label="取消 skill" title="取消 skill">✕</button>
+      <!-- v0.19.25 首页 skill 三流展示区：系统级（深度思考/智能搜索图标开关）+
+           默认流（≤3 chips + 一键不带上）+ 手选流（chip 靠右）。三流均支持删后再加：
+           系统级=点亮/灰灭切换；默认流单个 × 移出列表、总开关一键暂停/恢复；
+           手选流 × 取消本轮选择。 -->
+      <div id="skill-flows" class="skill-flows">
+        <button type="button" class="sf-sys" id="sf-think" onclick="toggleSysSkill('think')" title="深度思考（推理模式）：提交模型前先充分推理、展示推理步骤">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="6.2"/><circle cx="12" cy="12" r="10.4" opacity=".45"/></svg><span>深度思考</span>
+        </button>
+        <button type="button" class="sf-sys" id="sf-search" onclick="toggleSysSkill('search')" title="智能搜索（联网搜索）：提交模型前先检索互联网最新信息并引用来源">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.6 15.6 21 21"/><path d="M10.5 7.4v6.2M7.4 10.5h6.2" opacity=".55"/></svg><span>智能搜索</span>
+        </button>
+        <span class="sf-group" id="sf-defaults"></span>
+        <button type="button" class="sf-skip" id="sf-skip" onclick="toggleSkipDefault()" title="一键不带上默认 skill（设置保留，随时恢复）"></button>
+        <div id="skill-chip" class="skill-chip" hidden style="margin-bottom:0;margin-left:auto">
+          <span class="sk-ic"><svg class="sk-logo" viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M12 1.6 15.1 9.2v6H8.9v-6Z"/><rect x="6.1" y="15.6" width="11.8" height="1.8" rx=".9"/><rect x="10.7" y="17.4" width="2.6" height="3.4" rx=".8" opacity=".8"/><circle cx="12" cy="21.7" r="1.2"/></svg></span>
+          <span class="sk-t" id="skill-chip-title"></span>
+          <button class="sk-x" onclick="clearActiveSkill()" aria-label="取消 skill" title="取消 skill">✕</button>
+        </div>
       </div>
       <div id="edit-chip" class="edit-chip" hidden>
         <span class="ed-ic">✎</span>
@@ -3054,12 +3096,17 @@ async function sendWith(text, atts) {
   const history = c.msgs.slice(ctxStart, -1)
     .filter(m => (m.role === "user" || m.role === "assistant") && !m.error && (m.content || (m.attachments && m.attachments.length)))
     .map(m => ({ role: m.role, content: buildApiContent(m) }));
-  // skill 注入（v0.19.24 双流）：默认对话 skill（多选 ≤3，每次发送必带）+
-  // 本轮手动选的 activeSkill（去重：既是默认又手选的只注入一次）。
-  // 默认流按用户排列顺序在前，手选流追加在后，整体前置到 history 头部；
-  // used_count 逐个 fire-and-forget，失败不影响本轮发送。
+  // skill 注入（v0.19.25 三流）：系统级流（深度思考/智能搜索，开启才注入）+
+  // 默认对话 skill（多选 ≤3，每次发送必带；「一键不带上」暂停时跳过）+
+  // 本轮手动选的 activeSkill。三级合并去重（既是默认又手选的只注入一次），
+  // 按 系统→默认→手选 顺序前置到 history 头部；used_count 逐个 fire-and-forget。
+  // 系统级开启同时经 x-gw-features 头通知网关按渠道注入真参数
+  // （智谱 thinking/web_search，见 lib.rs want_feature + is_zhipu_like）。
   const sysMsgs = [];
-  const defIds = defaultSkillIds();
+  const sysFeats = [];
+  if (sysSkillOn("think")) { sysMsgs.push(SYS_SKILLS[0]); sysFeats.push("think"); }
+  if (sysSkillOn("search")) { sysMsgs.push(SYS_SKILLS[1]); sysFeats.push("search"); }
+  const defIds = skipDefault() ? [] : defaultSkillIds();
   for (const id of defIds) {
     const s = SKILLS.find(x => x.id === id);
     if (s && s.prompt) sysMsgs.push(s);
@@ -3080,7 +3127,7 @@ async function sendWith(text, atts) {
 
   const t0 = performance.now();   // 首字耗时基准
   try {
-    const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" });
+    const h = gwHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream", ...(sysFeats.length ? { "x-gw-features": sysFeats.join(",") } : {}) });
     const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body), signal: aborter.signal });
     asst.channel = decodeHeader(resp.headers.get("x-gateway-channel"));
     asst.attempts = decodeHeader(resp.headers.get("x-gateway-attempts"));
@@ -5063,6 +5110,101 @@ E. 最终任务定义与用户请求一致。
 
 如果任一条件不满足，则针对缺失项补充分析或向用户澄清。`;
 
+// ---------------------------------------------------------------------------
+// v0.19.25 系统级 skill（tier=system，系统硬编码）：「深度思考」「智能搜索」。
+// 首页以图标开关形态常驻展示（可点亮/灰灭——「删后再加」即关闭后再开启），
+// 选择器/管理页列表流不罗列（v0.19.23 台属性 skillListable 已排除）。
+// 开启后双通道生效：① 提示词随发送注入 system（全渠道保底）；
+// ② x-gw-features 请求头通知网关按渠道注入真参数（智谱 thinking/web_search，
+//    见 lib.rs want_feature + is_zhipu_like）。
+// ---------------------------------------------------------------------------
+const SYS_THINK_ID = "sk-deep-think";
+const SYS_SEARCH_ID = "sk-web-search";
+const GW_SYS_THINK_KEY = "gw_sys_think";      // 深度思考开关（"1"/""）
+const GW_SYS_SEARCH_KEY = "gw_sys_search";    // 智能搜索开关（"1"/""）
+const GW_SKIP_DEFAULT_KEY = "gw_skip_default"; // 一键不带上默认 skill（"1"=暂停）
+
+// 深度思考提示词（推理模式保底层）：非智谱渠道没有 thinking 参数，靠这段
+// system 提示词达到近似效果；智谱渠道还有网关注入的真 thinking 参数双保险。
+const DEEP_THINK_PROMPT = `深度思考模式（推理增强）
+
+在给出最终回答前，先进行充分的内部推理，并在回答中展示关键推理步骤：
+
+1. 拆解问题：列出问题的核心目标、约束条件与关键要素；
+2. 多路径比较：给出两种以上的可行思路，简要比较优劣；
+3. 逐步推导：沿最优路径一步一步推导，每步说明依据；
+4. 自我检查：检查边界情况、反例与前提假设是否成立；
+5. 结论：给出明确结论，并标注置信度与主要不确定性。
+
+结构清晰，推理过程用有序列表呈现，最终结论放在最后。`;
+
+// 智能搜索提示词（联网搜索保底层）：智谱渠道由网关注入 web_search 工具真检索；
+// 其他渠道靠这段提示词要求模型基于训练知识如实作答、不编造来源。
+const WEB_SEARCH_PROMPT = `智能搜索模式（联网检索）
+
+回答前先基于问题检索互联网最新信息，并在回答中引用来源：
+
+1. 将用户问题拆解为可检索的关键词（中英文各一组）；
+2. 优先检索权威来源：官方文档、一手数据、近期新闻；
+3. 引用来源链接，并标注信息的时效（发布日期）；
+4. 检索结果与问题不完全匹配时，明确说明差异，再基于已知作答；
+5. 没有可靠结果时如实说明，绝不编造链接、数据或引文。`;
+
+const SYS_SKILLS = [
+  { id: SYS_THINK_ID, title: "深度思考", prompt: DEEP_THINK_PROMPT, summary: "推理模式：先充分推理再作答" },
+  { id: SYS_SEARCH_ID, title: "智能搜索", prompt: WEB_SEARCH_PROMPT, summary: "联网搜索：先检索再作答" },
+];
+
+/// 系统级流开关状态（v0.19.25）：which = "think" | "search"。
+function sysSkillOn(which) {
+  return localStorage.getItem(which === "search" ? GW_SYS_SEARCH_KEY : GW_SYS_THINK_KEY) === "1";
+}
+
+/// 切换系统级流开关（深度思考/智能搜索）：localStorage 持久 + 首页图标点亮态刷新。
+function toggleSysSkill(which) {
+  const key = which === "search" ? GW_SYS_SEARCH_KEY : GW_SYS_THINK_KEY;
+  const next = localStorage.getItem(key) === "1" ? "" : "1";
+  if (next) localStorage.setItem(key, next); else localStorage.removeItem(key);
+  const s = SYS_SKILLS.find(x => x.id === (which === "search" ? SYS_SEARCH_ID : SYS_THINK_ID));
+  renderSkillFlows();
+  toast(next ? `已开启「${s.title}」——${s.summary}` : `已关闭「${s.title}」`, next ? "ok" : "");
+}
+
+/// 「一键不带上默认 skill」总开关（v0.19.25）：true = 暂停（本轮起默认流不注入、
+/// 首页 chips 变暗），设置保留、随时可恢复。单个默认 chip 的 × 是移出默认列表
+/// （真删设置），与这个总开关是两回事。
+function skipDefault() { return localStorage.getItem(GW_SKIP_DEFAULT_KEY) === "1"; }
+function toggleSkipDefault() {
+  if (skipDefault()) { localStorage.removeItem(GW_SKIP_DEFAULT_KEY); toast("已恢复带上默认 skill", "ok"); }
+  else { localStorage.setItem(GW_SKIP_DEFAULT_KEY, "1"); toast("已暂停默认 skill——设置保留，点此开关可随时恢复", ""); }
+  renderSkillFlows();
+}
+
+/// v0.19.25 首页三流展示渲染：系统级图标点亮态 + 默认流 chips（≤3）+
+/// 「一键不带上」总开关。手选 chip 由 renderSkillChip 自理（同容器内靠右）。
+/// 调用时机：loadSkills 后、toggleDefaultSkill 后、系统级/暂停开关切换后。
+function renderSkillFlows() {
+  const bt = $("sf-think"), bs = $("sf-search");
+  if (bt) bt.classList.toggle("on", sysSkillOn("think"));
+  if (bs) bs.classList.toggle("on", sysSkillOn("search"));
+  const grp = $("sf-defaults");
+  if (grp) {
+    const skip = skipDefault();
+    grp.classList.toggle("paused", skip);
+    grp.innerHTML = defaultSkillIds().map(id => {
+      const s = SKILLS.find(x => x.id === id);
+      const t = s ? esc(s.title) : id;
+      return `<span class="sf-chip" title="默认对话 skill：${t}${skip ? "（已暂停，不带上）" : ""}"><span class="sk-ic">${SKILL_LOGO}</span><span class="sk-t">${t}</span><button type="button" class="sk-x" onclick="toggleDefaultSkill('${esc(id)}')" aria-label="移出默认对话" title="移出默认对话（可再从管理页加回）">✕</button></span>`;
+    }).join("");
+  }
+  const sk = $("sf-skip");
+  if (sk) {
+    const skip = skipDefault();
+    sk.classList.toggle("on", !skip);
+    sk.textContent = skip ? "⏸ 不带上默认（点此恢复）" : "默认 · 带上";
+  }
+}
+
 async function loadSkills() {
   try {
     const data = await api("/skills");
@@ -5084,6 +5226,19 @@ async function loadSkills() {
         SKILLS = data2.skills || [];
       } catch (e) { /* 种子失败不阻塞 */ }
     }
+    // v0.19.25：系统级 skill（深度思考/智能搜索，tier=system）幂等补种——老账本
+    // 列表非空时上面的首次种子化不会触发，这里缺哪个补哪个。种下只为 used_count
+    // 记账有对象 + 「系统级也是 skill 对象」的统一性；列表流照旧不罗列。
+    for (const sys of SYS_SKILLS) {
+      if (SKILLS.some(s => s.id === sys.id)) continue;
+      try {
+        await api("/skills", "POST", {
+          id: sys.id, title: sys.title, prompt: sys.prompt, summary: sys.summary,
+          category: "日常应用", tier: "system", enabled: true,
+        });
+        SKILLS.push({ ...sys, category: "日常应用", tier: "system", enabled: true, used_count: 0 });
+      } catch (e) { /* 补种失败不阻塞（前端常量保底注入） */ }
+    }
   } catch (e) {
     SKILLS = [];
   }
@@ -5100,6 +5255,7 @@ async function loadSkills() {
   // （旧版把唯一默认回填成 activeSkill，多选后该语义由注入逻辑保证，无需回填。）
   if (mpTab === "skill") renderModelList();
   if (mgmtTab === "skill") renderSkillPane();
+  renderSkillFlows();   // v0.19.25：首页三流展示随 skill 列表刷新（默认 chips 标题查找）
 }
 
 /// 从提示词正文截取 ≤30 字简略说明（skill 简介的兜底生成器）。
@@ -5299,6 +5455,7 @@ function toggleDefaultSkill(id) {
     saveDefaultSkillIds(ids);
     toast(`已设为默认对话 skill（${ids.length}/${MAX_DEFAULT_SKILLS}，每次发送自动带上）`, "ok");
   }
+  renderSkillFlows();   // v0.19.25：首页默认流 chips 同步加减
   if (mgmtTab === "skill") renderSkillPane();
   if (mpTab === "skill") renderModelList();
 }
@@ -5366,6 +5523,10 @@ async function deleteSkill(id) {
   try {
     await api("/skills/" + encodeURIComponent(id), "DELETE");
     if (activeSkill && activeSkill.id === id) clearActiveSkill();
+    // v0.19.25：删的若是默认对话 skill，同步移出默认列表——否则首页 chips 与
+    // 发送注入会持有一个已不存在的 id（找不到对象、静默失效）。
+    const dIds = defaultSkillIds();
+    if (dIds.includes(id)) saveDefaultSkillIds(dIds.filter(x => x !== id));
     await loadSkills();
     if (mgmtTab === "skill") renderSkillPane();
     if (mpTab === "skill") renderModelList();

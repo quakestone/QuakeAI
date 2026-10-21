@@ -25,3 +25,4 @@ node_modules/
 
 # 浏览器验证工具缓存
 .playwright-cli/
+mock-received.log

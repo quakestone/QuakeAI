@@ -54,6 +54,16 @@ fn is_zhipu_like(provider: &str, base_url: &str) -> bool {
         || base_url.contains("z.ai")
 }
 
+/// 系统级流特性解析（v0.19.25）：前端「深度思考 / 智能搜索」开关经
+/// `x-gw-features` 请求头（逗号分隔的特性名）下发，网关在转发前按渠道能力
+/// 注入对应请求参数。整段精确匹配（trim + 忽略大小写），不前缀误判——
+/// `thinking` 不等于 `think`。纯函数，单测直接覆盖。
+fn want_feature(features: &str, name: &str) -> bool {
+    features
+        .split(',')
+        .any(|f| f.trim().eq_ignore_ascii_case(name))
+}
+
 /// STT 模型代次迁移（智谱）：`/audio/transcriptions` 只认 ASR 模型。
 /// glm-4-voice 是端到端语音对话模型（走 chat.completions + input_audio），
 /// 拿到转写端点会被上游按 chat 参数校验拒绝（400 "message should not be empty"）。
@@ -1171,6 +1181,19 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // ---- 系统级流（v0.19.25）：前端「深度思考 / 智能搜索」开关经 x-gw-features 头下发 ----
+    // 网关在转发前按渠道能力注入参数：智谱系支持 thinking（推理模式）与
+    // web_search 工具（联网搜索）；其他渠道由前端 system 提示词保底，网关不动
+    // body——避免不认识的参数被严格校验的上游 400 打回。
+    let gw_features = req
+        .headers()
+        .get("x-gw-features")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let want_think = want_feature(&gw_features, "think");
+    let want_search = want_feature(&gw_features, "search");
+
     // ---- 能力判定（统一视觉甄别）：消息里含图片/视频（image_url / video_url
     // parts）→ vision，否则 text。want_kind 只决定"要哪种能力"，真正的
     // （渠道×模型）候选挑选全部交给下方同一个 pick_model_attempts —— 视觉与
@@ -1240,9 +1263,21 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
         &candidates,
         "/chat/completions",
         // 每个候选用自己的模型名重建请求体
-        |_ch, model| {
+        |ch, model| {
             let mut p = payload.clone();
             p["model"] = serde_json::Value::String(model.to_string());
+            // 系统级流参数注入（v0.19.25）：仅智谱系渠道（thinking / web_search
+            // 是智谱标准参数）；其他渠道不注入，靠前端 system 提示词保底。
+            if is_zhipu_like(&ch.provider, &ch.base_url) {
+                if want_think {
+                    p["thinking"] = serde_json::json!({ "type": "enabled" });
+                }
+                if want_search {
+                    p["tools"] = serde_json::json!([
+                        { "type": "web_search", "web_search": { "enable": true } }
+                    ]);
+                }
+            }
             JsValue::from_str(&serde_json::to_string(&p).unwrap_or_default())
         },
         |ch| {
@@ -2207,6 +2242,22 @@ mod tests {
         assert!(
             !v.iter().any(|a| a.model == "deepseek-v4-pro"),
             "纯文本模型 deepseek-v4-pro 不应进视觉候选"
+        );
+    }
+
+    /// 系统级流特性头解析（v0.19.25）：`x-gw-features` 逗号分隔、整段精确匹配。
+    #[test]
+    fn gw_features_header_parsing() {
+        assert!(super::want_feature("think", "think"));
+        assert!(super::want_feature("search", "search"));
+        assert!(super::want_feature("think,search", "search"));
+        assert!(super::want_feature("search, think", "think"), "空格应被 trim");
+        assert!(super::want_feature("THINK,Search", "think"), "大小写不敏感");
+        assert!(!super::want_feature("", "think"), "空头不命中");
+        assert!(!super::want_feature("search", "think"), "只开搜索不开思考");
+        assert!(
+            !super::want_feature("thinking", "think"),
+            "整段精确匹配，thinking 不等于 think"
         );
     }
 }

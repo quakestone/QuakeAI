@@ -1,4 +1,29 @@
-## v0.19.24（本版）—— 默认对话 skill 多选（≤3）：默认流独立必带 + 双流合并注入
+## v0.19.25（本版）—— 首页 skill 三流展示管理：系统级深度思考/智能搜索 + 默认流 + 手选流
+
+> 需求来源（用户 2026-10-21 原话）：a. 系统级带图标的深度思考与智能搜索（意为推理模式与问题互联网搜索前置后再提交给指定模型 API）；b. 用户设为默认的 skill 多个并存（≤3）需在首页展示，并可以一键不带上；c. 用户手动选择的 skill 也要展示；三个流都支持删后再加。
+
+### 需求拆解与拍板
+- **三流同区**：首页（聊天页）输入区上方新增 `#skill-flows` 展示区，系统级两个图标开关 + 默认流 chips + 「一键不带上」总开关 + 手选 chip（靠右）一行排布。
+- **系统级能力 = 真能力**（自行拍板）：开启后双通道生效——① 提示词注入 system（全渠道保底）；② `x-gw-features` 请求头通知网关按渠道注入真参数：智谱系（`is_zhipu_like`）注入 `thinking:{type:enabled}`（GLM 推理模式）与 `tools:[web_search]`（联网检索），其他渠道不注入（避免被严格校验的上游 400 打回）。
+- **「一键不带上默认」= 常驻总开关**（自行拍板）：`gw_skip_default` 暂停默认流（首页 chips 变暗、发送不注入），设置保留、随时恢复；单个默认 chip 的 × 是移出默认列表（真删设置），两者语义分层。
+
+### 实现
+- **后端**（src/lib.rs）：`want_feature(features, name)` 纯函数解析逗号分隔的 `x-gw-features` 头（整段精确匹配、忽略大小写、不前缀误判）；`handle_chat_completions` 读头得 `want_think`/`want_search`，在 body 重建闭包里按渠道注入参数；新增单测 `gw_features_header_parsing`。
+- **前端**（src/admin_ui.html）：
+  - 系统级 skill 常量族：`SYS_THINK_ID`/`SYS_SEARCH_ID`、`SYS_SKILLS`、两份提示词（DEEP_THINK_PROMPT 推理五步法 / WEB_SEARCH_PROMPT 检索五步法）、三个 localStorage key。
+  - 三流展示区 DOM：`#skill-flows` 容器 + 两个 `.sf-sys` 图标按钮（同心波纹=深度思考、准星放大镜=智能搜索）+ `#sf-defaults` chips 组 + `#sf-skip` 总开关；手选 chip 移入容器靠右。
+  - 函数族：`sysSkillOn`/`toggleSysSkill`（图标点亮 + 持久化 + toast）、`skipDefault`/`toggleSkipDefault`（暂停/恢复）、`renderSkillFlows`（三流统一渲染）。
+  - `loadSkills`：系统级 skill 幂等补种（老账本列表非空也补，tier=system 列表流不罗列，仅作 used_count 记账对象）；末尾刷新三流展示。
+  - `toggleDefaultSkill`/`deleteSkill`：加减默认后刷新首页 chips；删除的若是默认 skill 同步移出默认列表（不持失效 id）。
+  - `sendWith` 三流合并：系统（开光才有）→ 默认（未暂停）→ 手选，去重保序前置注入 system；`sysFeats` 汇总进 `x-gw-features` 头。
+
+### 测试
+- e2e：523 → **559/559**（+36：三流 DOM/样式、开关函数族、补种与删除联动、三流合并与请求头、后端 want_feature 解析与按渠道注入）
+- 行为测试（stub DOM 真跑）：49 → **60/60**（+11 新增 ⑥ 段：图标点亮态、开关互不干扰、chips 按序渲染、失效 id 兜底、暂停变暗、恢复带上）
+- 单测：31 → **32/32**（特性头解析：精确匹配/空格/大小写/空头/前缀不误判）
+- 顺带修复测试基建 bug：`extractConst` 对无括号单行常量会扫到文件尾（行内注释引号打乱字符串跟踪），补 depth=0 遇 `;` 即收尾
+
+## v0.19.24 —— 默认对话 skill 多选（≤3）：默认流独立必带 + 双流合并注入
 
 > 需求来源（用户 2026-10-22，原为暂缓项 #74，后随「好 执行」开工）：v0.19.1 引入的「默认对话 skill」是单选（`gw_default_skill` 存单个 id），口述需求为「用户设为默认的 skill，可以多个并存最多不能超过三个，也需要在首页展示 并可以一键不带上默认的 skill」。展示部分归 #77（首页三流展示管理），本版交付多选底座。
 

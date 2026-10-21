@@ -1196,6 +1196,50 @@ echo "$UI" | grep -q 'if (activeSkill && activeSkill.prompt && !defIds.includes(
 echo "$UI" | grep -q 'history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));'; check "4 双流整体前置（保序）" $? "no ordered prefix"
 echo "$UI" | grep -q 'if (sysMsgs.length) {'; check "4 无 skill 时不注入空 system" $? "no empty guard"
 
+echo "== 28. v0.19.25 首页 skill 三流展示：系统级深度思考/智能搜索 + 默认流 + 一键不带上 =="
+# —— 前端：系统级 skill 常量与提示词 ——
+echo "$UI" | grep -q 'const SYS_THINK_ID = "sk-deep-think";'; check "1 系统级 skill id：深度思考" $? "no SYS_THINK_ID"
+echo "$UI" | grep -q 'const SYS_SEARCH_ID = "sk-web-search";'; check "1 系统级 skill id：智能搜索" $? "no SYS_SEARCH_ID"
+echo "$UI" | grep -q 'const SYS_SKILLS = \['; check "1 系统级 skill 常量表" $? "no SYS_SKILLS"
+echo "$UI" | grep -q 'const DEEP_THINK_PROMPT = `'; check "1 深度思考提示词（推理保底）" $? "no DEEP_THINK_PROMPT"
+echo "$UI" | grep -q 'const WEB_SEARCH_PROMPT = `'; check "1 智能搜索提示词（检索保底）" $? "no WEB_SEARCH_PROMPT"
+echo "$UI" | grep -q 'const GW_SYS_THINK_KEY = "gw_sys_think";'; check "1 深度思考开关持久化 key" $? "no GW_SYS_THINK_KEY"
+echo "$UI" | grep -q 'const GW_SKIP_DEFAULT_KEY = "gw_skip_default";'; check "1 一键不带上 key" $? "no GW_SKIP_DEFAULT_KEY"
+# —— 前端：开关函数与三流渲染 ——
+echo "$UI" | grep -q 'function sysSkillOn(which)'; check "1 系统级开关状态读取" $? "no sysSkillOn"
+echo "$UI" | grep -q 'function toggleSysSkill(which)'; check "1 系统级开关切换函数" $? "no toggleSysSkill"
+echo "$UI" | grep -q 'function skipDefault() { return localStorage.getItem(GW_SKIP_DEFAULT_KEY) === "1"; }'; check "1 暂停默认流判定" $? "no skipDefault"
+echo "$UI" | grep -q 'function toggleSkipDefault()'; check "1 一键不带上切换函数" $? "no toggleSkipDefault"
+echo "$UI" | grep -q 'function renderSkillFlows()'; check "1 三流展示渲染函数" $? "no renderSkillFlows"
+# —— 前端：首页三流展示区 DOM ——
+echo "$UI" | grep -q '<div id="skill-flows" class="skill-flows">'; check "2 三流展示区容器" $? "no skill-flows"
+echo "$UI" | grep -q 'id="sf-think" onclick="toggleSysSkill('"'"'think'"'"')"'; check "2 深度思考图标开关按钮" $? "no sf-think"
+echo "$UI" | grep -q 'id="sf-search" onclick="toggleSysSkill('"'"'search'"'"')"'; check "2 智能搜索图标开关按钮" $? "no sf-search"
+echo "$UI" | grep -q '<span class="sf-group" id="sf-defaults"></span>'; check "2 默认流 chips 容器" $? "no sf-defaults"
+echo "$UI" | grep -q 'id="sf-skip" onclick="toggleSkipDefault()"'; check "2 一键不带上开关按钮" $? "no sf-skip"
+echo "$UI" | grep -q 'style="margin-bottom:0;margin-left:auto"'; check "2 手选 chip 归拢进三流区（靠右）" $? "chip not in flows"
+echo "$UI" | grep -q '\.sf-sys\.on { border-color: var(--acc)'; check "2 系统级图标点亮态样式" $? "no sf-sys.on"
+echo "$UI" | grep -q '\.sf-group\.paused { opacity: \.45; }'; check "2 默认流暂停变暗样式" $? "no paused style"
+# —— 前端：补种 / 删除联动 / 刷新点 ——
+echo "$UI" | grep -q 'category: "日常应用", tier: "system", enabled: true,'; check "3 系统级 skill 幂等补种（tier=system）" $? "no sys seed"
+echo "$UI" | grep -q 'if (dIds.includes(id)) saveDefaultSkillIds(dIds.filter(x => x !== id));'; check "3 删除默认 skill 同步移出默认列表" $? "no delete cleanup"
+echo "$UI" | grep -q 'renderSkillFlows();   // v0.19.25：首页三流展示随 skill 列表刷新（默认 chips 标题查找）'; check "3 loadSkills 末尾刷新三流展示" $? "no flows refresh in loadSkills"
+echo "$UI" | grep -q 'renderSkillFlows();   // v0.19.25：首页默认流 chips 同步加减'; check "3 toggleDefaultSkill 后刷新三流展示" $? "no flows refresh in toggle"
+# —— 前端：发送三流合并 + 请求头 ——
+echo "$UI" | grep -q 'if (sysSkillOn("think")) { sysMsgs.push(SYS_SKILLS\[0\]); sysFeats.push("think"); }'; check "4 系统级深度思考流注入" $? "no think flow"
+echo "$UI" | grep -q 'if (sysSkillOn("search")) { sysMsgs.push(SYS_SKILLS\[1\]); sysFeats.push("search"); }'; check "4 系统级智能搜索流注入" $? "no search flow"
+echo "$UI" | grep -q 'const defIds = skipDefault() ? \[\] : defaultSkillIds();'; check "4 暂停时不注入默认流" $? "skip not honored"
+echo "$UI" | grep -q '"x-gw-features": sysFeats.join(",")'; check "4 系统级特性请求头下发" $? "no x-gw-features"
+echo "$UI" | grep -q 'history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));'; check "4 三流整体前置（保序）" $? "no ordered prefix"
+# —— 后端：特性头解析 + 按渠道注入参数 ——
+grep -q 'fn want_feature(features: &str, name: &str) -> bool' src/lib.rs; check "5 特性头解析纯函数" $? "no want_feature"
+grep -q 'let gw_features = req' src/lib.rs; check "5 chat handler 读 x-gw-features 头" $? "no gw_features read"
+grep -q 'let want_think = want_feature(&gw_features, "think");' src/lib.rs; check "5 解析 think 特性" $? "no want_think"
+grep -q 'if is_zhipu_like(&ch.provider, &ch.base_url) {' src/lib.rs; check "5 按渠道（智谱系）注入" $? "no channel gate"
+grep -q 'p\["thinking"\] = serde_json::json!({ "type": "enabled" });' src/lib.rs; check "5 注入 thinking 参数（推理模式）" $? "no thinking inject"
+grep -q '{ "type": "web_search", "web_search": { "enable": true } }' src/lib.rs; check "5 注入 web_search 工具（联网搜索）" $? "no web_search inject"
+grep -q 'fn gw_features_header_parsing' src/lib.rs; check "5 特性头解析单测" $? "no features unit test"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null
