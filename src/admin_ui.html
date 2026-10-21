@@ -3253,6 +3253,9 @@ async function sendOrStop() {
 /// 实际发送链路（输入框发送 / 长按重发 / 通话共用）。
 /// text/atts 由调用方给出；atts 为内存对象（含 file/dataUrl 的浅拷贝）。
 async function sendWith(text, atts) {
+  // 纵深防御（v0.19.34）：哪怕绕过 sendOrStop 的拦截（旧缓存 / 其它入口），
+  // 魔法指令也绝不生成用户气泡、绝不进聊天。命中即静默丢弃，动作已在 sendOrStop 执行过。
+  if (!atts || !atts.length) { if (parseMagic(text)) { streaming = false; updateSendBtn(); return; } }
   // 发送流水线（工作流小引擎）：文本 → 语音识别 → 视频理解 → 图片理解 串行，
   // 每类媒体各走各的状态机；产出（转写文本 / a.desc 画面理解）汇入本轮请求。
   // 音频全部识别失败 → 这里 throw，调用方（sendOrStop）把原文与附件还回输入框。
@@ -7284,24 +7287,28 @@ function setDebug(v) {
 /// 调试日志：仅 debug 模式（/debug on）下打印到浏览器控制台，避免污染正常用户。
 function dbg(...a) { if (debugOn()) { try { console.log("[gw-debug]", ...a); } catch {} } }
 
+/// 解析魔法指令（纯函数，无副作用）。返回 { kind, ... } 或 null。
+/// 兼容全角斜杠 ／（中文输入法易误触）与半角 /。
+function parseMagic(t) {
+  const s = String(t || "").trim();
+  const dm = /^\s*[\/／]\s*debug\s*[:：]?\s*(on|off|1|0)\s*$/i.exec(s);
+  if (dm) return { kind: "debug", on: /^(on|1)$/i.test(dm[1]) };
+  const m = /^\s*[\/／]\s*(console|consle)\s*[:：]\s*([\w-]+)\s*$/i.exec(s);
+  if (m) return { kind: "console", arg: String(m[2]).toLowerCase() };
+  return null;
+}
 /// 魔法指令识别。返回 true 表示已消费（调用方直接 return，不发送本轮）。
 function handleMagicCommand(text) {
-  const t = String(text || "");
-  // v0.19.34 浏览器调试控制台开关：/debug on|off（冒号可选、大小写/空格容错）
-  const dm = /^\s*\/\s*debug\s*[:：]?\s*(on|off|1|0)\s*$/i.exec(t);
-  if (dm) {
-    const on = /^(on|1)$/i.test(dm[1]);
-    setDebug(on);
-    if (on) { try { debugger; } catch {} }   // 已开 DevTools 则自动断点；否则 F12 后看日志
-    return true;
-  }
-  const m = /^\s*\/\s*(console|consle)\s*[:：]\s*([\w-]+)\s*$/i.exec(t);
-  if (!m) return false;
-  const arg = String(m[2]).toLowerCase();
-  if (arg === "zsj" || arg === "on") {
+  const p = parseMagic(text);
+  if (!p) return false;
+  if (p.kind === "debug") {
+    // v0.19.34 浏览器调试控制台开关：/debug on|off（冒号可选、大小写/空格容错）
+    setDebug(p.on);
+    if (p.on) { try { debugger; } catch {} }   // 已开 DevTools 则自动断点；否则 F12 后看日志
+  } else if (p.arg === "zsj" || p.arg === "on") {
     setConsoleOn(true);
     toast("控制台已开启——顶栏出现 ⌗ 按钮", "ok");
-  } else if (arg === "off") {
+  } else if (p.arg === "off") {
     setConsoleOn(false);
     toast("控制台已关闭", "");
   } else {

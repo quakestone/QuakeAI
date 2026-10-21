@@ -1449,9 +1449,9 @@ echo "$UI" | grep -q '\.console-body { margin: 10px 0 0;'; check "1 等宽小字
 # —— 魔法指令（容错拼写与全角冒号）——
 echo "$UI" | grep -q 'const CONSOLE_KEY = "gw_console";'; check "2 开关持久化 key" $? "no key"
 echo "$UI" | grep -q 'function handleMagicCommand(text)'; check "2 指令识别函数" $? "no handler"
-echo "$UI" | grep -q '\^\\s\*\\/\\s\*(console|consle)\\s\*\[:：\]'; check "2 兼容 consle 拼写 + 全角冒号" $? "regex weak"
-echo "$UI" | grep -q "if (arg === \"zsj\" || arg === \"on\")"; check "2 zsj 开启分支" $? "no zsj"
-echo "$UI" | grep -q 'else if (arg === "off")'; check "2 off 关闭分支" $? "no off"
+echo "$UI" | grep -qF '[\/／]\s*(console|consle)\s*[:：]'; check "2 兼容 consle 拼写 + 全角冒号 + 全角斜杠 ／" $? "regex weak"
+echo "$UI" | grep -q 'else if (p.arg === "zsj" || p.arg === "on")'; check "2 zsj 开启分支" $? "no zsj"
+echo "$UI" | grep -q 'else if (p.arg === "off")'; check "2 off 关闭分支" $? "no off"
 echo "$UI" | grep -q 'if (!atts.length && handleMagicCommand(text))'; check "2 发送入口消费（不发不落库）" $? "not wired"
 echo "$UI" | grep -q 'renderConsoleBtn(); // v0.19.33 控制台按钮'; check "2 初始化恢复按钮态" $? "no init"
 # —— 状态速览内容 ——
@@ -1466,12 +1466,14 @@ echo "$UI" | grep -qF 'function debugOn() { return localStorage.getItem(DEBUG_KE
 echo "$UI" | grep -qF 'function setDebug(v) {'; check "1 调试开关设置" $? "no setDebug"
 echo "$UI" | grep -qF 'function dbg(...a) { if (debugOn())'; check "1 调试日志守卫（仅开启时打印）" $? "no dbg"
 echo "$UI" | grep -qF 'console.log("[gw-debug]"'; check "1 调试日志前缀" $? "no debug prefix"
-echo "$UI" | grep -qF 'const dm = /^\s*\/\s*debug'; check "2 /debug 指令正则（冒号可选/on|off|1|0）" $? "no debug regex"
+echo "$UI" | grep -qF 'function parseMagic(t) {'; check "1 指令解析纯函数（无副作用）" $? "no parseMagic"
+echo "$UI" | grep -qF 'const dm = /^\s*[\/／]\s*debug'; check "2 /debug 指令正则（全角斜杠/on|off|1|0）" $? "no debug regex"
 echo "$UI" | grep -qF 'try { debugger; } catch {}'; check "2 开启即触发断点（已开 DevTools 自动停）" $? "no debugger"
 echo "$UI" | grep -qF 'dbg("[net.probe]"'; check "3 探测结果埋点" $? "no net dbg"
 echo "$UI" | grep -qF 'dbg("[send] 失败:'; check "3 发送失败埋点" $? "no send dbg"
 echo "$UI" | grep -qF 'dbg("[api]"'; check "3 API 错误埋点" $? "no api dbg"
 echo "$UI" | grep -qF 'dbg("[load] 网络错误'; check "3 加载网络错误埋点" $? "no load dbg"
+echo "$UI" | grep -qF 'if (!atts || !atts.length) { if (parseMagic(text)) { streaming = false; updateSendBtn(); return; } }'; check "4 sendWith 纵深防御（命令绝不进聊天）" $? "no defense"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
