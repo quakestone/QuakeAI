@@ -109,21 +109,23 @@
   .msg .avatar.user-av svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
   .msg-body { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .msg-body .content { padding-top: 4px; }
-  .msg.user { flex-direction: row; align-items: flex-start; }
-  .msg.user .content { background: var(--panel2); border: 1px solid var(--border); border-radius: 14px 14px 14px 4px; padding: 9px 30px 9px 13px; display: inline-block; max-width: 100%; white-space: pre-wrap;
+  .msg.user { flex-direction: row-reverse; align-items: flex-start; }
+  .msg.user .content { background: var(--panel2); border: 1px solid var(--border); border-radius: 14px 14px 4px 14px; padding: 9px 30px 9px 13px; display: inline-block; max-width: 100%; white-space: pre-wrap;
     /* 长按不再弹 iOS 系统菜单（callout 不走 contextmenu，只能这样压掉）。
        只作用于用户气泡：助手回答要能选中代码块。 */
     -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
-  /* 宽度跟随内容：这样气泡右上角的「…」才贴气泡，而不是飘在整行最右边 */
-  .msg.user .msg-body { text-align: left; position: relative; flex: 0 1 auto; max-width: 100%; }
+  /* 宽度跟随内容：这样气泡右上角的「…」才贴气泡，而不是飘在整行最右边。
+     v0.19.26 用户右 AI 左：row-reverse 下头像（DOM 首子元素）贴右、气泡紧邻其左，
+     整组天然靠右——气泡限宽 82% 避免长段落顶到屏边。 */
+  .msg.user .msg-body { text-align: left; position: relative; flex: 0 1 auto; max-width: 82%; }
   /* 气泡右上角「…」：常驻可见（移动端没有 hover），低透明度不抢视线 */
   .more-btn { position: absolute; top: 2px; right: 2px; width: 24px; height: 24px; border: none; background: transparent; color: var(--dim); font-size: 15px; line-height: 1; padding: 0; min-height: 0; border-radius: 6px; opacity: .5; }
   .more-btn:hover, .more-btn:active { opacity: 1; background: var(--panel2); color: var(--fg); }
-  /* 强调 = 本地标记，不改请求内容 */
-  .msg.user.emph .content { box-shadow: inset 3px 0 0 var(--warn, #d19a2a); }
+  /* 强调 = 本地标记，不改请求内容。v0.19.26 用户气泡靠右：强调条移到右侧 */
+  .msg.user.emph .content { box-shadow: inset -3px 0 0 var(--warn, #d19a2a); }
   .emph-tag { font-size: 10px; padding: 0 5px; border-radius: 4px; border: 1px solid var(--warn, #d19a2a); color: var(--warn, #d19a2a); }
   .msg-meta { font-size: 11px; color: var(--dim); margin-top: 5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .msg.user .msg-meta { justify-content: flex-start; }
+  .msg.user .msg-meta { justify-content: flex-end; }
   .msg-meta .ch-badge { border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
   /* 徽章组：display:contents 让里面的 span 继续当 meta 的 flex item，布局与之前一致；
      单独包一层是为了流式渲染能只换这一组，不动整条消息 */

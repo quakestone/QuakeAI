@@ -1240,6 +1240,23 @@ grep -q 'p\["thinking"\] = serde_json::json!({ "type": "enabled" });' src/lib.rs
 grep -q '{ "type": "web_search", "web_search": { "enable": true } }' src/lib.rs; check "5 注入 web_search 工具（联网搜索）" $? "no web_search inject"
 grep -q 'fn gw_features_header_parsing' src/lib.rs; check "5 特性头解析单测" $? "no features unit test"
 
+echo "== 29. v0.19.26 首页问答视图：用户右 AI 左分立两侧 =="
+# —— 用户行：row-reverse（头像贴右、气泡靠右）——
+echo "$UI" | grep -q '\.msg\.user { flex-direction: row-reverse; align-items: flex-start; }'; check "1 用户消息行反转为靠右" $? "user not row-reverse"
+echo "$UI" | grep -q 'flex: 0 1 auto; max-width: 82%;'; check "1 用户气泡限宽 82%（不顶屏边）" $? "no 82% cap"
+# —— 气泡尾角与强调条随右对齐联动 ——
+echo "$UI" | grep -q 'border-radius: 14px 14px 4px 14px'; check "2 用户气泡尾角在右下" $? "no right-bottom tail"
+echo "$UI" | grep -q 'box-shadow: inset -3px 0 0 var(--warn, #d19a2a);'; check "2 强调条移到气泡右侧" $? "emph still left"
+# —— meta 行右对齐 ——
+echo "$UI" | grep -q '\.msg\.user \.msg-meta { justify-content: flex-end; }'; check "3 用户时间戳靠右" $? "meta not flex-end"
+# —— 反向断言：旧的左对齐形态已不存在 ——
+absent '.msg.user { flex-direction: row; align-items: flex-start; }'; check "4 旧 row 布局已移除" $? "old row layout remains"
+absent 'border-radius: 14px 14px 14px 4px; padding: 9px 30px 9px 13px'; check "4 旧左下尾角已移除" $? "old tail remains"
+absent '.msg.user .msg-meta { justify-content: flex-start; }'; check "4 旧左对齐 meta 已移除" $? "old meta remains"
+# —— 助手侧不受影响（仍左、内容可选中）——
+echo "$UI" | grep -q '\.msg\.assistant \.avatar { background: linear-gradient(135deg, var(--acc), var(--acc2));'; check "5 助手头像样式保持" $? "assistant avatar changed"
+absent '\.msg\.assistant { flex-direction: row-reverse'; check "5 助手未右对齐（仍左）" $? "assistant flipped"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null
