@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="QuakeAI">
-<link rel="manifest" href="/manifest.webmanifest">
+<link rel="manifest" href="./manifest.webmanifest">
 <title>AI 聚合网关 · 模型服务商管理 · WASM</title>
 <script>
 /* 客户端化：把网关路径（/admin /v1 /health）从 window.fetch 拦截到浏览器内 WASM，
@@ -1253,7 +1253,7 @@
         </div>
         <div class="toolbar" style="margin-bottom:10px">
           <button onclick="loadUsage()">刷新用量</button>
-          <a class="btn-link" href="/admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
+          <a class="btn-link" href="./admin/api/usage/export" download="gateway-usage-export.csv"><button>导出对账 CSV</button></a>
           <div class="spacer"></div>
           <span class="muted" id="us-records"></span>
         </div>
@@ -7332,7 +7332,7 @@ function registerSW() {
   if (!("serviceWorker" in navigator)) return;
   const host = location.hostname;
   if (!(location.protocol === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]")) return;
-  navigator.serviceWorker.register("/sw.js").catch(() => { /* 离线增强失败不阻塞 */ });
+  navigator.serviceWorker.register("./sw.js").catch(() => { /* 离线增强失败不阻塞 */ });
 }
 
 // ================= v0.19.33 控制台（隐藏功能） =================
@@ -7914,7 +7914,7 @@ document.addEventListener("DOMContentLoaded", () => {
 /* 浏览器内 WASM 网关引导：加载 build/index.js（wasm-bindgen --target web），
    把导出挂到 window.__GW，并定义 window.__gwDispatch 把网关路径路由到对应函数。
    window.fetch 已在 <head> 被拦截，这里只负责装载与分发。 */
-import init from '/build/index.js';
+import init from './build/index.js';
 (async () => {
   try {
     const gw = await init();

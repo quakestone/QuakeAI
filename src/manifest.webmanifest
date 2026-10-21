@@ -2,15 +2,15 @@
   "name": "QuakeAI 聚合网关",
   "short_name": "QuakeAI",
   "description": "客户端 WASM 聚合网关：模型管理、对话、语音，脱钩 Cloudflare，纯静态 PWA。",
-  "start_url": "/index.html",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0b0e14",
   "theme_color": "#0b0e14",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "./icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"

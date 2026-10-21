@@ -4,12 +4,12 @@
  * 浏览器 WASM，根本不会走到网络 / SW，这里无需也不应拦截它们。 */
 const CACHE = "quakeai-gw-v1";
 const PRECACHE = [
-  "/",
-  "/index.html",
-  "/build/index.js",
-  "/build/index_bg.wasm",
-  "/manifest.webmanifest",
-  "/icon.svg",
+  "./",
+  "./index.html",
+  "./build/index.js",
+  "./build/index_bg.wasm",
+  "./manifest.webmanifest",
+  "./icon.svg",
 ];
 
 self.addEventListener("install", (e) => {
@@ -35,7 +35,7 @@ self.addEventListener("fetch", (e) => {
 
   if (req.mode === "navigate") {
     e.respondWith(
-      fetch(req).catch(() => caches.match("/index.html").then((r) => r || caches.match("/")))
+      fetch(req).catch(() => caches.match("./index.html").then((r) => r || caches.match("./")))
     );
     return;
   }
