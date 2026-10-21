@@ -1361,6 +1361,7 @@
       <details class="fold" id="maint-fold" style="margin-top:14px">
         <summary>维护（载入默认 / 导出配置 / 部署自检）</summary>
         <div class="fold-body toolbar">
+          <button onclick="importBundled()">一键导入内置通道</button>
           <button onclick="seed()">一键载入默认（国内+海外）</button>
           <button onclick="exportJson()">导出配置</button>
           <button onclick="showDiag()">部署自检</button>
@@ -6844,6 +6845,38 @@ function exportJson() {
   a.click();
   URL.revokeObjectURL(a.href);
   toast("已导出（Key 为掩码，不含明文）", "ok");
+}
+
+// ================= 一键导入内置通道 =================
+// 从站点根目录的内置 gateway-channels.json 拉取通道清单并逐条登记。
+// 已存在的 id 自动跳过（避免重复）；通道不含真实 Key，需到「本设备 Key」或渠道卡补登。
+async function importBundled() {
+  try {
+    const r = await fetch("./gateway-channels.json", { cache: "no-store" });
+    if (!r.ok) throw new Error("读取内置通道文件失败（HTTP " + r.status + "）");
+    const data = await r.json();
+    const list = Array.isArray(data.channels) ? data.channels : [];
+    if (!list.length) { toast("内置通道文件为空", "err"); return; }
+
+    let existing = [];
+    try { const j = await api("/channels"); existing = j.channels || []; } catch {}
+    const exIds = new Set(existing.map(c => c.id));
+
+    let added = 0, skipped = 0;
+    for (const ch of list) {
+      if (exIds.has(ch.id)) { skipped++; continue; }
+      const body = { ...ch };
+      // 去掉只读/服务端派生字段，交给创建接口重新生成
+      delete body.health; delete body.api_key_masked;
+      delete body.created_at; delete body.updated_at;
+      await api("/channels", "POST", body);
+      added++;
+    }
+    toast(`已导入 ${added} 个内置通道${skipped ? `，跳过 ${skipped} 个已存在` : ""}`, "ok");
+    loadAll();
+  } catch (e) {
+    toast("导入失败：" + e.message, "err");
+  }
 }
 
 async function showDiag() {
