@@ -1257,6 +1257,38 @@ absent '.msg.user .msg-meta { justify-content: flex-start; }'; check "4 旧左�
 echo "$UI" | grep -q '\.msg\.assistant \.avatar { background: linear-gradient(135deg, var(--acc), var(--acc2));'; check "5 助手头像样式保持" $? "assistant avatar changed"
 absent '\.msg\.assistant { flex-direction: row-reverse'; check "5 助手未右对齐（仍左）" $? "assistant flipped"
 
+echo "== 30. v0.19.27 消息操作图标化：统一 SVG symbol + 菜单项图标 =="
+# —— 图标 symbol 组（单点事实源）——
+echo "$UI" | grep -q '<symbol id="ic-copy" viewBox="0 0 24 24">'; check "1 复制图标 symbol" $? "no ic-copy"
+echo "$UI" | grep -q '<symbol id="ic-share" viewBox="0 0 24 24">'; check "1 分享图标 symbol" $? "no ic-share"
+echo "$UI" | grep -q '<symbol id="ic-speak" viewBox="0 0 24 24">'; check "1 播音乐图标 symbol" $? "no ic-speak"
+echo "$UI" | grep -q '<symbol id="ic-stop" viewBox="0 0 24 24">'; check "1 停止图标 symbol（播放态）" $? "no ic-stop"
+echo "$UI" | grep -q '<symbol id="ic-edit" viewBox="0 0 24 24">'; check "1 修改图标 symbol" $? "no ic-edit"
+echo "$UI" | grep -q '<symbol id="ic-retry" viewBox="0 0 24 24">'; check "1 重试图标 symbol" $? "no ic-retry"
+echo "$UI" | grep -q '<symbol id="ic-emph" viewBox="0 0 24 24">'; check "1 强调图标 symbol" $? "no ic-emph"
+echo "$UI" | grep -q '<symbol id="ic-del" viewBox="0 0 24 24">'; check "1 删除图标 symbol" $? "no ic-del"
+# —— 回答操作行图标化 ——
+echo "$UI" | grep -q 'class="act-btn ic-btn" onclick="copyMsg(this)" title="复制全文" aria-label="复制"'; check "2 复制改图标按钮（title/aria 保留）" $? "copy not icon"
+echo "$UI" | grep -q 'class="act-btn ic-btn" onclick="shareMsg(this)"'; check "2 分享改图标按钮" $? "share not icon"
+echo "$UI" | grep -q 'class="act-btn ic-btn" onclick="speakMsg(this)"'; check "2 播音改图标按钮" $? "speak not icon"
+echo "$UI" | grep -q '<svg class="ic"><use href="#ic-copy"/></svg></button>'; check "2 图标用 use 引用 symbol" $? "no use ref"
+# —— 菜单项图标化（用户 + 助手两组）——
+echo "$UI" | grep -q '<button id="mm-copy" type="button" class="mm-user" onclick="menuCopy()"><svg class="ic"><use href="#ic-copy"/></svg><span>复制</span></button>'; check "3 菜单复制项图标+文字" $? "menu copy no icon"
+echo "$UI" | grep -q '<span>修改</span></button>'; check "3 菜单修改项" $? "no edit item"
+echo "$UI" | grep -q '<use href="#ic-retry"/></svg><span>重试</span>'; check "3 菜单重试项" $? "no retry item"
+echo "$UI" | grep -q '<use href="#ic-emph"/></svg><span>强调</span>'; check "3 菜单强调项" $? "no emph item"
+echo "$UI" | grep -q '<svg class="ic"><use href="#ic-retry"/></svg><span>重新生成</span>'; check "3 菜单重新生成项（复用重试图标）" $? "no regen item"
+echo "$UI" | grep -q '<use href="#ic-del"/></svg><span>删除</span>'; check "3 菜单删除项" $? "no del item"
+# —— 状态文本只改 span，不抹图标 ——
+echo "$UI" | grep -q 'const t = em.querySelector("span");'; check "4 强调切换只改文字 span（保图标）" $? "em textContent overwrites svg"
+echo "$UI" | grep -q "btn.innerHTML = '<svg class=\"ic\"><use href=\"#ic-stop\"/></svg>';"; check "4 播音播放态切停止图标" $? "no stop icon swap"
+echo "$UI" | grep -q "btn.innerHTML = '<svg class=\"ic\"><use href=\"#ic-speak\"/></svg>';"; check "4 播音结束恢复喇叭图标" $? "no speak icon restore"
+# —— 样式与反向断言 ——
+echo "$UI" | grep -q '\.ic { width: 14px; height: 14px; fill: none; stroke: currentColor;'; check "5 统一图标样式类" $? "no .ic style"
+echo "$UI" | grep -q '#msg-menu button:hover { background: var(--bg3); }'; check "5 菜单样式保留" $? "menu style gone"
+absent '>🔊 播音</button>'; check "5 旧文字播音按钮已移除" $? "old speak btn remains"
+absent '<button id="mm-copy" type="button" class="mm-user" onclick="menuCopy()">复制</button>'; check "5 旧纯文字菜单项已移除" $? "old menu item remains"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null
