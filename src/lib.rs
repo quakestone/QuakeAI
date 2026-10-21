@@ -1712,6 +1712,27 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if method == Method::Get && (path == "/s" || path == "/s/") {
         return admin::html_response(include_str!("share_ui.html"));
     }
+    // v0.19.29 离线韧性：Service Worker + 离线兜底页（wasm 内嵌资源，零额外构建产物）。
+    // offline.html 特意用「可缓存」头——SW 的 cache.addAll 会拒绝 no-store 响应，
+    // 用 html_response（no-store）会导致兜底页永远存不进 Cache API。
+    if method == Method::Get && path == "/offline.html" {
+        let h = worker::Headers::new();
+        h.set("Content-Type", "text/html; charset=utf-8")?;
+        h.set("Cache-Control", "public, max-age=300")?;
+        h.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
+        return Ok(Response::from_bytes(include_str!("offline.html").as_bytes().to_vec())?
+            .with_headers(h));
+    }
+    if method == Method::Get && path == "/sw.js" {
+        // 版本占位替换：每次发版缓存名自动翻新（与 admin_ui.html 同机制）
+        const MARK: &str = "__BUILD_VERSION__";
+        let js: String = include_str!("sw.js").split(MARK).collect::<Vec<_>>().join(env!("CARGO_PKG_VERSION"));
+        let h = worker::Headers::new();
+        h.set("Content-Type", "application/javascript; charset=utf-8")?;
+        h.set("Cache-Control", "no-cache")?;
+        h.set("Service-Worker-Allowed", "/")?;
+        return Ok(Response::from_bytes(js.into_bytes())?.with_headers(h));
+    }
     if method == Method::Get && path == "/health" {
         return handle_health();
     }

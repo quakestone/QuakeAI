@@ -1,4 +1,35 @@
-## v0.19.28（本版）—— 发送提交工作流：七类资源限额 + 全对象状态机统一下发
+## v0.19.29（本版）—— 网络状态栏 + 缓存模式 + 离线韧性（不白屏）
+
+> 需求来源（用户 2026-10-21）：首页最底部一栏做网络状态栏，数据源 `/cdn-cgi/trace`（Cloudflare 边缘回传 colo/loc）；网络失败要有离线兜底，绝不能白屏；「网络侦测与表达的事件还是 wasm 工作流实现」。
+> 拍板：① 仅聊天首页；② 节奏「看 1 分钟」；③ 延迟分级 <300 绿 / 300-800 黄 / >800 红，**红了切缓存模式**；④ 离线页「缓存里都有」，**整体 UI 不变**（还能本地播音）。
+
+### 一、网络状态栏（仅聊天首页底部）
+- **四态渲染**：`🟢 140ms · HTTPS · 美国` / `🟡 520ms · …` / `🔴 缓存 · HTTPS · 美国` / `⚪ 缓存 · …`——红/白两态第二格固定显示「缓存」，协议与国家取上次成功快照（`lastOk` 持久化 localStorage，离线刷新仍可显示）。
+- **数据源降级链**：`/cdn-cgi/trace`（colo 落点 + loc 国家 + 协议）→ 失败降级 `/health` 计时（仅延迟/协议；本地 workerd 实测 trace 404）→ 全失败 `offline`。
+- **国家中文名零映射表**：`Intl.DisplayNames(['zh'], {type:'region'})`。
+- **节奏（看 1 分钟）**：首屏 3s 首次 → 60s 心跳（页面可见且非缓存模式才跑）→ `online`/`offline` 事件 → 发送失败立即探测 → 点状态栏手动重探。
+- **WASM 工作流实现**（用户指定）：新增 `WF_SEED_NET`（`net.probe`：`trace → latency` 串行 DAG）、`WF.h.net` 句柄、`wfNetPlugin` 按 sid 分派——与 `send_pipeline` 完全同范式，零 Rust 改动；插件绝不 throw，失败以 `ok:false` 回报。
+
+### 二、缓存模式（红/离线自动切入）
+- **判定**：`netCacheMode()` = `state` 为 `bad`（>800ms）或 `offline`。
+- **能力分流**：发送禁用（按钮灰阶 + 点击 toast 说明「网络恢复后才能发送」）；**播音降级到 Web Speech API**（`speechSynthesis`，浏览器内置合成、零网络，再点停止）；历史会话/消息照常从 IndexedDB 渲染；模型/渠道状态显示缓存值。
+- **退出**：`online` 事件 / 手动点状态栏重探成功 → 回 `ok/slow`，发送恢复。进缓存模式自动停心跳（省流量）。
+- **离线启动静默**：API 不可达（Failed to fetch）不弹红色错误——状态栏表达 + 立即探测切缓存模式（`navigator.onLine` 在「服务不可达」时仍为 true，故按错误类型识别）。
+
+### 三、离线韧性（不白屏，UI 不变）
+- **`src/sw.js`**（手写约 80 行，不引 Workbox）：`install` 预缓存 `/` 与 `/offline.html`；**导航请求 network-first**，成功即刷新壳缓存、失败回**缓存的主 UI**（用户看到的还是那个聊天界面）、主 UI 也没缓存才回 `offline.html`；静态资源 stale-while-revalidate；API 路径（`/v1/`、`/admin/api/`、`/cdn-cgi/`、`/health`）**一律直通不缓存**（避免「假成功」）；`activate` 清旧版本桶。
+- **`src/offline.html`**：首访且无缓存的最终兜底——品牌 + 「网络已断开」+ 重试 + `online` 自动跳回。
+- **路由**（`src/lib.rs`）：`GET /sw.js`（版本占位替换 → 缓存名随发版翻新、`Service-Worker-Allowed: /`）、`GET /offline.html`（**可缓存头** `public, max-age=300`——`no-store` 会被 SW 的 `cache.addAll` 拒绝）。
+- **注册**：仅 secure context（https / localhost）下注册，失败静默。
+
+### 测试
+- e2e：620 → **657/657**（+37：状态栏 DOM/四态样式/阈值/缓存标签/工作流种子与两步 DAG/句柄注册/插件分派/trace 与 health 双源/心跳与 online 钩子/发送拦截/本地合成/`/sw.js` 与 `/offline.html` 真实 200 与响应头/SW 策略断言）
+- 行为测试：61 → **69/69**（+8 新增 ⑦ 段：`netProbeTrace` 成功解析 / trace 404 不 throw / 降级 health / 全失败 / 插件分派 / `regionName` 中文）
+- 单测 32/32
+- 浏览器实测：`2ms · HTTP` 绿态 → kill 网关 → 点状态栏 `缓存 · HTTP` + 发送按钮灰 + 拦截 toast → **断网刷新页面完整加载（SW 缓存，UI 不变）** → 重启网关恢复 `1ms · HTTP`
+- 修复两处真实 bug：① 初始 `state="probing"` 把 boot 探测自己拦住（永远「检测中」，改 `idle`）；② `extractFn` 丢 `async` 前缀（抽测 async 函数语法错）
+
+## v0.19.28 —— 发送提交工作流：七类资源限额 + 全对象状态机统一下发
 
 > 需求来源（用户 2026-10-21 原话）：「用户按发送后，提交的所有对象的工作流引擎状态机更新并下发给提交API工作流，目前资源有文本.文件.图片.音频.视频.skill等，前端逻辑限制文本内容不超过1m，文件不超过5个图片不超过5张，音频流不超过3个，视频流最多一个，skill长度不超过100k，多媒体资源最多不超过3m 提示都要做好」。
 > 五项拍板：① 单位**字节**；② 3MB 聚合**不含文件**；③ 超限**直接不允许**（不浪费流量）；④ 文件**不读内容**，仅文件名直传 API；⑤ **全对象状态齐备**才下发。

@@ -1322,6 +1322,50 @@ echo "$UI" | grep -q 'await pipeSkill();'; check "5 内核降级链补 skill 步
 echo "$UI" | grep -q 'const pending = atts.filter(a => a.st === FSM.QUEUED || a.st === FSM.WORKING);'; check "6 无 queued/working 残留才下发" $? "no terminal check"
 echo "$UI" | grep -q '文件名直传（不读内容）'; check "6 文件仅文件名装载（不读内容）" $? "file reads content"
 
+echo "== 32. v0.19.29 网络状态栏 + 缓存模式 + 离线韧性 =="
+# —— 状态栏 DOM 与四态样式 ——
+echo "$UI" | grep -q '<div id="net-bar" class="net-bar" data-st="idle" onclick="probeNet('"'"'manual'"'"')"'; check "1 状态栏容器（可点手动重探）" $? "no net-bar"
+echo "$UI" | grep -q '<span class="nb-led" id="nb-led"></span>'; check "1 状态指示灯" $? "no nb-led"
+echo "$UI" | grep -q '\.net-bar\[data-st="ok"\] .nb-led { background: var(--ok)'; check "1 绿态（<300ms）样式" $? "no ok style"
+echo "$UI" | grep -q '\.net-bar\[data-st="bad"\] .nb-led { background: var(--bad)'; check "1 红态（>800ms）样式" $? "no bad style"
+echo "$UI" | grep -q '@keyframes nb-spin'; check "1 探测中转圈动效" $? "no spin"
+# —— 状态机与渲染 ——
+echo "$UI" | grep -q 'const NET_OK_MS = 300, NET_BAD_MS = 800;'; check "2 分级阈值 300/800ms" $? "no thresholds"
+echo "$UI" | grep -q 'function netCacheMode() { return NET.state === "bad" || NET.state === "offline"; }'; check "2 缓存模式判定（红/离线）" $? "no cache mode"
+echo "$UI" | grep -q 'function renderNetBar()'; check "2 状态栏渲染函数" $? "no renderNetBar"
+echo "$UI" | grep -q '(cache ? "缓存" : `\${NET.latency}ms`)'; check "2 红/白态第二格显示「缓存」" $? "no cache label"
+echo "$UI" | grep -q 'function regionName(code)'; check "2 国家代码转中文名（Intl.DisplayNames）" $? "no regionName"
+echo "$UI" | grep -q 'Intl.DisplayNames(\["zh"\], { type: "region" })'; check "2 零映射表国家名" $? "no DisplayNames"
+# —— WASM net_probe 工作流 ——
+echo "$UI" | grep -q 'const WF_SEED_NET = JSON.stringify({ id: "net_probe"'; check "3 net_probe 工作流种子" $? "no WF_SEED_NET"
+echo "$UI" | grep -q '{ id: "trace",   plugin: "wf.net_trace",   depends_on: \[\],        input: { sid: "trace" } }'; check "3 trace 步（无依赖）" $? "no trace step"
+echo "$UI" | grep -q '{ id: "latency", plugin: "wf.net_latency", depends_on: \["trace"\], input: { sid: "latency" } }'; check "3 latency 步（依赖 trace）" $? "no latency step"
+echo "$UI" | grep -q 'send: load(WF_SEED_SEND), net: load(WF_SEED_NET),'; check "3 内核句柄注册" $? "no net handle"
+echo "$UI" | grep -q 'async function wfNetPlugin(inp)'; check "3 插件分派" $? "no wfNetPlugin"
+echo "$UI" | grep -q 'fetch("/cdn-cgi/trace", { cache: "no-store" })'; check "3 优先 /cdn-cgi/trace" $? "no trace fetch"
+echo "$UI" | grep -q 'fetch("/health", { cache: "no-store" })'; check "3 降级 /health 计时" $? "no health fallback"
+echo "$UI" | grep -q 'wfDrive(ex, WF.h.net, { event: "net.probe"'; check "3 经 WF 引擎驱动探测" $? "not via wfDrive"
+echo "$UI" | grep -q 'const NET_HEARTBEAT_MS = 60000;'; check "3 60s 心跳节奏" $? "no 60s heartbeat"
+echo "$UI" | grep -q 'window.addEventListener("online", () => { probeNet("online");'; check "3 online 事件立即重探" $? "no online hook"
+# —— 缓存模式能力分流 ——
+echo "$UI" | grep -q 'if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送'; check "4 缓存模式发送拦截" $? "send not gated"
+echo "$UI" | grep -q 'if (netCacheMode()) { speakLocal(btn, text); return; }'; check "4 播音降级本地合成" $? "no local speak"
+echo "$UI" | grep -q 'new SpeechSynthesisUtterance(text.slice(0, 4000))'; check "4 Web Speech API 本地播报" $? "no speechSynthesis"
+echo "$UI" | grep -q '#btn-send.net-cache'; check "4 缓存模式发送按钮灰态" $? "no cache btn style"
+# —— SW 与离线页（真实请求验证）——
+CODE=$(curl -s -o /tmp/sw.js -w '%{http_code}' "http://127.0.0.1:8787/sw.js"); check "5 /sw.js 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "got $CODE"
+grep -q 'gw-shell-.*0\.19\.29' /tmp/sw.js; check "5 SW 缓存名含版本（自动翻新）" $? "$(head -c 60 /tmp/sw.js)"
+curl -s -D- -o /dev/null "http://127.0.0.1:8787/sw.js" | grep -qi 'service-worker-allowed'; check "5 SW 响应带 Service-Worker-Allowed" $? "no SW header"
+CODE=$(curl -s -o /tmp/off.html -w '%{http_code}' "http://127.0.0.1:8787/offline.html"); check "5 /offline.html 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "got $CODE"
+grep -q '网络已断开' /tmp/off.html; check "5 离线页友好提示" $? "no offline copy"
+curl -s -D- -o /dev/null "http://127.0.0.1:8787/offline.html" | grep -qi 'cache-control: public'; check "5 离线页可缓存（SW addAll 需要）" $? "offline not cacheable"
+echo "$UI" | grep -q 'navigator.serviceWorker.register("/sw.js")'; check "5 前端注册 SW（secure context 守卫）" $? "no SW register"
+grep -q 'include_str!("sw.js")' src/lib.rs; check "5 后端 /sw.js 路由（内嵌资源）" $? "no sw route"
+grep -q 'include_str!("offline.html")' src/lib.rs; check "5 后端 /offline.html 路由" $? "no offline route"
+grep -q 'req.mode === "navigate"' src/sw.js; check "6 SW 导航请求 network-first" $? "no navigate strategy"
+grep -q 'caches.match("/")' src/sw.js; check "6 失败回缓存主 UI（UI 不变）" $? "no shell fallback"
+grep -q 'stale-while-revalidate' src/sw.js; check "6 静态资源 SWR" $? "no SWR"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

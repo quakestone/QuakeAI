@@ -282,6 +282,8 @@
   #input { background: transparent; border: none; resize: none; max-height: 40dvh; padding: 7px 0; line-height: 1.5; font-size: 16px; }
   #btn-send { flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: linear-gradient(135deg, var(--acc), #5a8bff); color: #fff; font-size: 17px; display: flex; align-items: center; justify-content: center; padding: 0; position: relative; }
   #btn-send.stop { background: var(--panel); border: 1px solid var(--border); }
+  /* v0.19.29 缓存模式：发送按钮降饱和 + 禁用光标（点击仍有 toast 说明，不静默） */
+  #btn-send.net-cache { filter: grayscale(.85); opacity: .55; cursor: not-allowed; }
   /* ---- 发送按钮动效 ---- */
   /* 普通生成：青蓝色单环呼吸 */
   #btn-send.streaming { animation: sendPulse 1.2s ease-in-out infinite; }
@@ -479,6 +481,21 @@
   .att-row .att-desc { font-size: 11px; line-height: 1.45; color: var(--dim); max-width: 260px; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .att-row .att-img-wrap, .att-row .att-file-wrap { display: flex; flex-direction: column; }
   .composer-hint { text-align: center; font-size: 11px; color: var(--dim); margin-top: 6px; }
+
+  /* v0.19.29 网络状态栏：底部细栏，四态指示灯 + 地球图标 + 文案。
+     红/白两态=缓存模式（发送禁用、播音降级本地合成），文案第二格显示「缓存」。 */
+  .net-bar { display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 4px 12px 8px; font-size: 11px; color: var(--dim);
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .net-bar .nb-led { width: 7px; height: 7px; border-radius: 50%; background: #777; flex: none; transition: background .2s; }
+  .net-bar .nb-ic { width: 12px; height: 12px; flex: none; }
+  .net-bar[data-st="ok"] .nb-led { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+  .net-bar[data-st="slow"] .nb-led { background: var(--warn, #d19a2a); box-shadow: 0 0 5px var(--warn, #d19a2a); }
+  .net-bar[data-st="bad"] .nb-led { background: var(--bad); box-shadow: 0 0 5px var(--bad); }
+  .net-bar[data-st="offline"] .nb-led { background: #666; }
+  .net-bar[data-st="bad"] .nb-txt, .net-bar[data-st="offline"] .nb-txt { color: var(--warn, #d19a2a); }
+  .net-bar[data-st="probing"] .nb-ic { animation: nb-spin 1s linear infinite; }
+  @keyframes nb-spin { to { transform: rotate(360deg); } }
 
   /* ================= skill 独立表达线 ================= */
   .skill-chip {
@@ -972,6 +989,14 @@
       </div>
       <input type="file" id="file-input" multiple hidden accept="image/*,video/*,audio/*,.pdf,.txt,.md,.doc,.docx,.csv,.json,.xlsx,.zip">
       <div class="composer-hint" id="route-hint">模型请求由网关自动路由到最优免费渠道 · 降权自动切换</div>
+    </div>
+    <!-- v0.19.29 网络状态栏（仅聊天首页底部）：由 WASM net_probe 工作流驱动。
+         四态：🟢<300ms · 🟡300-800ms · 🔴>800ms 切缓存模式 · ⚪离线切缓存模式；
+         红/白两态第二格显示「缓存」，协议与国家取上次成功快照。点击手动重探。 -->
+    <div id="net-bar" class="net-bar" data-st="idle" onclick="probeNet('manual')" title="点击重新检测网络（落到哪个 CF 边缘、延迟多少）">
+      <span class="nb-led" id="nb-led"></span>
+      <svg class="nb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.2 12h17.6"/><path d="M12 3a14.5 14.5 0 0 1 0 18M12 3a14.5 14.5 0 0 0 0 18"/></svg>
+      <span class="nb-txt" id="nb-txt">检测中…</span>
     </div>
     <div id="rec-overlay" hidden>
       <div class="rec-panel">
@@ -2817,6 +2842,32 @@ function toggleShareQr() {
 /// 再点一次停止。ttsStopAll 同时管 Audio 与浏览器语音两条播放通道。
 let speakAudio = null;
 function resetSpeakBtn(btn) { if (!btn) return; btn.dataset.playing = ""; btn.classList.remove("speaking"); btn.innerHTML = '<svg class="ic"><use href="#ic-speak"/></svg>'; btn.title = "朗读本条回答（TTS 播音）"; }
+
+/// v0.19.29 缓存模式本地播报：Web Speech API（浏览器内置语音合成，零网络）。
+/// 与网关 TTS 的分句流式不同——整段一次合成；再点同一按钮=停止，播完自动复位。
+let localSpeakBtn = null;
+function speakLocal(btn, text) {
+  const stop = () => {
+    try { speechSynthesis.cancel(); } catch {}
+    if (localSpeakBtn) { resetSpeakBtn(localSpeakBtn); localSpeakBtn = null; }
+  };
+  if (btn.dataset.playing === "1") { stop(); return; }
+  stop();
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+    toast("当前浏览器不支持本地语音合成", "err"); return;
+  }
+  try {
+    const u = new SpeechSynthesisUtterance(text.slice(0, 4000));
+    u.lang = "zh-CN"; u.rate = 1;
+    u.onend = () => { if (localSpeakBtn === btn) { resetSpeakBtn(btn); localSpeakBtn = null; } };
+    u.onerror = () => { if (localSpeakBtn === btn) { resetSpeakBtn(btn); localSpeakBtn = null; } };
+    localSpeakBtn = btn;
+    btn.dataset.playing = "1"; btn.classList.add("speaking");
+    btn.innerHTML = '<svg class="ic"><use href="#ic-stop"/></svg>'; btn.title = "停止朗读（本地合成）";
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    toast("缓存模式：浏览器本地语音播报", "ok");
+  } catch (e) { toast("本地播报失败：" + e.message, "err"); }
+}
 function stopSpeak() { ttsStopAll(); }
 /// 请求 TTS 合成，返回音频 Blob（播音按钮与语音通话共用）
 async function ttsBlob(text) {
@@ -2834,9 +2885,11 @@ async function ttsBlob(text) {
   return blob;
 }
 async function speakMsg(btn) {
-  if (btn.dataset.playing === "1") { ttsStopAll(); resetSpeakBtn(btn); return; }
   const text = msgTextOf(btn);
   if (!text.trim()) { toast("没有可朗读的内容", "err"); return; }
+  // v0.19.29 缓存模式：网关 TTS 不可达 → 走浏览器内置语音合成（本地、零网络）
+  if (netCacheMode()) { speakLocal(btn, text); return; }
+  if (btn.dataset.playing === "1") { ttsStopAll(); resetSpeakBtn(btn); return; }
   ttsStopAll(); // 同一时刻只播一条（含打断通话页播报）
   document.querySelectorAll(".act-btn.speaking").forEach(resetSpeakBtn);
   btn.dataset.playing = "1"; btn.classList.add("speaking"); btn.innerHTML = '<svg class="ic"><use href="#ic-stop"/></svg>'; btn.title = "停止朗读";
@@ -3050,6 +3103,10 @@ function updateSendBtn() {
   b.classList.toggle("stop", streaming);
   b.classList.toggle("streaming", streaming);
   b.setAttribute("aria-label", streaming ? "停止生成" : "发送");
+  // v0.19.29 缓存模式（延迟红/离线）：发送禁用，title 说明——历史仍可看、播音走本地合成
+  const cache = typeof netCacheMode === "function" && netCacheMode();
+  b.classList.toggle("net-cache", cache && !streaming);
+  b.title = cache && !streaming ? "缓存模式：网络恢复后才能发送（历史会话仍可查看）" : "";
 }
 function autoGrow() {
   const t = $("input");
@@ -3087,6 +3144,8 @@ async function sendOrStop() {
   const text = input.value.trim();
   const atts = attachments.slice();
   if (!text && !atts.length) return;
+  // v0.19.29 缓存模式：不做无效网络等待——发送直接拦下并说明（历史会话/本地能力不受影响）
+  if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送（历史会话仍可查看，播音走本地合成）", "err"); return; }
   // v0.19.28 七类限额发送前拦截：任一维度超限 → 阻断 + 指出具体超限项（不静默丢弃）
   const bad = validateSendPayload(text, atts);
   if (bad) { toast(bad, "err"); return; }
@@ -5137,7 +5196,11 @@ async function loadAll() {
   } catch (e) {
     // 账本异常不再往顶栏糊红标（用户要求屏蔽 error 展示），详情仍见页面顶部 store-banner。
     // 注意：页头极简后 #store-badge 已删除，这里绝不能再去碰它（null.textContent 会二次崩溃）。
-    toast("加载失败：" + e.message, "err");
+    // v0.19.29：服务不可达（Failed to fetch / NetworkError）≠ 断网——navigator.onLine
+    // 此时仍为 true，所以按错误类型识别：静默交给状态栏表达，并立即探测切缓存模式。
+    const netErr = /failed to fetch|networkerror|load failed|network request failed/i.test(String((e && e.message) || ""));
+    if (netErr) { probeNet("send-fail"); }
+    else if (!netCacheMode()) { toast("加载失败：" + e.message, "err"); }
     refreshVersion(); // /channels 挂了也尽量显示真实版本（/health 兜底）
   }
   try {
@@ -5147,6 +5210,8 @@ async function loadAll() {
   } catch { /* 事件账本失败不阻塞主界面 */ }
   loadUsage(); // 用量面板失败也只提示，不阻塞主界面
   loadSkills(); // skill 子系统：列表为空时自动种子化内置「三个诸葛亮」
+  startNetMonitor(); // v0.19.29 网络状态栏：首屏探测 + 60s 心跳 + online/offline 事件
+  registerSW();     // v0.19.29 离线韧性：SW 注册（预缓存主 UI，失败不阻塞）
   // 管理页不可见时也刷新聊天首页的渠道可用性提示
   if (currentView() === "chat") renderMessages();
 }
@@ -6777,7 +6842,7 @@ const WF = {
       this.h = {
         usage: load(WF_SEED_USAGE), title: load(WF_SEED_TITLE),
         format: load(WF_SEED_FORMAT), memory: load(WF_SEED_MEMORY),
-        send: load(WF_SEED_SEND),
+        send: load(WF_SEED_SEND), net: load(WF_SEED_NET),
       };
       this.ex = ex;
       return ex;
@@ -6907,6 +6972,164 @@ const WF_SEED_SEND = JSON.stringify({ id: "send_pipeline", version: 1, trigger: 
     { id: "file",  plugin: "wf.send_file",  depends_on: ["image"], input: { sid: "file",  atts: "${/event/atts}" } },
     { id: "skill", plugin: "wf.send_skill", depends_on: ["file"],  input: { sid: "skill" } },
   ] });
+
+// v0.19.29 网络探测（net.probe）：trace（/cdn-cgi/trace，拿落点/地区/协议/延迟）→
+// latency（降级 /health 计时）。与发送流水线同范式：depends_on 串行，插件绝不 throw。
+const WF_SEED_NET = JSON.stringify({ id: "net_probe", version: 1, trigger: { event: "net.probe" },
+  steps: [
+    { id: "trace",   plugin: "wf.net_trace",   depends_on: [],        input: { sid: "trace" } },
+    { id: "latency", plugin: "wf.net_latency", depends_on: ["trace"], input: { sid: "latency" } },
+  ] });
+
+// ---------------------------------------------------------------------------
+// v0.19.29 网络状态栏：状态机 + 探测插件。四态 ok(<300ms) / slow(300-800) /
+// bad(>800，切缓存模式) / offline(全失败，切缓存模式)。
+// 数据源优先 /cdn-cgi/trace（CF 边缘回传 colo/loc），本地 workerd 无此端点（404）
+// → 降级 /health 计时（仅延迟与协议）。缓存模式下红/白两态第二格显示「缓存」，
+// 协议与国家取 lastOk 快照。
+// ---------------------------------------------------------------------------
+const NET = {
+  state: "idle",      // idle | probing | ok | slow | bad | offline（idle=尚未探测）
+  latency: 0,
+  proto: "",
+  country: "",
+  colo: "",
+  lastOk: (() => {   // 最近一次成功快照 { proto, country } —— 持久化，离线刷新后仍能显示「缓存 · HTTPS · 美国」
+    try { return JSON.parse(localStorage.getItem("gw_net_last") || "null"); } catch { return null; }
+  })(),
+  probe: null,        // 本轮探测结果（插件写，probeNet 消费——与 PIPE 同模式）
+  timer: null,
+  gen: 0,
+};
+const NET_HEARTBEAT_MS = 60000;
+const NET_OK_MS = 300, NET_BAD_MS = 800;
+
+/// 缓存模式：延迟红（>800ms）或离线——不做无效网络等待，直接用本地缓存渲染。
+function netCacheMode() { return NET.state === "bad" || NET.state === "offline"; }
+
+/// 国家代码 → 中文名（Intl.DisplayNames 原生 API，零映射表体积）；不支持时原样返回。
+function regionName(code) {
+  if (!code) return "";
+  try { return new Intl.DisplayNames(["zh"], { type: "region" }).of(String(code).toUpperCase()) || code; }
+  catch { return code; }
+}
+
+/// 渲染状态栏：🟢 140ms · HTTPS · 美国 / 🟡 520ms · … / 🔴 缓存 · HTTPS · 美国 / ⚪ 缓存 · …
+function renderNetBar() {
+  const bar = $("net-bar"), txt = $("nb-txt");
+  if (!bar || !txt) return;
+  bar.dataset.st = NET.state;
+  if (NET.state === "probing" || NET.state === "idle") { txt.textContent = "检测中…"; return; }
+  const cache = netCacheMode();
+  const snap = cache ? (NET.lastOk || {}) : NET;
+  const tail = [snap.proto || "", snap.country || ""].filter(Boolean).join(" · ");
+  txt.textContent = (cache ? "缓存" : `${NET.latency}ms`) + (tail ? " · " + tail : "");
+  updateSendBtn();   // 缓存模式与发送按钮联动（禁用 + 提示）
+}
+
+/// 应用探测结果 → 状态迁移。失败 = offline；成功按延迟分级，红/离线停心跳省流量。
+function applyNetResult(p) {
+  NET.probe = null;
+  if (!p || !p.ok) { NET.state = "offline"; renderNetBar(); stopNetHeartbeat(); return; }
+  NET.latency = Math.max(0, Math.round(p.ms || 0));
+  NET.proto = p.proto || NET.proto || "";
+  if (p.loc) NET.country = regionName(p.loc);
+  if (p.colo) NET.colo = p.colo;
+  NET.lastOk = { proto: NET.proto, country: NET.country };
+  try { localStorage.setItem("gw_net_last", JSON.stringify(NET.lastOk)); } catch { /* 隐私模式忽略 */ }
+  NET.state = NET.latency > NET_BAD_MS ? "bad" : NET.latency > NET_OK_MS ? "slow" : "ok";
+  renderNetBar();
+  if (NET.state === "bad") stopNetHeartbeat();
+}
+
+/// 插件①：/cdn-cgi/trace——落点 colo、地区 loc、协议、延迟。非 200 / 空体 / 网络异常
+/// 一律 ok:false（由 DAG 继续驱动 latency 步做兜底，绝不 throw）。
+async function netProbeTrace() {
+  const t0 = performance.now();
+  let out;
+  try {
+    const r = await fetch("/cdn-cgi/trace", { cache: "no-store" });
+    const ms = performance.now() - t0;
+    if (!r.ok) out = { ok: false, reason: "trace-" + r.status, ms };
+    else {
+      const txt = await r.text();
+      const kv = {};
+      for (const line of String(txt).split("\n")) { const i = line.indexOf("="); if (i > 0) kv[line.slice(0, i)] = line.slice(i + 1).trim(); }
+      out = (kv.colo || kv.loc)
+        ? { ok: true, ms, colo: kv.colo || "", loc: kv.loc || "", proto: location.protocol.replace(":", "").toUpperCase() }
+        : { ok: false, reason: "trace-empty", ms };
+    }
+  } catch { out = { ok: false, reason: "trace-net", ms: performance.now() - t0 }; }
+  NET.probe = out;
+  return out;
+}
+
+/// 插件②：/health 计时兜底（trace 不可用时至少给出延迟与协议；落点/地区留空）。
+/// trace 已成功时不覆盖结果——DAG 两步总是都跑，取优先级高的那份。
+async function netProbeHealth() {
+  const t0 = performance.now();
+  let out;
+  try {
+    const r = await fetch("/health", { cache: "no-store" });
+    const ms = performance.now() - t0;
+    out = r.ok
+      ? { ok: true, ms, proto: location.protocol.replace(":", "").toUpperCase(), loc: "", colo: "" }
+      : { ok: false, reason: "health-" + r.status, ms };
+  } catch { out = { ok: false, reason: "health-net", ms: performance.now() - t0 }; }
+  if (!NET.probe || !NET.probe.ok) NET.probe = out;
+  return out;
+}
+
+/// net_probe 工作流插件分派（与 wfSendPlugin 同构：绝不 throw）
+async function wfNetPlugin(inp) {
+  const sid = inp && inp.sid;
+  if (sid === "trace") return netProbeTrace();
+  if (sid === "latency") return netProbeHealth();
+  return { skipped: true };
+}
+
+/// 触发一次网络探测。reason: boot | heartbeat | online | offline | send-fail | manual
+async function probeNet(reason) {
+  if (NET.state === "probing" && reason !== "manual") return;
+  const myGen = ++NET.gen;
+  NET.state = "probing"; NET.probe = null; renderNetBar();
+  try {
+    const ex = await WF.ensure();
+    if (ex && WF.h && WF.h.net) {
+      await wfDrive(ex, WF.h.net, { event: "net.probe", reason: reason || "manual" }, wfNetPlugin);
+    } else {
+      // 内核不可用：直接走插件链（trace → health，与 DAG 顺序一致）
+      const p = await netProbeTrace();
+      if (!p.ok) await netProbeHealth();
+    }
+  } catch (e) {
+    NET.probe = { ok: false, reason: "kernel" };
+  }
+  if (myGen !== NET.gen) return;   // 有更新的探测在跑，丢弃旧结果
+  applyNetResult(NET.probe);
+  if (reason === "manual") toast(netCacheMode() ? "网络不可用，已切缓存模式（历史可看，发送暂停）" : `网络正常 · ${NET.latency}ms`, netCacheMode() ? "err" : "ok");
+}
+
+function startNetHeartbeat() { stopNetHeartbeat(); NET.timer = setInterval(() => { if (document.hidden || netCacheMode()) return; probeNet("heartbeat"); }, NET_HEARTBEAT_MS); }
+function stopNetHeartbeat() { if (NET.timer) { clearInterval(NET.timer); NET.timer = null; } }
+
+/// 启动网络监视：首屏 3s 首次探测（不抢首屏资源）+ 60s 心跳 + online/offline 事件。
+function startNetMonitor() {
+  renderNetBar();
+  setTimeout(() => probeNet("boot"), 3000);
+  startNetHeartbeat();
+  window.addEventListener("online", () => { probeNet("online"); startNetHeartbeat(); });
+  window.addEventListener("offline", () => { NET.state = "offline"; renderNetBar(); stopNetHeartbeat(); });
+}
+
+/// v0.19.29 注册 Service Worker（离线韧性）。仅 secure context（https / localhost）
+/// 且浏览器支持时注册；失败静默——SW 是增强，没有它在线功能照常。
+function registerSW() {
+  if (!("serviceWorker" in navigator)) return;
+  const host = location.hostname;
+  if (!(location.protocol === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]")) return;
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* 离线增强失败不阻塞 */ });
+}
 
 // ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
 const WF_PLUGINS = {

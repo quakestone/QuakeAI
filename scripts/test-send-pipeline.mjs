@@ -22,8 +22,10 @@ function check(name, cond, detail) {
 
 // ---------- 片段抽取 ----------
 function extractFn(name) {
-  const start = html.indexOf("function " + name + "(");
+  let start = html.indexOf("function " + name + "(");
   if (start < 0) return null;
+  // async 前缀要一起带上——只从 "function" 起切会拼出 `function f(){ await ... }` 的语法错误
+  if (html.slice(Math.max(0, start - 6), start) === "async ") start -= 6;
   const end = html.indexOf("\n}", start);
   return html.slice(start, end + 2);
 }
@@ -377,6 +379,53 @@ console.log("== ⑥ v0.19.25：系统级流开关 + 三流展示渲染 ==");
   f3.toggleSkipDefault();   // 再点恢复
   check("⑥ 恢复带上：key 移除 + 文案回到带上态",
     !("gw_skip_default" in store) && els["sf-skip"].textContent === "默认 · 带上");
+}
+
+// ⑦ v0.19.29 网络探测插件三态：trace 成功（线上 CF）/ trace 404 降级 health / 全失败。
+//    真跑插件逻辑，stub fetch 模拟三种网络现实——证明降级链是「串行兜底」而非静态断言。
+console.log("== ⑦ v0.19.29：net_probe 插件三态（trace → health 降级链） ==");
+{
+  const netSrc = [extractConst("NET"), extractFn("regionName"),
+      extractFn("netProbeTrace"), extractFn("netProbeHealth"), extractFn("wfNetPlugin")].join("\n");
+  const mkNet = (fetchImpl) => new Function("fetch", "location", netSrc +
+    "\nreturn { netProbeTrace, netProbeHealth, wfNetPlugin, regionName };")
+    .call(null, fetchImpl, { protocol: "https:" });
+
+  // 场景 1：线上 CF——trace 返回 colo/loc
+  const okFetch = async (url) => {
+    if (String(url) === "/cdn-cgi/trace") {
+      return { ok: true, status: 200, text: async () => "fl=abc\ncolo=SJC\nloc=US\nhttp=http/3\ntls=on\n" };
+    }
+    return { ok: true, status: 200, text: async () => '{"status":"ok"}' };
+  };
+  const n1 = mkNet(okFetch);
+  const r1 = await n1.netProbeTrace();
+  check("⑦ trace 成功解析 colo/loc/协议", r1.ok && r1.colo === "SJC" && r1.loc === "US" && r1.proto === "HTTPS", JSON.stringify(r1));
+  check("⑦ regionName 用 Intl 转中文", n1.regionName("US") === "美国", n1.regionName("US"));
+
+  // 场景 2：本地 workerd——trace 404，降级 health 计时
+  const localFetch = async (url) => {
+    if (String(url) === "/cdn-cgi/trace") return { ok: false, status: 404, text: async () => "not found" };
+    return { ok: true, status: 200, text: async () => "{}" };
+  };
+  const n2 = mkNet(localFetch);
+  const r2 = await n2.netProbeTrace();
+  check("⑦ trace 404 → ok:false（不 throw）", r2.ok === false && String(r2.reason).startsWith("trace-404"), JSON.stringify(r2));
+  const r2b = await n2.netProbeHealth();
+  check("⑦ 降级 health 成功（含延迟）", r2b.ok === true && r2b.ms >= 0, JSON.stringify(r2b));
+
+  // 场景 3：全失败——两个请求都抛
+  const deadFetch = async () => { throw new Error("ECONNREFUSED"); };
+  const n3 = mkNet(deadFetch);
+  const r3 = await n3.netProbeTrace();
+  check("⑦ 全失败 trace → ok:false reason=trace-net", r3.ok === false && r3.reason === "trace-net", JSON.stringify(r3));
+  const r3b = await n3.netProbeHealth();
+  check("⑦ 全失败 health → ok:false", r3b.ok === false && r3b.reason === "health-net", JSON.stringify(r3b));
+
+  // 分派
+  const n4 = mkNet(okFetch);
+  check("⑦ 插件分派 trace", (await n4.wfNetPlugin({ sid: "trace" })).ok === true);
+  check("⑦ 插件分派未知 sid → skipped", (await n4.wfNetPlugin({ sid: "x" })).skipped === true);
 }
 
 console.log(`\n结果: PASS=${PASS} FAIL=${FAIL}`);
