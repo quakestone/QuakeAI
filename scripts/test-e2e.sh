@@ -1460,6 +1460,19 @@ echo "$UI" | grep -q 'cacheMode: netCacheMode(),'; check "3 含网络缓存模�
 echo "$UI" | grep -q 'channels: { total: chs.length, usable }'; check "3 含渠道统计" $? "no channels"
 echo "$UI" | grep -q 'function copyConsoleState()'; check "3 复制状态动作" $? "no copy"
 
+echo "== 36. v0.19.34 浏览器调试控制台开关：魔法指令 /debug on|off =="
+echo "$UI" | grep -qF 'const DEBUG_KEY = "gw_debug";'; check "1 调试开关持久化 key" $? "no debug key"
+echo "$UI" | grep -qF 'function debugOn() { return localStorage.getItem(DEBUG_KEY) === "1"; }'; check "1 调试开关读取" $? "no debugOn"
+echo "$UI" | grep -qF 'function setDebug(v) {'; check "1 调试开关设置" $? "no setDebug"
+echo "$UI" | grep -qF 'function dbg(...a) { if (debugOn())'; check "1 调试日志守卫（仅开启时打印）" $? "no dbg"
+echo "$UI" | grep -qF 'console.log("[gw-debug]"'; check "1 调试日志前缀" $? "no debug prefix"
+echo "$UI" | grep -qF 'const dm = /^\s*\/\s*debug'; check "2 /debug 指令正则（冒号可选/on|off|1|0）" $? "no debug regex"
+echo "$UI" | grep -qF 'try { debugger; } catch {}'; check "2 开启即触发断点（已开 DevTools 自动停）" $? "no debugger"
+echo "$UI" | grep -qF 'dbg("[net.probe]"'; check "3 探测结果埋点" $? "no net dbg"
+echo "$UI" | grep -qF 'dbg("[send] 失败:'; check "3 发送失败埋点" $? "no send dbg"
+echo "$UI" | grep -qF 'dbg("[api]"'; check "3 API 错误埋点" $? "no api dbg"
+echo "$UI" | grep -qF 'dbg("[load] 网络错误'; check "3 加载网络错误埋点" $? "no load dbg"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

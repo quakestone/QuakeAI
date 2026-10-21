@@ -1720,7 +1720,7 @@ async function api(path, method="GET", body=null, timeoutMs=0) {
   }
   const r = await fetch("/admin/api" + path, opt);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error?.message || ("HTTP " + r.status));
+  if (!r.ok) { dbg("[api]", method, path, "HTTP", r.status, j); throw new Error(j.error?.message || ("HTTP " + r.status)); }
   return j;
 }
 
@@ -3242,6 +3242,7 @@ async function sendOrStop() {
     // 转写失败等：把原文与附件还回输入框，用户改一下就能重发（不必重输）
     input.value = text; autoGrow();
     attachments = atts; renderAttachments();
+    dbg("[send] 失败:", e && (e.stack || e.message) || e);
     toast("发送未开始：" + ((e && e.message) || e), "err");
     pipeDone(true);   // 收起进度条，但保留附件失败徽标（哪个附件失败一目了然）
   } finally {
@@ -5271,7 +5272,7 @@ async function loadAll() {
     // v0.19.29：服务不可达（Failed to fetch / NetworkError）≠ 断网——navigator.onLine
     // 此时仍为 true，所以按错误类型识别：静默交给状态栏表达，并立即探测切缓存模式。
     const netErr = /failed to fetch|networkerror|load failed|network request failed/i.test(String((e && e.message) || ""));
-    if (netErr) { probeNet("send-fail"); }
+    if (netErr) { dbg("[load] 网络错误，触发重探测:", e && e.message); probeNet("send-fail"); }
     else if (!netCacheMode()) { toast("加载失败：" + e.message, "err"); }
     refreshVersion(); // /channels 挂了也尽量显示真实版本（/health 兜底）
   }
@@ -7197,6 +7198,7 @@ async function probeNet(reason) {
     NET.probe = { ok: false, reason: "kernel" };
   }
   if (myGen !== NET.gen) return;   // 有更新的探测在跑，丢弃旧结果
+  dbg("[net.probe]", reason, "->", JSON.stringify(NET.probe), "state=" + NET.state);
   applyNetResult(NET.probe);
   // 链式续命（v0.19.30）：上一次探测结束才排下一次心跳——周期从「这次结束」算，
   // 不会因为探测变慢而堆叠；缓存模式（红/离线）不排，省流量等 online/手动恢复。
@@ -7266,9 +7268,34 @@ function renderConsoleBtn() {
   const b = $("btn-console");
   if (b) b.hidden = !consoleOn();
 }
+
+// ================= v0.19.34 浏览器调试控制台开关（独立于 v0.19.33 的 in-app ⌗ 面板） =================
+// 魔法指令：`/debug on`（或 /debug: on、/debug 1）开启、`/debug off`（或 /debug 0）关闭。
+// 开启后：所有 dbg(...) 调试日志输出到浏览器 DevTools 控制台；并触发一次 debugger 断点
+// （若 DevTools 已打开则自动停在这里；否则按 F12 打开即可看到日志）。
+// 说明：浏览器出于安全限制**无法用脚本直接打开 DevTools**，所以此"开关"= 启用日志 + 断点 +
+// 持久化 gw_debug，实际查看按 F12。与聊天/发送完全解耦，普通用户无感知。
+const DEBUG_KEY = "gw_debug";
+function debugOn() { return localStorage.getItem(DEBUG_KEY) === "1"; }
+function setDebug(v) {
+  if (v) localStorage.setItem(DEBUG_KEY, "1"); else localStorage.removeItem(DEBUG_KEY);
+  toast(v ? "调试已开启：日志输出到浏览器控制台（DevTools）。按 F12 打开查看；若已开会自动断点" : "调试已关闭", v ? "ok" : "");
+}
+/// 调试日志：仅 debug 模式（/debug on）下打印到浏览器控制台，避免污染正常用户。
+function dbg(...a) { if (debugOn()) { try { console.log("[gw-debug]", ...a); } catch {} } }
+
 /// 魔法指令识别。返回 true 表示已消费（调用方直接 return，不发送本轮）。
 function handleMagicCommand(text) {
-  const m = /^\s*\/\s*(console|consle)\s*[:：]\s*([\w-]+)\s*$/i.exec(String(text || ""));
+  const t = String(text || "");
+  // v0.19.34 浏览器调试控制台开关：/debug on|off（冒号可选、大小写/空格容错）
+  const dm = /^\s*\/\s*debug\s*[:：]?\s*(on|off|1|0)\s*$/i.exec(t);
+  if (dm) {
+    const on = /^(on|1)$/i.test(dm[1]);
+    setDebug(on);
+    if (on) { try { debugger; } catch {} }   // 已开 DevTools 则自动断点；否则 F12 后看日志
+    return true;
+  }
+  const m = /^\s*\/\s*(console|consle)\s*[:：]\s*([\w-]+)\s*$/i.exec(t);
   if (!m) return false;
   const arg = String(m[2]).toLowerCase();
   if (arg === "zsj" || arg === "on") {
