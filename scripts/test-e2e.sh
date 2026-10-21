@@ -843,7 +843,7 @@ echo "$UI" | grep -q 'orb-ripple\|orb-bars\|orb-breathe\|orb-think\|orb-speak\|@
 echo "$UI" | grep -q 'class="orb-eye l"'; check "AI 精灵有拟人五官（眼睛）" $? "no eye"
 echo "$UI" | grep -q 'class="orb-mouth"'; check "AI 精灵有拟人五官（嘴）" $? "no mouth"
 echo "$UI" | grep -q 'class="orb-cheek l"'; check "AI 精灵有腮红" $? "no cheek"
-echo "$UI" | grep -q 'class="primary" onclick="openDrawer()">＋ 登记'; check "登记入口在设置·模型登记页（每页2张大banner）" $? "no register entry"
+echo "$UI" | grep -q 'class="primary" onclick="openDrawer()">＋ 登记'; check "登记入口在模型管理·资源标签" $? "no register entry"
 if echo "$UI" | grep -q 'onclick="openVoiceCfg()" aria-label="语音与多媒体设置"'; then check "多媒体设置小图标已从页头移除" 1 "mm icon still there"; else check "多媒体设置小图标已从页头移除" 0 ""; fi
 echo "$UI" | grep -q 'id="btn-call-model"'; check "通话页模型选择按钮保留" $? "no call model btn"
 echo "$UI" | grep -q 'function sniffAudioType(buf)'; check "TTS 播放修复：嗅探音频 MIME" $? "no sniff"
@@ -922,20 +922,25 @@ echo "$UI" | grep -q 'id="view-models"'; check "模型管理作用域页 DOM 存
 echo "$UI" | grep -q 'id="view-settings"'; check "全局设置页 DOM 存在" $? "no view-settings"
 echo "$UI" | grep -q 'function currentView'; check "#/models #/settings 路由已实现" $? "no router"
 echo "$UI" | grep -q 'function applySect'; check "设置页分区切换函数已实现" $? "no applySect"
-echo "$UI" | grep -q 'id="sect-registry"'; check "设置·模型登记分区存在" $? "no sect-registry"
-echo "$UI" | grep -q 'id="sect-keys"'; check "设置·模型换Key分区存在" $? "no sect-keys"
+echo "$UI" | grep -q 'registry: "模型持续性"'; check "设置·模型登记已改名「模型持续性」" $? "registry not renamed"
+echo "$UI" | grep -q 'id="sect-registry"'; check "设置·模型持续性分区存在" $? "no sect-registry"
 echo "$UI" | grep -q 'id="sect-mm"'; check "设置·多媒体配置分区存在" $? "no sect-mm"
 echo "$UI" | grep -q 'id="sect-wf"'; check "设置·工作流参数分区存在" $? "no sect-wf"
 echo "$UI" | grep -q 'id="sect-api"'; check "设置·接入方式分区存在" $? "no sect-api"
 echo "$UI" | grep -q 'id="sect-auth"'; check "设置·管理面鉴权分区存在" $? "no sect-auth"
-echo "$UI" | grep -q 'const REG_PER = 2;'; check "模型登记每页 2 张大 banner" $? "no REG_PER=2"
-echo "$UI" | grep -q 'function renderOverview()'; check "作用域页概览渲染已实现" $? "no renderOverview"
-echo "$UI" | grep -q 'function renderKeyQueue()'; check "换Key待补队列渲染已实现" $? "no renderKeyQueue"
+if echo "$UI" | grep -q 'id="sect-keys"'; then check "「模型换 Key」子页已销毁" 1 "sect-keys still there"; else check "「模型换 Key」子页已销毁" 0 ""; fi
+if echo "$UI" | grep -q 'renderKeyQueue'; then check "renderKeyQueue 已移除" 1 "renderKeyQueue still there"; else check "renderKeyQueue 已移除" 0 ""; fi
+if echo "$UI" | grep -q '模型换 Key'; then check "「模型换 Key」文案已清除" 1 "still there"; else check "「模型换 Key」文案已清除" 0 ""; fi
+echo "$UI" | grep -q 'data-mtab="resources"'; check "模型管理页新增「资源」标签" $? "no resources tab"
+echo "$UI" | grep -q 'id="pane-resources"'; check "模型管理页含资源面板" $? "no pane-resources"
+echo "$UI" | grep -q 'function renderResourceRows'; check "资源面板渲染已实现" $? "no renderResourceRows"
+echo "$UI" | grep -q 'const RES_PER = 6;'; check "资源列表遵循规范列表分页（每页6条+页码）" $? "no RES_PER"
+echo "$UI" | grep -q 'id="reg-pager"'; check "资源列表用统一 .pager 分页控件" $? "no reg-pager"
+echo "$UI" | grep -q 'function openResources'; check "概览可直接跳到模型管理资源标签" $? "no openResources"
 echo "$UI" | grep -q 'async function testTtsChain()'; check "多媒体配置·TTS链路测试已实现" $? "no testTtsChain"
 echo "$UI" | grep -q 'function openModelScope()'; check "选择器⚙入口函数已实现" $? "no openModelScope"
 echo "$UI" | grep -q '>模型管理</div>'; check "模型管理页头只显示「模型管理」字样" $? "no bare title"
 echo "$UI" | grep -q 'id="ov-card"'; check "概览面板含当前模型大卡" $? "no ov-card"
-echo "$UI" | grep -q 'id="key-queue"'; check "换Key页含待补队列容器" $? "no key-queue"
 
 # v0.19.15 / v0.19.16：实时流引擎
 grep -qF 'const SSE_SEP = /\r?\n\r?\n/;' "$UI"; check "SSE 分隔兼容 CRLF（\\r\\n\\r\\n）" $? "no CRLF separator"

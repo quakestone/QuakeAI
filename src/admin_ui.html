@@ -529,30 +529,13 @@
   .ov-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   @media (max-width: 430px) { .ov-metrics { grid-template-columns: repeat(2, 1fr); } }
 
-  /* ---- 模型登记：每页 2 张大 banner ---- */
-  .reg-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .reg-sum { font-size: 12px; color: var(--dim); flex: 1 1 auto; min-width: 0; }
-  .reg-stage { display: flex; align-items: center; gap: 4px; }
-  .reg-arrow { width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--dim); font-size: 15px; line-height: 1; cursor: pointer; flex: none; }
-  .reg-arrow:disabled { opacity: .3; cursor: default; }
-  .reg-cards { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
-  .reg-dots { display: flex; align-items: center; justify-content: center; gap: 5px; margin-top: 10px; }
-  .reg-dot { width: 5px; height: 5px; border-radius: 50%; background: #33415c; transition: width .18s, background .18s; }
-  .reg-dot.on { width: 12px; border-radius: 3px; background: var(--acc); }
-  .reg-n { font-size: 10.5px; color: var(--dim); margin-left: 4px; }
+  /* ---- 已登记资源列表（渠道卡纵向排布，遵循列表规范分页） ---- */
   #channel-rows { display: flex; flex-direction: column; gap: 10px; }
 
   /* ---- 模型列表过滤 chips ---- */
   .mchips { display: flex; gap: 6px; }
   .mchip { font-size: 11.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--dim); cursor: pointer; }
   .mchip.sel { color: var(--txt); border-color: var(--acc); background: var(--sel); }
-
-  /* ---- 换 Key 待办队列 ---- */
-  .kq-row { display: flex; align-items: center; gap: 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 9px 11px; }
-  .kq-row .nm { font-size: 12.5px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .kq-row .st { font-size: 10.5px; flex: none; }
-  .kq-row .st.miss { color: var(--warn); }
-  .kq-row .st.bad { color: var(--bad); }
 
   .store-banner { background: #2b1216; border: 1px solid var(--bad); border-radius: var(--radius); padding: 14px 16px; }
   .store-banner b { color: var(--bad); }
@@ -900,6 +883,7 @@
     <div class="tabbar" id="mgmt-tabs">
       <button class="tab sel" data-mtab="overview" onclick="setMgmtTab('overview')">概览</button>
       <button class="tab" data-mtab="models" onclick="setMgmtTab('models')">模型</button>
+      <button class="tab" data-mtab="resources" onclick="setMgmtTab('resources')" title="已登记资源">资源</button>
       <button class="tab" data-mtab="skill" onclick="setMgmtTab('skill')" title="skill 提示词">提示词</button>
       <button class="tab" data-mtab="usage" onclick="setMgmtTab('usage')" title="模型用量">用量</button>
       <button class="tab" data-mtab="points" onclick="setMgmtTab('points')" title="模型积分榜">积分榜</button>
@@ -929,6 +913,34 @@
           <span class="pg-n" id="model-rows-page-n"></span>
           <button onclick="turnModelRowsPage(1)">›</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 面板 1.5：已登记资源（渠道大卡 + 规范列表分页 + 降权事件） -->
+    <div id="pane-resources" hidden>
+      <div class="card">
+        <div class="toolbar" style="margin-bottom:10px">
+          <button class="primary" onclick="openDrawer()">＋ 登记</button>
+          <div class="mchips" id="reg-chips">
+            <button class="mchip sel" data-rf="all" onclick="setRegFilter('all')">全部</button>
+            <button class="mchip" data-rf="nokey" onclick="setRegFilter('nokey')">缺 Key</button>
+            <button class="mchip" data-rf="off" onclick="setRegFilter('off')">已停用</button>
+          </div>
+          <div class="spacer"></div>
+          <span class="muted" id="reg-count"></span>
+        </div>
+        <div class="hint" style="margin-bottom:10px"><span id="reg-sum">加载中…</span></div>
+        <div id="channel-rows"><div class="empty">加载中…</div></div>
+        <div class="pager" id="reg-pager" hidden>
+          <button onclick="regTurnPage(-1)">‹</button>
+          <span class="pg-n" id="reg-page-n"></span>
+          <button onclick="regTurnPage(1)">›</button>
+        </div>
+        <div class="hint" id="channel-count" style="margin-top:10px"></div>
+        <details class="fold" id="events-fold" style="margin-top:14px">
+          <summary>降权 / 切换事件（最近 50 条环形账本）</summary>
+          <div class="fold-body" id="event-list"><div class="empty">暂无事件</div></div>
+        </details>
       </div>
     </div>
 
@@ -1003,12 +1015,7 @@
     <div id="sect-list" class="sect-menu">
       <button class="sect-item" onclick="goSect('registry')">
         <span class="ic">📦</span>
-        <span class="tx"><span class="nm">模型登记</span><span class="ds">已登记资源 · 分页浏览 · 新增 · 预设 · 设备 Key</span></span>
-        <span class="ar">›</span>
-      </button>
-      <button class="sect-item" onclick="goSect('keys')">
-        <span class="ic">🔑</span>
-        <span class="tx"><span class="nm">模型换 Key</span><span class="ds">缺 Key / 失效渠道的待办队列</span></span>
+        <span class="tx"><span class="nm">模型持续性</span><span class="ds">预设模板 · 设备 Key · 载入默认 · 导出 · 部署自检</span></span>
         <span class="ar">›</span>
       </button>
       <button class="sect-item" onclick="goSect('mm')">
@@ -1040,24 +1047,7 @@
 
     <!-- 3.1 模型登记：每页 2 张大 banner -->
     <div id="sect-registry" hidden>
-      <div class="card">
-        <div class="reg-bar">
-          <span class="reg-sum" id="reg-sum">已登记 0</span>
-          <button class="primary" onclick="openDrawer()">＋ 登记</button>
-        </div>
-        <div class="mchips" id="reg-chips" style="margin-top:10px">
-          <button class="mchip sel" data-rf="all" onclick="setRegFilter('all')">全部</button>
-          <button class="mchip" data-rf="nokey" onclick="setRegFilter('nokey')">缺 Key</button>
-          <button class="mchip" data-rf="off" onclick="setRegFilter('off')">已停用</button>
-        </div>
-        <div class="reg-stage" style="margin-top:12px">
-          <button class="reg-arrow" id="reg-prev" onclick="regGo(-1)" aria-label="上一页">‹</button>
-          <div class="reg-cards" id="channel-rows"><div class="empty">加载中…</div></div>
-          <button class="reg-arrow" id="reg-next" onclick="regGo(1)" aria-label="下一页">›</button>
-        </div>
-        <div class="reg-dots" id="reg-dots"></div>
-        <div class="hint" id="channel-count" style="margin-top:10px"></div>
-      </div>
+      <div class="hint" style="margin-bottom:4px">这里只放让资源持续可用的运维工具，不再列出已登记资源本身；资源明细、统计与降权事件统一在 <a href="#/models" onclick="openResources();return false">模型管理 › 资源</a> 查看。</div>
 
       <details class="fold" id="preset-fold" style="margin-top:14px">
         <summary>从预设快速登记（国内 11 + 海外 3，点卡片「登记」自动预填）</summary>
@@ -1075,10 +1065,6 @@
         <div id="device-key-rows"></div>
       </div>
 
-      <details class="fold" id="events-fold" style="margin-top:14px">
-        <summary>降权 / 切换事件（最近 50 条环形账本）</summary>
-        <div class="fold-body" id="event-list"><div class="empty">暂无事件</div></div>
-      </details>
 
       <details class="fold" id="maint-fold" style="margin-top:14px">
         <summary>维护（载入默认 / 导出配置 / 部署自检）</summary>
@@ -1090,17 +1076,6 @@
       </details>
     </div>
 
-    <!-- 3.2 模型换 Key：只列待补的，不重复全量列表 -->
-    <div id="sect-keys" hidden>
-      <div class="card">
-        <h2>待补 Key <span class="muted" id="kq-count"></span></h2>
-        <div class="hint" style="margin-bottom:10px">只列「从没配过 Key」和「最近出现 401 / 403 / invalid_api_key」的渠道。补完一条就从这里消失。Key 只以掩码展示，任何 API 响应都不含明文。</div>
-        <div id="key-queue"><div class="empty">加载中…</div></div>
-        <div class="toolbar" style="margin-top:12px">
-          <button onclick="goSect('registry')">查看全部渠道 →</button>
-        </div>
-      </div>
-    </div>
 
     <!-- 3.3 多媒体配置 -->
     <div id="sect-mm" hidden>
@@ -1478,7 +1453,7 @@ async function api(path, method="GET", body=null, timeoutMs=0) {
 // `/admin` 无 hash 现在落 chat —— 拆分后「打开管理面」不再是「看模型管理」，
 // 模型管理是聊天页里的一个二级入口（选择器 ⚙ / 侧栏 ⚙ 进设置）。
 const SECT_TTL = {
-  registry: "模型登记", keys: "模型换 Key", mm: "多媒体配置",
+  registry: "模型持续性", mm: "多媒体配置",
   wf: "工作流参数", api: "接入方式", auth: "管理面鉴权",
 };
 function currentView() {
@@ -1542,6 +1517,10 @@ function applyRoute() {
 }
 // 选择器 ⚙ → 作用域页；记住来源 tab，返回时重开选择器停在原 tab
 let pendingPickerReturn = null;
+// 从「持续性/概览」跳到作用域页的某个标签：loadAll 是异步的，直接 setMgmtTab
+// 会用空数据渲染一次，数据到位后再切一次才对。记 pending，等 loadAll 结束再定。
+let pendingMgmtTab = "";
+function openResources() { pendingMgmtTab = "resources"; navigate("models"); }
 function openModelScope() {
   if (modelDlg && modelDlg.open) { pendingPickerReturn = mpTab || "text"; modelDlg.close(); }
   navigate("models");
@@ -4770,7 +4749,7 @@ async function loadAll() {
     renderMgmtMm();       // 音频 / 图片视频 两块的多媒体设置
     // 数据到位后刷新作用域页当前标签（默认概览）：否则进入模型管理页时
     // 概览大卡一直停在「加载中…」—— loadAll 是异步的，applyRoute 不会等它。
-    if (currentView() === "models") setMgmtTab(mgmtTab);
+    if (currentView() === "models") { const t = pendingMgmtTab || mgmtTab; pendingMgmtTab = ""; setMgmtTab(t); }
     if (data.version) $("side-version").textContent = "v" + data.version;
   } catch (e) {
     // 账本异常不再往顶栏糊红标（用户要求屏蔽 error 展示），详情仍见页面顶部 store-banner。
@@ -5304,7 +5283,7 @@ function modelRow(c, m) {
 // 作用域页 5 标签：概览 / 模型 / 提示词 / 用量 / 积分榜。
 // 「模型」标签内再用 chips 分 全部 / 文本 / 多媒体，页码按 scope 各自独立。
 let mgmtTab = "overview";
-const MGMT_TABS = ["overview", "models", "skill", "usage", "points"];
+const MGMT_TABS = ["overview", "models", "resources", "skill", "usage", "points"];
 let modelScope = "all";
 // 列表深度超过 5 个就分页 —— 每页 5 条，宁可多页也不一拉到底
 const MG_PAGE_SIZE = 5;
@@ -5320,6 +5299,7 @@ function setMgmtTab(k) {
   // 首次进入某个面板时才拉数据/渲染，避免在别的标签下打无效请求
   if (k === "overview") renderOverview();
   if (k === "models") renderModelTab();
+  if (k === "resources") renderResourceRows();
   if (k === "usage") loadUsage();
   if (k === "points") renderPoints();
   if (k === "skill") renderSkillPane();
@@ -5345,8 +5325,8 @@ function setModelTab(k) {
 // 多媒体标签一网打尽：STT / 播音 / 视觉 / 视频 都归到「多媒体」
 const TAB_CAPS = { text: ["text"], mm: ["stt", "tts", "vision", "video"] };
 const MG_EMPTY = {
-  all: "还没有登记任何模型 —— 去「设置 › 模型登记」点「＋ 登记」，或在渠道卡上点「编辑」配置模型能力",
-  text: "还没有文本类模型 —— 去「设置 › 模型登记」点渠道卡的「编辑」，把模型能力标成 text",
+  all: "还没有登记任何模型 —— 去模型管理的「资源」标签点「＋ 登记」，或在渠道卡上点「编辑」配置模型能力",
+  text: "还没有文本类模型 —— 去模型管理的「资源」标签点渠道卡的「编辑」，把模型能力标成 text",
   mm: "还没有多媒体类模型（音频 / 图片 / 视频）—— 同上，把能力标成 stt / tts / vision / video",
 };
 function modelsOfTab(scope) {
@@ -5398,11 +5378,10 @@ function mgSyncPager(total, cur, pages) {
     pg.hidden = true;
   }
 }
-// ================= 模型登记：每页 2 张大 banner =================
-// 分页对象是「已登记资源」：一张渠道卡就是一屏宽的大 banner，两张一页。
-// 统计压成一句话、工具条收成一个「＋ 登记」，都是为了把两张卡留在一屏内。
-const REG_PER = 2;
-let regPage = 1;
+// ================= 已登记资源（渠道）列表 =================
+// 遵循模型管理页统一的列表分页规范（.pager + 页码），不再「2 张一屏横向翻页」。
+const RES_PER = 6;
+let resPage = 1;
 let regFilter = "all";
 const REG_FILTERS = ["all", "nokey", "off"];
 function chMissKey(c) { return !c.api_key_masked || c.api_key_masked === "未登记" || c.api_key_masked === "—"; }
@@ -5419,17 +5398,28 @@ function regFiltered() {
     || String(a.name).localeCompare(String(b.name)));
   return list;
 }
-function regPageCount() { return Math.max(1, Math.ceil(regFiltered().length / REG_PER)); }
 function setRegFilter(f) {
   if (REG_FILTERS.indexOf(f) < 0) return;
   regFilter = f;
-  regPage = 1;   // 换筛选必须回第 1 页，否则容易停在空页
+  resPage = 1;   // 换筛选必须回第 1 页，否则容易停在空页
   document.querySelectorAll("#reg-chips .mchip").forEach(b => b.classList.toggle("sel", b.dataset.rf === f));
   renderChannels();
 }
-function regGo(d) {
-  regPage = Math.min(Math.max(1, regPage + d), regPageCount());
-  renderChannels();
+function regTurnPage(d) {
+  resPage = Math.max(1, resPage + d);
+  renderResourceRows();
+}
+function syncRegPager(total, cur, pages) {
+  const pg = $("reg-pager");
+  if (!pg) return;
+  if (total > RES_PER && pages > 1) {
+    pg.hidden = false;
+    $("reg-page-n").textContent = `${cur} / ${pages} · 共 ${total} 个`;
+    pg.querySelectorAll("button")[0].disabled = cur <= 1;
+    pg.querySelectorAll("button")[1].disabled = cur >= pages;
+  } else {
+    pg.hidden = true;
+  }
 }
 // ================= 作用域页 · 概览 =================
 // 唯一一张大卡：当前所用模型 + 它落在哪个渠道、状态；下面一排指标是渠道整体健康。
@@ -5458,7 +5448,7 @@ function renderOverview() {
       <div class="ov-sub">当前所选模型 · 来自渠道「${esc(curRow.c.name)}」${curRow.m.enabled === false ? " · <span style=\'color:var(--warn)\'>该模型已停用</span>" : ""}</div>
       <div class="ov-actions">
         <button onclick="navigate('chat')">回到对话</button>
-        <button onclick="goSect('registry')">管理资源 →</button>
+        <button onclick="openResources()">管理资源 →</button>
       </div>`;
   } else {
     card.innerHTML = `<div class="ov-head"><div class="ov-title">${curModel ? esc(curModel) : "未选择模型"}</div></div>
@@ -5473,39 +5463,15 @@ function renderOverview() {
     M("停用", disabled, disabled ? "warn" : "") + M("健康", healthy);
 }
 
-// ================= 模型换 Key · 待补队列 =================
-// 不重复全量列表（登记页已分页看过）。只列「从没配 Key」和「近期 401/403/invalid_api_key」的渠道，
-// 补完一条原地消失；空了显示一句庆祝。单行紧凑，主任务是"找出还没 Key 或 Key 失效的"。
-function renderKeyQueue() {
-  const el = $("key-queue");
-  if (!el) return;
-  const need = CHANNELS.filter(c =>
-    chMissKey(c) || /401|403|invalid_api_key|unauthorized|forbidden/i.test((c.health && c.health.last_error) || "")
-  );
-  const cnt = $("kq-count");
-  if (cnt) cnt.textContent = need.length ? `· 待补 ${need.length} 个` : "· 全部就绪";
-  if (!need.length) {
-    el.innerHTML = `<div class="empty">✓ 所有渠道都有可用 Key</div>`;
-    return;
-  }
-  el.innerHTML = need.map(c => {
-    const h = healthOf(c);
-    const why = chMissKey(c) ? "缺 Key" : "近期鉴权失败";
-    return `<div class="kq-row">
-      <span class="dot ${h.dot}"></span>
-      <span class="kq-name">${esc(c.name)}</span>
-      <span class="tag">${esc(c.provider)}</span>
-      <span class="kq-why">${why}</span>
-      <div class="spacer"></div>
-      <button onclick="openKeyDlg('${esc(c.id)}')">补 Key</button>
-    </div>`;
-  }).join("");
-}
-
 function renderChannels() {
+  renderModelTab();        // 模型列表（模型标签）
+  renderResourceRows();    // 渠道卡（资源标签）：内部 guard，非当前标签不渲染
+}
+// 资源标签：渠道大卡 + 统计一行 + 规范列表分页。只在「资源」标签可见时渲染。
+function renderResourceRows() {
+  if (mgmtTab !== "resources") return;
   const el = $("channel-rows");
-  renderModelTab();   // 模型列表与渠道列表同源，一次渲染两处
-  if (!el) return;    // 作用域页没有这块 DOM（分页只在设置 › 模型登记里）
+  if (!el) return;
 
   const all = CHANNELS;
   const miss = all.filter(chMissKey).length;
@@ -5514,39 +5480,25 @@ function renderChannels() {
   if (sum) sum.textContent = `已登记 ${all.length} · 有 Key ${withKey} · 缺 Key ${miss}`;
 
   const list = regFiltered();
-  const pages = Math.max(1, Math.ceil(list.length / REG_PER));
-  regPage = Math.min(Math.max(1, regPage), pages);   // 删除后可能越界，每次重排都夹一次
-  const slice = list.slice((regPage - 1) * REG_PER, regPage * REG_PER);
+  const pages = Math.max(1, Math.ceil(list.length / RES_PER));
+  resPage = Math.min(Math.max(1, resPage), pages);   // 删除/筛选后可能越界，每次重排都夹一次
+  const slice = list.slice((resPage - 1) * RES_PER, resPage * RES_PER);
 
-  const prev = $("reg-prev"), next = $("reg-next");
-  if (prev) prev.disabled = regPage <= 1;
-  if (next) next.disabled = regPage >= pages;
+  const cnt = $("reg-count");
+  if (cnt) cnt.textContent = list.length ? `第 ${resPage} / ${pages} 页 · 共 ${list.length} 个` : "";
+  syncRegPager(list.length, resPage, pages);
 
-  // 页码点：≤8 页用圆点，超过就只给 2 / 13 文本
-  const dots = $("reg-dots");
-  if (dots) {
-    if (pages <= 1) dots.innerHTML = "";
-    else if (pages <= 8) {
-      dots.innerHTML = Array.from({ length: pages }, (_, i) =>
-        `<span class="reg-dot${i + 1 === regPage ? " on" : ""}" onclick="regJump(${i + 1})"></span>`).join("")
-        + `<span class="reg-n">${regPage} / ${pages}</span>`;
-    } else {
-      dots.innerHTML = `<span class="reg-n">${regPage} / ${pages}</span>`;
-    }
-  }
-
-  const cnt = $("channel-count");
-  if (cnt) cnt.textContent = "Key 只以掩码展示（前3后4）。轮换：点「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。";
+  const hnt = $("channel-count");
+  if (hnt) hnt.textContent = "Key 只以掩码展示（前3后4）。轮换：点渠道卡「换 Key」粘贴新值；留空保存 = 不改变原 Key。密钥仅存于 Durable Object，任何 API 响应都不含明文。";
 
   if (!list.length) {
     el.innerHTML = `<div class="empty">${all.length
       ? "当前筛选下没有渠道"
-      : "还没有登记任何资源 —— 点上方「＋ 登记」，或展开下方「从预设快速登记」"}</div>`;
+      : "还没有登记任何资源 —— 点上方「＋ 登记」，或去「设置 › 模型持续性」从预设快速登记"}</div>`;
     return;
   }
   el.innerHTML = slice.map(channelCard).join("");
 }
-function regJump(n) { regPage = Math.min(Math.max(1, n), regPageCount()); renderChannels(); }
 /// 一张渠道卡 = 一页里的大 banner。信息摊开：来源 · 模型 · Key 状态 · 可用性 · 自检时间
 function channelCard(c) {
   const h = healthOf(c);
