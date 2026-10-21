@@ -1401,7 +1401,7 @@ const BUILD_MARK = "__BUILD_VERSION__";
 
 // ================= 基础 =================
 const $ = (id) => document.getElementById(id);
-const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg");
+const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), skillDlg = $("skill-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg");
 // 模型弹窗关闭时停掉「多久前自检」的定时器，避免后台空转
 modelDlg.addEventListener("close", () => stopScanAgoTimer());
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -5038,7 +5038,7 @@ async function toggleSkillEnabled(id) {
 
 /// 打开 skill 新增/编辑对话框。
 function openSkillDialog(editId) {
-  const dlg = $("skill-dlg");
+  const dlg = skillDlg;
   if (!dlg) return;
   const s = editId ? SKILLS.find(x => x.id === editId) : null;
   $("sk-dlg-title").textContent = s ? "编辑 skill：" + s.title : "新增 skill";
@@ -5051,7 +5051,7 @@ function openSkillDialog(editId) {
 }
 
 function submitSkill() {
-  const dlg = $("skill-dlg");
+  const dlg = skillDlg;
   const editId = (dlg && dlg.dataset.editId) || "";
   const title = $("sk-title").value.trim();
   const prompt = $("sk-prompt").value;
