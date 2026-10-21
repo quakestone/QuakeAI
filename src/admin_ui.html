@@ -6998,10 +6998,12 @@ const NET = {
     try { return JSON.parse(localStorage.getItem("gw_net_last") || "null"); } catch { return null; }
   })(),
   probe: null,        // 本轮探测结果（插件写，probeNet 消费——与 PIPE 同模式）
-  timer: null,
+  timer: null,        // 心跳定时器（setTimeout）
+  idle: null,         // 空闲调度句柄（requestIdleCallback 或降级 setTimeout）
   gen: 0,
 };
 const NET_HEARTBEAT_MS = 60000;
+const NET_IDLE_TIMEOUT_MS = 5000;   // rIC 兜底：浏览器一直忙也最多等 5s 强制跑
 const NET_OK_MS = 300, NET_BAD_MS = 800;
 
 /// 缓存模式：延迟红（>800ms）或离线——不做无效网络等待，直接用本地缓存渲染。
@@ -7107,11 +7109,40 @@ async function probeNet(reason) {
   }
   if (myGen !== NET.gen) return;   // 有更新的探测在跑，丢弃旧结果
   applyNetResult(NET.probe);
+  // 链式续命（v0.19.30）：上一次探测结束才排下一次心跳——周期从「这次结束」算，
+  // 不会因为探测变慢而堆叠；缓存模式（红/离线）不排，省流量等 online/手动恢复。
+  if (!netCacheMode()) startNetHeartbeat();
   if (reason === "manual") toast(netCacheMode() ? "网络不可用，已切缓存模式（历史可看，发送暂停）" : `网络正常 · ${NET.latency}ms`, netCacheMode() ? "err" : "ok");
 }
 
-function startNetHeartbeat() { stopNetHeartbeat(); NET.timer = setInterval(() => { if (document.hidden || netCacheMode()) return; probeNet("heartbeat"); }, NET_HEARTBEAT_MS); }
-function stopNetHeartbeat() { if (NET.timer) { clearInterval(NET.timer); NET.timer = null; } }
+/// 心跳调度（v0.19.30）：非关键任务交给 requestIdleCallback——只在浏览器**空闲窗口**
+/// 执行，对主线程抢占极低；`{ timeout }` 兜底保证「浏览器一直忙」时也能在 5s 内跑到。
+/// 不支持 rIC 的浏览器（旧 Safari）降级 setTimeout(fn, 1)，语义等价。
+/// 两段式：先等 60s（setTimeout），再找空闲窗口（rIC）——不是固定 interval 硬顶。
+/// delay 可覆盖首轮等待（如 online 恢复后快速补一次心跳）。
+function startNetHeartbeat(delay) {
+  stopNetHeartbeat();
+  NET.timer = setTimeout(() => {
+    NET.timer = null;
+    if (document.hidden || netCacheMode()) return;   // 页面不可见 / 缓存模式不探测
+    const ric = (typeof window.requestIdleCallback === "function")
+      ? window.requestIdleCallback.bind(window)
+      : (fn) => setTimeout(fn, 1);                   // 降级：rIC 缺失（旧 Safari）
+    NET.idle = ric(() => {
+      NET.idle = null;
+      if (document.hidden || netCacheMode()) return;
+      probeNet("heartbeat");
+    }, { timeout: NET_IDLE_TIMEOUT_MS });
+  }, typeof delay === "number" ? delay : NET_HEARTBEAT_MS);
+}
+function stopNetHeartbeat() {
+  if (NET.timer) { clearTimeout(NET.timer); NET.timer = null; }
+  if (NET.idle != null) {
+    // 降级路径下 idle 是 setTimeout id，用 clearTimeout 取消
+    try { (window.cancelIdleCallback || clearTimeout)(NET.idle); } catch { /* 忽略 */ }
+    NET.idle = null;
+  }
+}
 
 /// 启动网络监视：首屏 3s 首次探测（不抢首屏资源）+ 60s 心跳 + online/offline 事件。
 function startNetMonitor() {

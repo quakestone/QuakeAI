@@ -1,4 +1,20 @@
-## v0.19.29（本版）—— 网络状态栏 + 缓存模式 + 离线韧性（不白屏）
+## v0.19.30（本版）—— 心跳改空闲窗口调度：requestIdleCallback + timeout 兜底
+
+> 需求来源（用户 2026-10-21）：「用 requestIdleCallback 调度：将心跳这种非关键任务委托给 requestIdleCallback，它只在浏览器空闲时执行，对主线程的抢占极低。若必须保底，可设置 timeout 强制兜底。」
+
+### 实现
+- **两段式调度**（`startNetHeartbeat`）：`setTimeout(60s)` → `requestIdleCallback(cb, { timeout: 5000 })`。心跳是典型非关键任务，交给空闲窗口执行——主线程忙碌时自动让路，空闲时才探测。
+- **timeout 兜底**：`NET_IDLE_TIMEOUT_MS = 5000`——浏览器持续繁忙时 rIC 也会在 5s 内强制执行，不会「永远等不到空闲」。
+- **降级兼容**：不支持 `requestIdleCallback` 的浏览器（旧 Safari）退化为 `setTimeout(fn, 1)`，语义等价；`stopNetHeartbeat` 用 `(window.cancelIdleCallback || clearTimeout)` 双向取消。
+- **链式续命**：`probeNet` 结束（非缓存模式）后调用 `startNetHeartbeat()`——周期从「上次探测结束」算，探测变慢也不会堆叠；缓存模式（红/离线）不排，省流量等 online/手动恢复。
+- 保留原有守卫：`document.hidden` 与 `netCacheMode()` 时跳过。
+
+### 测试
+- e2e：657 → **663/663**（+6：rIC 判定、timeout 兜底、取消兼容、链式续命、`setInterval` 反向断言、SW 版本断言改动态取 `/health`）
+- 单测 32/32、行为测试 69/69
+- 浏览器实测：状态栏 `1ms · HTTP` 正常（重构零回归）
+
+## v0.19.29 —— 网络状态栏 + 缓存模式 + 离线韧性（不白屏）
 
 > 需求来源（用户 2026-10-21）：首页最底部一栏做网络状态栏，数据源 `/cdn-cgi/trace`（Cloudflare 边缘回传 colo/loc）；网络失败要有离线兜底，绝不能白屏；「网络侦测与表达的事件还是 wasm 工作流实现」。
 > 拍板：① 仅聊天首页；② 节奏「看 1 分钟」；③ 延迟分级 <300 绿 / 300-800 黄 / >800 红，**红了切缓存模式**；④ 离线页「缓存里都有」，**整体 UI 不变**（还能本地播音）。

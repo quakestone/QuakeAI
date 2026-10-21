@@ -1346,6 +1346,12 @@ echo "$UI" | grep -q 'fetch("/cdn-cgi/trace", { cache: "no-store" })'; check "3 
 echo "$UI" | grep -q 'fetch("/health", { cache: "no-store" })'; check "3 降级 /health 计时" $? "no health fallback"
 echo "$UI" | grep -q 'wfDrive(ex, WF.h.net, { event: "net.probe"'; check "3 经 WF 引擎驱动探测" $? "not via wfDrive"
 echo "$UI" | grep -q 'const NET_HEARTBEAT_MS = 60000;'; check "3 60s 心跳节奏" $? "no 60s heartbeat"
+echo "$UI" | grep -q 'const NET_IDLE_TIMEOUT_MS = 5000;'; check "3 rIC 兜底超时 5s" $? "no idle timeout"
+echo "$UI" | grep -q 'window.requestIdleCallback === "function"'; check "3 心跳走 requestIdleCallback（空闲窗口）" $? "no rIC"
+echo "$UI" | grep -q ', { timeout: NET_IDLE_TIMEOUT_MS });'; check "3 rIC 带 timeout 强制兜底" $? "no rIC timeout"
+echo "$UI" | grep -q '(window.cancelIdleCallback || clearTimeout)(NET.idle)'; check "3 取消空闲调度（降级兼容）" $? "no cancel"
+echo "$UI" | grep -q 'if (!netCacheMode()) startNetHeartbeat();'; check "3 探测结束链式续命（不堆叠）" $? "no chain schedule"
+absent 'NET.timer = setInterval('; check "3 心跳不再用 setInterval 硬顶" $? "still setInterval"
 echo "$UI" | grep -q 'window.addEventListener("online", () => { probeNet("online");'; check "3 online 事件立即重探" $? "no online hook"
 # —— 缓存模式能力分流 ——
 echo "$UI" | grep -q 'if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送'; check "4 缓存模式发送拦截" $? "send not gated"
@@ -1354,7 +1360,8 @@ echo "$UI" | grep -q 'new SpeechSynthesisUtterance(text.slice(0, 4000))'; check 
 echo "$UI" | grep -q '#btn-send.net-cache'; check "4 缓存模式发送按钮灰态" $? "no cache btn style"
 # —— SW 与离线页（真实请求验证）——
 CODE=$(curl -s -o /tmp/sw.js -w '%{http_code}' "http://127.0.0.1:8787/sw.js"); check "5 /sw.js 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "got $CODE"
-grep -q 'gw-shell-.*0\.19\.29' /tmp/sw.js; check "5 SW 缓存名含版本（自动翻新）" $? "$(head -c 60 /tmp/sw.js)"
+VER=$(curl -s http://127.0.0.1:8787/health | grep -oP '"version":"\K[^"]+')
+grep -q "gw-shell-.*$VER" /tmp/sw.js; check "5 SW 缓存名含版本（自动翻新）" $? "ver=$VER $(head -c 60 /tmp/sw.js)"
 curl -s -D- -o /dev/null "http://127.0.0.1:8787/sw.js" | grep -qi 'service-worker-allowed'; check "5 SW 响应带 Service-Worker-Allowed" $? "no SW header"
 CODE=$(curl -s -o /tmp/off.html -w '%{http_code}' "http://127.0.0.1:8787/offline.html"); check "5 /offline.html 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "got $CODE"
 grep -q '网络已断开' /tmp/off.html; check "5 离线页友好提示" $? "no offline copy"
