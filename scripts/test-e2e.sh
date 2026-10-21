@@ -65,10 +65,13 @@ AUTH=$(tail -1 "$MOCK_LOG" | python3 -c 'import json,sys; print(json.load(sys.st
 check "上游收到 Authorization" $([ "$AUTH" = "Bearer test-key-local" ] && echo 0 || echo 1) "$AUTH"
 
 echo "== 5. 流式 SSE 透传 =="
-SSE=$(curl -sN http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-4.7-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}')
+SSE=$(curl -sN http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-4-flash","stream":true,"messages":[{"role":"user","content":"hi"}]}')
 echo "$SSE" | grep -q 'data:'; check "SSE data 帧到达" $? "no data frames"
 echo "$SSE" | grep -q 'data: \[DONE\]'; check "SSE 结束帧 [DONE]" $? "no [DONE]"
 echo "$SSE" | grep -q 'WASM 流式透传验证'; check "SSE 内容完整" $? "content mismatch"
+# v0.19.19 方案 A：显式请求池中不存在的模型 → 明确拒绝（不再静默回退自动选路）
+NOSUCH=$(curl -s -o /tmp/nosuch.json -w '%{http_code}' http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"not-a-real-model","messages":[{"role":"user","content":"hi"}]}')
+check "显式请求池外模型被明确拒绝（503）" $([ "$NOSUCH" = "503" ] && grep -q 'requested_model_unavailable' /tmp/nosuch.json && echo 0 || echo 1) "got $NOSUCH $(cat /tmp/nosuch.json)"
 
 echo "== 6. 429 透传（降权信号） =="
 # 临时动态渠道：提供 glm-test-429（无同类回退）→ 429 原样透传，不自动换模型
@@ -374,11 +377,18 @@ CODE=$(curl -s -o /tmp/c1.json -w '%{http_code}' http://127.0.0.1:8787/v1/chat/c
 check "指定模型 glm-test-429 触发上游 429（原样透传）" $([ "$CODE" = "429" ] && echo 0 || echo 1) "got $CODE"
 LISTX=$(curl -s http://127.0.0.1:8787/admin/api/channels)
 echo "$LISTX" | grep -q 'cooldown_until_ms":[0-9]'; check "429 后模型级冷却窗口已写入" $? "$LISTX"
-# 注册另一渠道的同类模型，再请求被冷却的 glm-test-429 → 引擎跳过冷却模型，自动换 glm-4.7-flash
+# 注册另一渠道的同类模型。v0.19.19 方案 A「选择必须诚实」：
+# ① 显式请求被冷却的 glm-test-429 → 明确拒绝（503 requested_model_unavailable），
+#    不再悄悄换成 glm-4.7-flash——这正是「选了 A 却用 B 回答」的根治；
+# ② 不带 model（自动模式）→ 容错语义保留：引擎跳过冷却模型，自动换 glm-4.7-flash。
 curl -s -X POST http://127.0.0.1:8787/admin/api/channels -H 'Content-Type: application/json' \
   -d '{"id":"eng-other","provider":"zhipu","name":"冷却测试B","base_url":"http://127.0.0.1:8788","api_key":"test-key-local","kind":"chat","tier":"T0","priority":100,"models_meta":[{"name":"glm-4.7-flash","kind":"text","priority":50}]}' > /dev/null
-RESP=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}')
-echo "$RESP" | grep -q 'glm-4.7-flash'; check "冷却模型被跳过，自动换用另一模型 glm-4.7-flash" $? "$RESP"
+RESP=$(curl -s -o /tmp/c2.json -w '%{http_code}' http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"glm-test-429","messages":[{"role":"user","content":"x"}]}')
+check "显式请求冷却模型被明确拒绝（503 requested_model_unavailable）" $([ "$RESP" = "503" ] && grep -q 'requested_model_unavailable' /tmp/c2.json && echo 0 || echo 1) "got $RESP $(cat /tmp/c2.json)"
+grep -q '网关不会自动换成别的模型' /tmp/c2.json; check "拒绝信息明示「不自动换模型」" $? "$(cat /tmp/c2.json)"
+grep -q 'glm-4.7-flash' /tmp/c2.json; [ $? -ne 0 ]; check "拒绝响应不含回退模型名（没有偷偷换）" $? "leaked fallback model"
+RESP2=$(curl -s http://127.0.0.1:8787/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"x"}]}')
+echo "$RESP2" | grep -q 'glm-4.7-flash'; check "自动模式仍跳过冷却模型换用 glm-4.7-flash（容错语义保留）" $? "$RESP2"
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-cool > /dev/null
 curl -s -X DELETE http://127.0.0.1:8787/admin/api/channels/eng-other > /dev/null
 
@@ -480,7 +490,7 @@ grep -q 'if ((a.kind === "audio" || a.kind === "video") && a.file) base.file = a
 # ⑧ 流式中断恢复：上次异常退出的流式消息重开标记中断，不再带光标
 grep -q 'm.streaming = false; m.error = m.content ? "（生成中断）" : "（未完成）"' "$UI"; check "异常退出的流式消息重开标记中断" $? "no interrupt recovery"
 # ⑨ 重发截断同步删库（否则重开后旧消息复活）
-grep -q 'removed.forEach((rm, k) => IDB.deleteMsg(c.id, j + k))' "$UI"; check "重新生成截断的消息同步删库" $? "truncated msgs not deleted"
+grep -q 'IDB.deleteMsg(c.id, k)' "$UI"; check "重新生成截断的消息同步删库" $? "truncated msgs not deleted"
 # ⑩ toast 不得拦截点击：底部输入区在 toast 悬浮的 4.6s 内必须可点
 #    （实测缺陷：.toast 单独开 pointer-events:auto，清空会话后马上点发送没反应）
 if grep -A1 '#toast { position: fixed' "$UI" | grep -q 'pointer-events: none' && ! grep '\.toast {' "$UI" | grep -q 'pointer-events: auto'; then check "toast 纯通知不拦截点击（底部区域随时可点）" 0; else check "toast 纯通知不拦截点击（底部区域随时可点）" 1 "toast still intercepts clicks"; fi
@@ -814,7 +824,7 @@ echo "$UI" | grep -q 'Points.add("degrade", m)'; check "降权 −20 已接入" 
 echo "$UI" | grep -q 'items.sort((a, b) => (b.score - a.score)'; check "模型选择器按积分倒序排序" $? "no sort"
 echo "$UI" | grep -q 'AUTO_KEY'; check "「自动」作为独立条目参与计分与排序" $? "no auto key"
 echo "$UI" | grep -q 'id="pane-points"'; check "模型管理页含积分榜面板" $? "no points pane"
-echo "$UI" | grep -q 'id="points-card-body"'; check "积分榜面板含表格容器" $? "no points body"
+echo "$UI" | grep -q 'id="points-table"'; check "积分榜面板含表格容器" $? "no points body"
 echo "$UI" | grep -q 'function renderPoints()'; check "积分榜渲染函数已挂载" $? "no renderPoints"
 echo "$UI" | grep -q 'function resetPoints()'; check "积分可清空重置" $? "no resetPoints"
 echo "$UI" | grep -q 'x-gateway-degraded'; check "前端读降权诊断头" $? "no degraded header read"
@@ -843,7 +853,7 @@ echo "$UI" | grep -q 'orb-ripple\|orb-bars\|orb-breathe\|orb-think\|orb-speak\|@
 echo "$UI" | grep -q 'class="orb-eye l"'; check "AI 精灵有拟人五官（眼睛）" $? "no eye"
 echo "$UI" | grep -q 'class="orb-mouth"'; check "AI 精灵有拟人五官（嘴）" $? "no mouth"
 echo "$UI" | grep -q 'class="orb-cheek l"'; check "AI 精灵有腮红" $? "no cheek"
-echo "$UI" | grep -q 'class="primary" onclick="openDrawer()">＋ 登记'; check "登记入口在模型管理·资源标签" $? "no register entry"
+echo "$UI" | grep -q 'class="primary" onclick="openDrawer()">＋ 添加服务商'; check "添加服务商入口在模型管理·模型服务商标签" $? "no register entry"
 if echo "$UI" | grep -q 'onclick="openVoiceCfg()" aria-label="语音与多媒体设置"'; then check "多媒体设置小图标已从页头移除" 1 "mm icon still there"; else check "多媒体设置小图标已从页头移除" 0 ""; fi
 echo "$UI" | grep -q 'id="btn-call-model"'; check "通话页模型选择按钮保留" $? "no call model btn"
 echo "$UI" | grep -q 'function sniffAudioType(buf)'; check "TTS 播放修复：嗅探音频 MIME" $? "no sniff"
@@ -854,7 +864,7 @@ echo "$SHARE" | grep -q 'id="back-btn"'; check "分享落地页有回退按钮" 
 
 echo
 echo "== 22. v0.16.0 模型选择器分页 / 搜索（⚡ DRILL 引导 prompt 内置） =="
-echo "$UI" | grep -q 'const MP_PAGE_SIZE = 6'; check "模型列表每页上限 6 条" $? "no page size"
+echo "$UI" | grep -q 'const MP_PAGE_SIZE = 5'; check "模型列表每页上限 5 条" $? "no page size"
 echo "$UI" | grep -q 'id="model-pager"'; check "模型选择器有分页控件" $? "no pager"
 echo "$UI" | grep -q 'id="model-page-n"'; check "分页显示页码与总数" $? "no page num"
 echo "$UI" | grep -q 'function turnModelPage(d)'; check "翻页函数已实现" $? "no turnPage"
@@ -881,19 +891,20 @@ sys.exit(0 if -1<i_theme<i_call<i_new else 1)
 PYX
 check "顶栏右侧顺序：主题 → 通话 → 新建会话" $? "wrong topbar order"
 echo "$UI" | grep -q 'id="mgmt-tabs"'; check "模型管理有独立标签页容器" $? "no mgmt tabs"
-echo "$UI" | grep -q 'data-mtab="overview"'; check "作用域页含概览标签（当前模型大卡）" $? "no overview tab"
+echo "$UI" | grep -q 'data-mtab="resources"'; check "作用域页含模型服务商标签" $? "no resources tab"
+echo "$UI" | grep -q 'data-mtab="overview"'; [ $? -ne 0 ]; check "v0.19.19 撤销概览标签（信息并入模型标签头部）" $? "overview tab still exists"
 echo "$UI" | grep -q 'id="sect-mm"'; check "多媒体配置已脱离模型管理（移至设置）" $? "no sect-mm"
 echo "$UI" | grep -q 'data-mtab="skill"'; check "模型管理含 skill 标签" $? "no skill tab"
 echo "$UI" | grep -q 'id="pane-skill"'; check "模型管理有 skill 独立面板" $? "no skill pane"
 echo "$UI" | grep -q '语音与多媒体模型'; check "多媒体配置标题为语音与多媒体模型" $? "no mm title"
 echo "$UI" | grep -q 'data-mtab="usage"'; check "模型管理含模型用量标签" $? "no usage tab"
 echo "$UI" | grep -q 'data-mtab="points"'; check "模型管理含模型积分榜标签" $? "no points tab"
-echo "$UI" | grep -q 'const MGMT_TABS = ["overview", "models", "skill", "usage", "points"]'; check "作用域页共 5 个标签（概览/模型/提示词/用量/积分榜）" $? "bad MGMT_TABS"
+echo "$UI" | grep -qF 'const MGMT_TABS = ["models", "resources", "skill", "usage", "points"]'; check "作用域页共 5 个标签（模型/模型服务商/skill管理/用量/积分榜）" $? "bad MGMT_TABS"
 echo "$UI" | grep -q 'const MG_PAGE_SIZE = 5;'; check "管理页每页 5 条（超5 全分页）" $? "bad MG_PAGE_SIZE"
 echo "$UI" | grep -q 'id="pane-usage"'; check "模型用量独立面板" $? "no usage pane"
 echo "$UI" | grep -q 'id="model-rows-pager"'; check "模型列表有翻页条" $? "no rows pager"
 echo "$UI" | grep -q 'function turnModelRowsPage(d)'; check "模型列表翻页函数" $? "no rows page fn"
-echo "$UI" | grep -q 'mgPages\[mgmtTab\] = Math.max(1,'; check "各模型标签独立页码" $? "pages not per-tab"
+echo "$UI" | grep -q 'mgPages\[modelScope\] = cur'; check "各模型标签独立页码" $? "pages not per-tab"
 echo "$UI" | grep -q 'id="points-pager"'; check "积分榜有翻页条" $? "no points pager"
 echo "$UI" | grep -q 'function turnPointsPage(d)'; check "积分榜翻页函数" $? "no points page fn"
 echo "$UI" | grep -q 'id="usage-pager"'; check "用量表有翻页条" $? "no usage pager"
@@ -940,19 +951,23 @@ echo "$UI" | grep -q 'function openResources'; check "概览可直接跳到模�
 echo "$UI" | grep -q 'async function testTtsChain()'; check "多媒体配置·TTS链路测试已实现" $? "no testTtsChain"
 echo "$UI" | grep -q 'function openModelScope()'; check "选择器⚙入口函数已实现" $? "no openModelScope"
 echo "$UI" | grep -q '>模型管理</div>'; check "模型管理页头只显示「模型管理」字样" $? "no bare title"
-echo "$UI" | grep -q 'id="ov-card"'; check "概览面板含当前模型大卡" $? "no ov-card"
+echo "$UI" | grep -q 'id="mh-cur"'; check "模型标签头部含当前模型条" $? "no mh-cur"
+echo "$UI" | grep -q 'id="mh-metrics"'; check "模型标签头部含统计 banner" $? "no mh-metrics"
+echo "$UI" | grep -q 'id="mh-health"'; check "模型标签头部含渠道健康速览" $? "no mh-health"
+echo "$UI" | grep -q 'id="mh-events"'; check "模型标签头部含最近事件" $? "no mh-events"
+echo "$UI" | grep -q 'function renderModelsHead'; check "模型标签头部渲染函数存在" $? "no renderModelsHead"
 
 # v0.19.15 / v0.19.16：实时流引擎
-grep -qF 'const SSE_SEP = /\r?\n\r?\n/;' "$UI"; check "SSE 分隔兼容 CRLF（\\r\\n\\r\\n）" $? "no CRLF separator"
-grep -qF 'function paintStream(final)' "$UI"; check "流式增量绘制（只动当前条 DOM）" $? "no paintStream"
-grep -qF 'function stableCut(src)' "$UI"; check "稳定前缀切分（段落级增量）" $? "no stableCut"
-grep -qF 'function splitSegs(s)' "$UI"; check "按段切分且保留代码围栏内空行" $? "no splitSegs"
-grep -qF 'function paintContent(content, shown, final)' "$UI"; check "稳定区只追加 / 尾段每帧重画" $? "no paintContent"
-grep -qF 'minRate: 14' "$UI"; check "呈现速率有下限（断顿也继续吐字）" $? "no minRate"
-grep -qF 'const primed = STREAM.target.length >= TYPE.primeChars' "$UI"; check "首字先攒缓冲再开口" $? "no prime"
-grep -qF 'requestAnimationFrame(streamFrame)' "$UI"; check "rAF 合并绘制（一帧只画一次）" $? "no rAF merge"
-grep -qF 'if (followBottom) stickBottom()' "$UI"; check "上翻阅读时不抢滚动条" $? "scroll steal"
-grep -qF 'id="to-bottom"' "$UI"; check "有「回到最新」按钮" $? "no to-bottom"
+echo "$UI" | grep -qF 'const SSE_SEP = /\r?\n\r?\n/;'; check "SSE 分隔兼容 CRLF（\\r\\n\\r\\n）" $? "no CRLF separator"
+echo "$UI" | grep -qF 'function paintStream(final)'; check "流式增量绘制（只动当前条 DOM）" $? "no paintStream"
+echo "$UI" | grep -qF 'function stableCut(src)'; check "稳定前缀切分（段落级增量）" $? "no stableCut"
+echo "$UI" | grep -qF 'function splitSegs(s)'; check "按段切分且保留代码围栏内空行" $? "no splitSegs"
+echo "$UI" | grep -qF 'function paintContent(content, shown, final)'; check "稳定区只追加 / 尾段每帧重画" $? "no paintContent"
+echo "$UI" | grep -qF 'minRate: 14'; check "呈现速率有下限（断顿也继续吐字）" $? "no minRate"
+echo "$UI" | grep -qF 'const primed = STREAM.target.length >= TYPE.primeChars'; check "首字先攒缓冲再开口" $? "no prime"
+echo "$UI" | grep -qF 'requestAnimationFrame(streamFrame)'; check "rAF 合并绘制（一帧只画一次）" $? "no rAF merge"
+echo "$UI" | grep -qF 'if (followBottom) stickBottom()'; check "上翻阅读时不抢滚动条" $? "scroll steal"
+echo "$UI" | grep -qF 'id="to-bottom"'; check "有「回到最新」按钮" $? "no to-bottom"
 python3 - <<'PYX'
 import sys
 s = open('src/admin_ui.html', encoding='utf-8').read()
@@ -986,8 +1001,6 @@ echo "$UI" | grep -q 'await fn(st.input)'; check "工作流插件收到的是步
 if echo "$UI" | grep -q 'plugin(st\.plugin'; then check "驱动循环不再传 st.plugin 当入参" 1 "st.plugin passed as input"; else check "驱动循环不再传 st.plugin 当入参" 0 ""; fi
 echo "$UI" | grep -q 'let mpPages = { text: 1, skill: 1, audio: 1, mm: 1 }'; check "选择页各标签独立页码" $? "mpPages not per-tab"
 echo "$UI" | grep -q 'if (mpTab === "skill") return \[\];'; check "skill 标签不从模型池取数" $? "skill pulls models"
-echo "$UI" | grep -qF 'id="mp-current"' ; check "选择器含当前选择条DOM" $? "no mp-current dom"
-echo "$UI" | grep -qF 'function renderMpCurrent'; check "选择器常驻当前选择条函数" $? "no renderMpCurrent"
 # 回归：后台 HTML 曾完全缺 Cache-Control，浏览器缓存旧 SPA，"改了没生效"
 grep -q '"Cache-Control", "no-store, no-cache, must-revalidate, max-age=0"' src/admin.rs; check "后台 HTML 已禁缓存" $? "no no-store"
 grep -qF '.set("Pragma", "no-cache")' src/admin.rs; check "后台 HTML 带 Pragma 兼容老浏览器" $? "no pragma"
@@ -1001,7 +1014,7 @@ echo "$UI" | grep -qF 'const BUILD_MARK = "'; check "服务页面已注入真实
 echo "$UI" | grep -q 'id="cache-warn"'; check "侧栏有缓存自检提示位" $? "no cache-warn"
 echo "$UI" | grep -q 'function setMpTab(k)'; check "选择页标签切换函数" $? "no setMpTab"
 echo "$UI" | grep -q 'const TAB_CAPS = { text: \["text"\], mm: \["stt", "tts", "vision", "video"\] }'; check "多媒体标签合并音频+图视能力" $? "bad tab caps"
-echo "$UI" | grep -q 'let mgmtTab = "overview"'; check "标签页默认概览" $? "no default tab"
+echo "$UI" | grep -q 'let mgmtTab = "models"'; check "标签页默认模型（v0.19.19 撤销概览）" $? "no default tab"
 echo "$UI" | grep -q 'id="convo-pager"'; check "历史会话列表有分页条" $? "no convo pager"
 echo "$UI" | grep -q 'const CONVO_PAGE_SIZE = 8;'; check "会话每页 8 条" $? "bad CONVO_PAGE_SIZE"
 echo "$UI" | grep -q 'function turnConvoPage(d)'; check "会话翻页函数" $? "no turnConvoPage"
@@ -1016,12 +1029,14 @@ echo "$UI" | grep -q 'flex-wrap: wrap; min-width: 0; }'; check "模型行允许�
 # ==================== 23. v0.19.0：skill 子系统（独立于模型的表达线）====================
 echo "== 23. skill 子系统：增删改查 / 计数 / 选择器前6 + 扩展入口 =="
 SKILLS_API=http://127.0.0.1:8787/admin/api/skills
-S1=$(curl -s -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":"三个诸葛亮","prompt":"PRE-ANSWER DRILL PROTOCOL"}')
+S1=$(curl -s -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":"三个诸葛亮","prompt":"PRE-ANSWER DRILL PROTOCOL","summary":"回答前三角度自辩，再统一作答"}')
 echo "$S1" | grep -q '"id"'; check "POST /skills 创建 skill" $? "$S1"
 S1ID=$(echo "$S1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skill"]["id"])')
+echo "$S1" | grep -q '"summary":"回答前三角度自辩，再统一作答"'; check "POST /skills 落库 summary 简介字段" $? "$S1"
 S2=$(curl -s -X POST $SKILLS_API -H 'Content-Type: application/json' -d '{"title":"中英润色","prompt":"polish"}')
 S2ID=$(echo "$S2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["skill"]["id"])')
 curl -s -X PUT $SKILLS_API/$S1ID -H 'Content-Type: application/json' -d '{"enabled":false}' | grep -q '"enabled":false'; check "PUT /skills/{id} 更新字段" $? "update failed"
+curl -s -X PUT $SKILLS_API/$S1ID -H 'Content-Type: application/json' -d '{"summary":"改过的简介"}' | grep -q '"summary":"改过的简介"'; check "PUT /skills/{id} 覆盖 summary" $? "summary update failed"
 curl -s -X POST $SKILLS_API/$S1ID/use > /dev/null
 USE=$(curl -s -X POST $SKILLS_API/$S1ID/use)
 echo "$USE" | grep -q '"used_count":2'; check "POST /skills/{id}/use 累加 used_count" $? "$USE"
@@ -1041,6 +1056,17 @@ echo "$UI" | grep -q 'sk-add'; check "前端扩展 skill 入口存在" $? "no sk
 echo "$UI" | grep -q 'let activeSkill = null'; check "前端 activeSkill 状态存在" $? "no activeSkill"
 echo "$UI" | grep -q 'history.unshift({ role: "system", content: activeSkill.prompt })'; check "前端发送时注入 skill system 消息" $? "no inject"
 echo "$UI" | grep -q 'location.hash === "#/skills"'; check "前端 #/skills 路由存在" $? "no skills route"
+
+echo "== 23.5 v0.19.19：skill 简介（summary）+ 扩展按钮直通新增 + skill 管理页改造 =="
+echo "$UI" | grep -q 'id="sk-summary"'; check "前端 skill 对话框含简介输入框" $? "no sk-summary"
+echo "$UI" | grep -q 'maxlength="30"'; check "简介输入框限长 30 字" $? "no maxlength 30"
+echo "$UI" | grep -q 'function summarizePrompt'; check "前端简介兜底截取函数存在" $? "no summarizePrompt"
+echo "$UI" | grep -q 'sk-desc'; check "前端选择器列表含简介行 DOM" $? "no sk-desc"
+echo "$UI" | grep -q 'onclick="openSkillDialog()">＋ 扩展 skill（新增）'; check "扩展 skill 按钮直接弹新增对话框" $? "extend button not bound to openSkillDialog"
+echo "$UI" | grep -q '＋ 新增 skill'; [ $? -ne 0 ]; check "管理页 skill 面板不再有新增按钮" $? "add button still in pane"
+echo "$UI" | grep -q 'title="skill 提示词：独立于模型的表达线">skill 管理'; check "管理页提示词标签改名 skill 管理" $? "tab not renamed"
+echo "$UI" | grep -q 'for (const s of SKILLS) if (!s.summary) s.summary = summarizePrompt(s.prompt);'; check "旧 skill 无 summary 时前端兜底生成" $? "no legacy fallback"
+echo "$UI" | grep -q 'summary: "回答前三角度自辩，再统一作答"'; check "内置种子 skill 带简介" $? "seed has no summary"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

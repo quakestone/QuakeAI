@@ -497,6 +497,8 @@ async fn api_create_skill(mut req: Request, env: &Env) -> Result<Response> {
         id,
         title,
         prompt,
+        // 简介（≤30 字）：前端留空时自动截取生成后随表单提交；直调 API 缺省空串。
+        summary: v.get("summary").and_then(|x| x.as_str()).unwrap_or("").trim().to_string(),
         enabled: v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true),
         used_count: 0,
         created_at: now.clone(),
@@ -534,6 +536,10 @@ async fn api_update_skill(mut req: Request, env: &Env, id: &str) -> Result<Respo
     }
     if let Some(s) = v.get("prompt").and_then(|x| x.as_str()) {
         sk.prompt = s.to_string();
+    }
+    // 简介按字段覆盖：显式传空串 = 清空（前端会在展示层兜底截取，不回写）。
+    if let Some(s) = v.get("summary").and_then(|x| x.as_str()) {
+        sk.summary = s.trim().to_string();
     }
     if let Some(b) = v.get("enabled").and_then(|x| x.as_bool()) {
         sk.enabled = b;

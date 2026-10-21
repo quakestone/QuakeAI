@@ -171,7 +171,9 @@ pub struct Channel {
 }
 
 /// skill 子系统的一等对象：与模型完全独立——模型登记「名字 + 能力」，
-/// skill 登记「标题 + 提示词正文」。模型选择器与管理页共用同一份 skill 列表。
+/// skill 登记「标题 + 提示词正文 + 简介」。模型选择器与管理页共用同一份 skill 列表。
+/// `summary` 是提示词的 ≤30 字简略说明，选择器列表第二行展示；缺省空串
+/// （旧账本零迁移，前端对空 summary 自动从 prompt 兜底截取）。
 /// `used_count` 累计被应用到对话的次数，决定列表里「使用最频繁的前 6 条」。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Skill {
@@ -180,6 +182,10 @@ pub struct Skill {
     pub title: String,
     /// 提示词正文：被选中并发送时，作为 system 消息注入本轮对话（独立表达线）
     pub prompt: String,
+    /// 提示词的 ≤30 字简略说明：选择器列表第二行、管理页同步展示。
+    /// 新增/编辑时留空由前端自动截取生成；后端不强制（兼容旧数据与直接调 API）。
+    #[serde(default)]
+    pub summary: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// 使用次数（被应用到对话的累计次数），缺省 0

@@ -598,6 +598,29 @@ async fn note_failure(env: &Env, ch: &Channel, status: u16, scope: &str, model: 
     admin::report_degraded(env, &ch.id, &ch.provider, scope, model, attempts, status).await;
 }
 
+/// 给上游错误体的 message 前注入一段网关说明（显式模型全部渠道失败时用）。
+/// 上游 body 多半是 OpenAI 风格 {"error":{"message":…}}：就地改 message；
+/// 解析失败就包一层网关错误 JSON，原文进 `upstream_body` 字段，不丢信息。
+fn prefix_upstream_error(err_body: &str, prefix: &str) -> String {
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(err_body) {
+        if let Some(msg) = v.pointer("/error/message").and_then(|m| m.as_str()) {
+            let merged = format!("{prefix}{msg}");
+            if let Some(slot) = v.pointer_mut("/error/message") {
+                *slot = serde_json::Value::String(merged);
+            }
+            return v.to_string();
+        }
+    }
+    serde_json::json!({
+        "error": {
+            "code": "upstream_error",
+            "message": format!("{prefix}{err_body}"),
+            "gateway": "zhipu-wasm-gateway",
+        }
+    })
+    .to_string()
+}
+
 /// 最终失败：透传最后一个上游错误（状态码+错误体），降权信号不灭。
 fn final_error_response(
     status: u16,
@@ -673,16 +696,21 @@ impl ModelAttempt {
 /// 模型选择引擎：跨渠道选出可提供 `want_kind` 能力的（渠道×模型）候选，
 /// 候选排序：渠道 priority desc → 模型 priority desc → 模型名。
 ///
-/// 行为（实现"模型出错自动更换"）：
-/// - 客户端指定模型 `rm`：优先把所有**提供该模型**的渠道排在最前（按优先级），
-///   任一个上游失败即换下一个渠道（同模型跨渠道切换）；
-/// - 若全部提供 `rm` 的渠道都失败，再回退到**同类其他模型**（模型级自动更换）；
-/// - 未指定模型：直接用全部同能力模型（按优先级）。
+/// 行为（`explicit` = 调用方是否「用户显式指定了模型」）：
+/// - explicit=true（用户在选择器里亲手选了模型）——**选择必须诚实**：
+///   · 池中有该模型 → 候选只含提供它的渠道（同模型跨渠道切换允许）；
+///   · 池中没有（未登记/缺 Key/停用/冷却）→ 返回**空候选** + note，
+///     上层据此明确报错；**绝不做模型级回退、绝不回退自动选路**——
+///     旧行为把请求悄悄落到积分榜首渠道，正是「选了 A 却用 B 回答」的根源。
+/// - explicit=false（自动模式 / 网关默认模型）——保持容错语义：
+///   · 池中有该模型 → 其渠道排最前，失败后回退同类其他模型（模型级自动更换）；
+///   · 池中没有 → 记 note 后走自动选路（全部同能力模型按优先级）。
 /// - 过滤：渠道 enabled + 有 Key(音频可暂缺) + 未冷却；模型 enabled + 未冷却。
 fn pick_model_attempts(
     channels: &[Channel],
     want_kind: &str,
     requested: Option<&str>,
+    explicit: bool,
     now: f64,
 ) -> (Vec<ModelAttempt>, Vec<String>) {
     let out: Vec<ModelAttempt>;
@@ -736,7 +764,7 @@ fn pick_model_attempts(
 
     if let Some(rm) = requested {
         // 主选：所有提供该模型的渠道（跨渠道），按优先级——**绕过 kind 过滤**，
-        // 尊重用户显式选择（例如选了 vision 模型来答纯文本也照用，只有全部失败时再回退）。
+        // 尊重用户显式选择（例如选了 vision 模型来答纯文本也照用）。
         // 来源是 all_usable（仅排除禁用/冷却），而不是只含 kind 匹配项的 pairs。
         let mut primary: Vec<(ModelMeta, &Channel)> =
             all_usable.iter().filter(|(m, _)| model_name_eq(&m.name, rm)).cloned().collect();
@@ -746,18 +774,26 @@ fn pick_model_attempts(
                 .iter()
                 .map(|(m, c)| ModelAttempt { ch: (*c).clone(), model: m.name.clone() })
                 .collect();
-            // 回退：同类其他模型（主选全部失败后再尝试）——实现模型级自动更换
-            let mut fallback: Vec<(ModelMeta, &Channel)> =
-                pairs.iter().filter(|(m, _)| !model_name_eq(&m.name, rm)).cloned().collect();
-            fallback.sort_by(by_priority);
-            list.extend(
-                fallback
-                    .iter()
-                    .map(|(m, c)| ModelAttempt { ch: (*c).clone(), model: m.name.clone() }),
-            );
+            if !explicit {
+                // 自动模式：主选全部失败后再回退同类其他模型（模型级自动更换）。
+                let mut fallback: Vec<(ModelMeta, &Channel)> =
+                    pairs.iter().filter(|(m, _)| !model_name_eq(&m.name, rm)).cloned().collect();
+                fallback.sort_by(by_priority);
+                list.extend(
+                    fallback
+                        .iter()
+                        .map(|(m, c)| ModelAttempt { ch: (*c).clone(), model: m.name.clone() }),
+                );
+            }
+            // explicit=true：候选到此为止——只含提供该模型的渠道，
+            // 全部失败时上层直接报错，不悄悄换成别的模型。
             return (list, notes);
         }
         notes.push(format!("requested-model-unavailable:{rm}"));
+        if explicit {
+            // 显式选择但池中无人能提供 → 空候选，上层明确拒绝（不回退自动选路）。
+            return (Vec::new(), notes);
+        }
     }
 
     let mut all = pairs;
@@ -1159,12 +1195,38 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     };
 
     // ---- 模型选择引擎：跨渠道挑（渠道×模型）候选 ----
-    let (candidates, notes) =
-        pick_model_attempts(&channels, want_kind, requested.as_deref(), admin::now_ms());
+    // explicit = 用户亲手选了模型（payload 带了非空 model）。
+    // 显式选择时引擎不做模型级回退、不可用即明确报错——根治「选了 A 却用 B 回答」。
+    let (candidates, notes) = pick_model_attempts(
+        &channels,
+        want_kind,
+        requested.as_deref(),
+        !model_missing,
+        admin::now_ms(),
+    );
     // 用户显式指定的模型没有任何渠道可提供（禁用/冷却/不存在）→ 网关回退到自动选路。
     // 记一个标记，最终响应上打 x-gateway-model-unavailable 头，前端据此提示而非静默。
     let model_unavailable = notes.iter().any(|n| n.starts_with("requested-model-unavailable:"));
     if candidates.is_empty() {
+        // 用户显式选的模型在池中不可用 → 精准拒绝（方案 A：不回退自动选路）。
+        // 与 no_candidates 区分：这句话必须点名「你选的那个模型」并给修复指引，
+        // 而不是泛泛的「没有可用模型」——后者会让用户以为整个网关挂了。
+        // 自动模式（model_missing）走原路径：池空就是池空，明说。
+        if !model_missing {
+            let rm = requested.as_deref().unwrap_or("");
+            return json_response(
+                503,
+                serde_json::json!({
+                    "error": {
+                        "code": "requested_model_unavailable",
+                        "message": format!("所选模型「{rm}」当前不可用：已登记渠道里没有能提供它的（未登记 / 缺 Key / 已停用 / 冷却中）。网关不会自动换成别的模型——请另选一个，或到「模型管理 › 模型服务商」修复该渠道"),
+                        "requested_model": rm,
+                        "notes": notes,
+                        "gateway": "zhipu-wasm-gateway",
+                    }
+                }),
+            );
+        }
         return no_candidates_response(want_kind, &notes);
     }
     // Key 复用：候选渠道没登记 Key 时，向同 provider/base_url 的渠道借
@@ -1237,12 +1299,43 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
             Ok(resp)
         }
         ChannelOutcome::UpstreamError(status, err_body, attempts, degraded) => {
-            let mut resp = final_error_response(status, err_body, &attempts, &degraded)?;
+            // 显式选择的模型：所有渠道都失败了——错误信息里点名「没帮你换模型」，
+            // 让失败也是明示的（方案 A：宁可明确报错，绝不悄悄降级到别的模型）。
+            let body = if !model_missing {
+                let rm = requested.as_deref().unwrap_or("");
+                prefix_upstream_error(
+                    &err_body,
+                    &format!("所选模型「{rm}」的全部渠道均失败，网关未自动切换模型。上游返回："),
+                )
+            } else {
+                err_body
+            };
+            let mut resp = final_error_response(status, body, &attempts, &degraded)?;
             mark_unavailable(&mut resp);
             Ok(resp)
         }
         ChannelOutcome::AllConnFailed(attempts, degraded) => {
-            let mut resp = all_channels_failed(&attempts, &degraded)?;
+            let mut resp = if !model_missing {
+                let rm = requested.as_deref().unwrap_or("");
+                let mut r = json_response(
+                    502,
+                    serde_json::json!({
+                        "error": {
+                            "code": "requested_model_unreachable",
+                            "message": format!("所选模型「{rm}」的全部渠道都连不上（网络/端点层失败），网关未自动切换模型"),
+                            "requested_model": rm,
+                            "attempts": attempts,
+                            "gateway": "zhipu-wasm-gateway",
+                        }
+                    }),
+                )?;
+                let _ = r
+                    .headers_mut()
+                    .set("x-gateway-degraded", &header_safe(&degraded.join(",")));
+                r
+            } else {
+                all_channels_failed(&attempts, &degraded)?
+            };
             mark_unavailable(&mut resp);
             Ok(resp)
         }
@@ -1355,8 +1448,13 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
     apply_device_keys(&mut donors, &req);
     let donor_pool: Vec<Channel> = channels.iter().chain(donors.iter()).cloned().collect();
     let requested_model = if model.is_empty() { None } else { Some(model.clone()) };
-    let (mut candidates, notes) =
-        pick_model_attempts(&channels, "stt", requested_model.as_deref(), admin::now_ms());
+    let (mut candidates, notes) = pick_model_attempts(
+        &channels,
+        "stt",
+        requested_model.as_deref(),
+        requested_model.is_some(),
+        admin::now_ms(),
+    );
     // 静态回退场景：candidates 可能来自静态渠道（无 models_meta）——把请求的
     // 模型名补进去，保证 ZHIPU_AUDIO_MODEL / DEFAULT_AUDIO_MODEL 仍然生效
     if candidates.is_empty() && !channels.is_empty() {
@@ -1480,8 +1578,13 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
     let mut channels: Vec<Channel> = chat_ch;
     channels.extend(audio_ch);
     let donor_pool: Vec<Channel> = channels.clone();
-    let (mut candidates, notes) =
-        pick_model_attempts(&channels, "tts", requested.as_deref(), admin::now_ms());
+    let (mut candidates, notes) = pick_model_attempts(
+        &channels,
+        "tts",
+        requested.as_deref(),
+        requested.is_some(),
+        admin::now_ms(),
+    );
     if candidates.is_empty() {
         return no_candidates_response("tts", &notes);
     }
@@ -1742,13 +1845,13 @@ mod tests {
         let now = 1_700_000_000_000_f64;
 
         // 直接原名（原有行为，必须仍成立）
-        let (v, _) = super::pick_model_attempts(&all, "text", Some("cohere/north-mini-code:free"), now);
+        let (v, _) = super::pick_model_attempts(&all, "text", Some("cohere/north-mini-code:free"), true, now);
         assert_eq!(v.first().map(|a| a.model.as_str()), Some("cohere/north-mini-code:free"),
             "显式所选模型必须排在候选首位");
 
         // 客户端编码后送进来（本次修复的行为）
         let (v2, notes2) =
-            super::pick_model_attempts(&all, "text", Some("cohere%2Fnorth-mini-code%3Afree"), now);
+            super::pick_model_attempts(&all, "text", Some("cohere%2Fnorth-mini-code%3Afree"), true, now);
         assert_eq!(v2.first().map(|a| a.model.as_str()), Some("cohere/north-mini-code:free"),
             "编码后的所选模型也必须命中（不再静默回落自动选路）");
         assert!(
@@ -1757,10 +1860,14 @@ mod tests {
         );
 
         // 真正的未知模型仍应提示 unavailable（宽松不放过错名字）
-        let (_, notes3) = super::pick_model_attempts(&all, "text", Some("nope/not-a-model:free"), now);
+        let (v3, notes3) = super::pick_model_attempts(&all, "text", Some("nope/not-a-model:free"), true, now);
         assert!(
             notes3.iter().any(|n| n.starts_with("requested-model-unavailable")),
             "未知模型必须仍报 unavailable"
+        );
+        assert!(
+            v3.is_empty(),
+            "方案 A：显式选择的模型池中不可用 → 空候选（上层明确拒绝，不回退自动选路）"
         );
     }
 
@@ -2066,7 +2173,7 @@ mod tests {
 
         // 纯文本：应命中 deepseek-flash（模型优先级 100 > pro 的 90），
         // 而不是绕过它去用更贵的 deepseek-v4-pro。
-        let (attempts, notes) = super::pick_model_attempts(&ds, "text", None, now);
+        let (attempts, notes) = super::pick_model_attempts(&ds, "text", None, false, now);
         assert!(!attempts.is_empty(), "DeepSeek 应有 text 候选：{notes:?}");
         assert_eq!(
             attempts[0].model, "deepseek-flash",
@@ -2074,7 +2181,7 @@ mod tests {
         );
 
         // 视觉：仍命中 deepseek-flash
-        let (vis, _) = super::pick_model_attempts(&ds, "vision", None, now);
+        let (vis, _) = super::pick_model_attempts(&ds, "vision", None, false, now);
         assert!(!vis.is_empty(), "DeepSeek 应有 vision 候选");
         assert_eq!(vis[0].model, "deepseek-flash", "视觉应命中 deepseek-flash");
     }
@@ -2088,11 +2195,11 @@ mod tests {
         ds[0].api_key = "sk-test".into();
 
         // 显式请求 pro + 纯文本 → 正常
-        let (t, _) = super::pick_model_attempts(&ds, "text", Some("deepseek-v4-pro"), now);
+        let (t, _) = super::pick_model_attempts(&ds, "text", Some("deepseek-v4-pro"), true, now);
         assert_eq!(t[0].model, "deepseek-v4-pro");
 
         // 视觉候选里不能只有 pro —— 必须有 flash 兜底
-        let (v, _) = super::pick_model_attempts(&ds, "vision", None, now);
+        let (v, _) = super::pick_model_attempts(&ds, "vision", None, false, now);
         assert!(
             v.iter().any(|a| a.model == "deepseek-flash"),
             "视觉候选应含 deepseek-flash"
