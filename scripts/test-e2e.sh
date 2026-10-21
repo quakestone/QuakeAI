@@ -1342,8 +1342,8 @@ echo "$UI" | grep -q '{ id: "trace",   plugin: "wf.net_trace",   depends_on: \[\
 echo "$UI" | grep -q '{ id: "latency", plugin: "wf.net_latency", depends_on: \["trace"\], input: { sid: "latency" } }'; check "3 latency 步（依赖 trace）" $? "no latency step"
 echo "$UI" | grep -q 'send: load(WF_SEED_SEND), net: load(WF_SEED_NET),'; check "3 内核句柄注册" $? "no net handle"
 echo "$UI" | grep -q 'async function wfNetPlugin(inp)'; check "3 插件分派" $? "no wfNetPlugin"
-echo "$UI" | grep -q 'fetch("/cdn-cgi/trace", { cache: "no-store" })'; check "3 优先 /cdn-cgi/trace" $? "no trace fetch"
-echo "$UI" | grep -q 'fetch("/health", { cache: "no-store" })'; check "3 降级 /health 计时" $? "no health fallback"
+echo "$UI" | grep -q 'fetch("/cdn-cgi/trace", { cache: "no-store", ...netProbeSignal() })'; check "3 优先 /cdn-cgi/trace（带 1s 超时）" $? "no trace fetch"
+echo "$UI" | grep -q 'fetch("/health", { cache: "no-store", ...netProbeSignal() })'; check "3 降级 /health 计时（带 1s 超时）" $? "no health fallback"
 echo "$UI" | grep -q 'wfDrive(ex, WF.h.net, { event: "net.probe"'; check "3 经 WF 引擎驱动探测" $? "not via wfDrive"
 echo "$UI" | grep -q 'const NET_HEARTBEAT_MS = 60000;'; check "3 60s 心跳节奏" $? "no 60s heartbeat"
 echo "$UI" | grep -q 'const NET_IDLE_TIMEOUT_MS = 5000;'; check "3 rIC 兜底超时 5s" $? "no idle timeout"
@@ -1353,11 +1353,14 @@ echo "$UI" | grep -q '(window.cancelIdleCallback || clearTimeout)(NET.idle)'; ch
 echo "$UI" | grep -q 'if (!netCacheMode()) startNetHeartbeat();'; check "3 探测结束链式续命（不堆叠）" $? "no chain schedule"
 absent 'NET.timer = setInterval('; check "3 心跳不再用 setInterval 硬顶" $? "still setInterval"
 echo "$UI" | grep -q 'window.addEventListener("online", () => { probeNet("online");'; check "3 online 事件立即重探" $? "no online hook"
-# —— 缓存模式能力分流 ——
-echo "$UI" | grep -q 'if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送'; check "4 缓存模式发送拦截" $? "send not gated"
-echo "$UI" | grep -q 'if (netCacheMode()) { speakLocal(btn, text); return; }'; check "4 播音降级本地合成" $? "no local speak"
+# —— 缓存模式能力分流（v0.19.34：发送不再受网络状态拦截）——
+echo "$UI" | grep -q 'const NET_PROBE_TIMEOUT_MS = 1000;'; check "4 探测 1s 硬超时（不长期停在检测中）" $? "no 1s probe timeout"
+echo "$UI" | grep -q 'function netProbeSignal()'; check "4 探测 AbortSignal 构造" $? "no netProbeSignal"
+echo "$UI" | grep -q 'if (netCacheMode()) { speakLocal(btn, text); return; }'; check "4 播音降级本地合成（保留）" $? "no local speak"
 echo "$UI" | grep -q 'new SpeechSynthesisUtterance(text.slice(0, 4000))'; check "4 Web Speech API 本地播报" $? "no speechSynthesis"
-echo "$UI" | grep -q '#btn-send.net-cache'; check "4 缓存模式发送按钮灰态" $? "no cache btn style"
+absent 'if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送'; check "4 发送不再被缓存模式拦截" $? "send still gated"
+absent 'b.classList.toggle("net-cache"'; check "4 发送按钮不再缓存置灰" $? "still net-cache"
+absent '#btn-send.net-cache'; check "4 缓存发送按钮灰态样式已移除" $? "still cache style"
 # —— SW 与离线页（真实请求验证）——
 CODE=$(curl -s -o /tmp/sw.js -w '%{http_code}' "http://127.0.0.1:8787/sw.js"); check "5 /sw.js 200" $([ "$CODE" = "200" ] && echo 0 || echo 1) "got $CODE"
 VER=$(curl -s http://127.0.0.1:8787/health | grep -oP '"version":"\K[^"]+')

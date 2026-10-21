@@ -386,7 +386,8 @@ console.log("== ⑥ v0.19.25：系统级流开关 + 三流展示渲染 ==");
 //    真跑插件逻辑，stub fetch 模拟三种网络现实——证明降级链是「串行兜底」而非静态断言。
 console.log("== ⑦ v0.19.29：net_probe 插件三态（trace → health 降级链） ==");
 {
-  const netSrc = [extractConst("NET"), extractFn("regionName"),
+  const netSrc = [extractConst("NET"), extractConst("NET_PROBE_TIMEOUT_MS"),
+      extractFn("regionName"), extractFn("netProbeSignal"),
       extractFn("netProbeTrace"), extractFn("netProbeHealth"), extractFn("wfNetPlugin")].join("\n");
   const mkNet = (fetchImpl) => new Function("fetch", "location", netSrc +
     "\nreturn { netProbeTrace, netProbeHealth, wfNetPlugin, regionName };")

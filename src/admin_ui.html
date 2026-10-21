@@ -282,8 +282,6 @@
   #input { background: transparent; border: none; resize: none; max-height: 40dvh; padding: 7px 0; line-height: 1.5; font-size: 16px; }
   #btn-send { flex: none; width: 38px; height: 38px; border-radius: 50%; border: none; background: linear-gradient(135deg, var(--acc), #5a8bff); color: #fff; font-size: 17px; display: flex; align-items: center; justify-content: center; padding: 0; position: relative; }
   #btn-send.stop { background: var(--panel); border: 1px solid var(--border); }
-  /* v0.19.29 缓存模式：发送按钮降饱和 + 禁用光标（点击仍有 toast 说明，不静默） */
-  #btn-send.net-cache { filter: grayscale(.85); opacity: .55; cursor: not-allowed; }
   /* ---- 发送按钮动效 ---- */
   /* 普通生成：青蓝色单环呼吸 */
   #btn-send.streaming { animation: sendPulse 1.2s ease-in-out infinite; }
@@ -3175,10 +3173,9 @@ function updateSendBtn() {
   b.classList.toggle("stop", streaming);
   b.classList.toggle("streaming", streaming);
   b.setAttribute("aria-label", streaming ? "停止生成" : "发送");
-  // v0.19.29 缓存模式（延迟红/离线）：发送禁用，title 说明——历史仍可看、播音走本地合成
-  const cache = typeof netCacheMode === "function" && netCacheMode();
-  b.classList.toggle("net-cache", cache && !streaming);
-  b.title = cache && !streaming ? "缓存模式：网络恢复后才能发送（历史会话仍可查看）" : "";
+  // v0.19.34：发送不再受网络状态（缓存/离线）约束——探测只用于状态展示，永不禁用发送。
+  // （缓存模式下语音播音走本地合成、模型列表失败静默等本地能力保留，见各自调用点。）
+  if (!streaming) b.title = "";
 }
 function autoGrow() {
   const t = $("input");
@@ -3218,8 +3215,9 @@ async function sendOrStop() {
   if (!text && !atts.length) return;
   // v0.19.33 魔法指令（控制台开关）：只认纯文本、无附件的输入；消费后不发不落库
   if (!atts.length && handleMagicCommand(text)) { input.value = ""; autoGrow(); updateSendBtn(); return; }
-  // v0.19.29 缓存模式：不做无效网络等待——发送直接拦下并说明（历史会话/本地能力不受影响）
-  if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送（历史会话仍可查看，播音走本地合成）", "err"); return; }
+  // v0.19.34：不再用网络状态（缓存/离线）拦截发送。探测通道（/cdn-cgi/trace、/health）
+  // 与真实发送通道（代理后的 /admin/api + SSE）是两条独立的路；VPN 代理转发不稳时
+  // 探测可能失败/超时，但发送本身仍可能成功。因此"断网"只做状态展示，永不阻断发送。
   // v0.19.28 七类限额发送前拦截：任一维度超限 → 阻断 + 指出具体超限项（不静默丢弃）
   const bad = validateSendPayload(text, atts);
   if (bad) { toast(bad, "err"); return; }
@@ -7091,6 +7089,11 @@ const NET = {
 const NET_HEARTBEAT_MS = 60000;
 const NET_IDLE_TIMEOUT_MS = 5000;   // rIC 兜底：浏览器一直忙也最多等 5s 强制跑
 const NET_OK_MS = 300, NET_BAD_MS = 800;
+const NET_PROBE_TIMEOUT_MS = 1000;  // 探测硬超时：1s 内不出结论即判「断开」，绝不长期停在「检测中」
+/// 探测用 AbortSignal（1s 超时）。不支持的老浏览器返回空对象（等价于无限等待）。
+function netProbeSignal() {
+  return (typeof AbortSignal !== "undefined" && AbortSignal.timeout) ? { signal: AbortSignal.timeout(NET_PROBE_TIMEOUT_MS) } : {};
+}
 
 /// 缓存模式：延迟红（>800ms）或离线——不做无效网络等待，直接用本地缓存渲染。
 function netCacheMode() { return NET.state === "bad" || NET.state === "offline"; }
@@ -7112,7 +7115,7 @@ function renderNetBar() {
   const snap = cache ? (NET.lastOk || {}) : NET;
   const tail = [snap.proto || "", snap.country || ""].filter(Boolean).join(" · ");
   txt.textContent = (cache ? "缓存" : `${NET.latency}ms`) + (tail ? " · " + tail : "");
-  updateSendBtn();   // 缓存模式与发送按钮联动（禁用 + 提示）
+  updateSendBtn();   // 状态展示联动（发送按钮本身与网络状态无关，永不禁用）
 }
 
 /// 应用探测结果 → 状态迁移。失败 = offline；成功按延迟分级，红/离线停心跳省流量。
@@ -7136,7 +7139,7 @@ async function netProbeTrace() {
   const t0 = performance.now();
   let out;
   try {
-    const r = await fetch("/cdn-cgi/trace", { cache: "no-store" });
+    const r = await fetch("/cdn-cgi/trace", { cache: "no-store", ...netProbeSignal() });
     const ms = performance.now() - t0;
     if (!r.ok) out = { ok: false, reason: "trace-" + r.status, ms };
     else {
@@ -7147,7 +7150,7 @@ async function netProbeTrace() {
         ? { ok: true, ms, colo: kv.colo || "", loc: kv.loc || "", proto: location.protocol.replace(":", "").toUpperCase() }
         : { ok: false, reason: "trace-empty", ms };
     }
-  } catch { out = { ok: false, reason: "trace-net", ms: performance.now() - t0 }; }
+  } catch (e) { out = { ok: false, reason: (e && e.name === "TimeoutError") ? "trace-timeout" : "trace-net", ms: performance.now() - t0 }; }
   NET.probe = out;
   return out;
 }
@@ -7158,12 +7161,12 @@ async function netProbeHealth() {
   const t0 = performance.now();
   let out;
   try {
-    const r = await fetch("/health", { cache: "no-store" });
+    const r = await fetch("/health", { cache: "no-store", ...netProbeSignal() });
     const ms = performance.now() - t0;
     out = r.ok
       ? { ok: true, ms, proto: location.protocol.replace(":", "").toUpperCase(), loc: "", colo: "" }
       : { ok: false, reason: "health-" + r.status, ms };
-  } catch { out = { ok: false, reason: "health-net", ms: performance.now() - t0 }; }
+  } catch (e) { out = { ok: false, reason: (e && e.name === "TimeoutError") ? "health-timeout" : "health-net", ms: performance.now() - t0 }; }
   if (!NET.probe || !NET.probe.ok) NET.probe = out;
   return out;
 }
@@ -7198,7 +7201,7 @@ async function probeNet(reason) {
   // 链式续命（v0.19.30）：上一次探测结束才排下一次心跳——周期从「这次结束」算，
   // 不会因为探测变慢而堆叠；缓存模式（红/离线）不排，省流量等 online/手动恢复。
   if (!netCacheMode()) startNetHeartbeat();
-  if (reason === "manual") toast(netCacheMode() ? "网络不可用，已切缓存模式（历史可看，发送暂停）" : `网络正常 · ${NET.latency}ms`, netCacheMode() ? "err" : "ok");
+  if (reason === "manual") toast(netCacheMode() ? "网络探测未通过（已切缓存展示），但发送仍可用——VPN 不稳时直接发即可" : `网络正常 · ${NET.latency}ms`, netCacheMode() ? "err" : "ok");
 }
 
 /// 心跳调度（v0.19.30）：非关键任务交给 requestIdleCallback——只在浏览器**空闲窗口**
