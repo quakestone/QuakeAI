@@ -24,4 +24,22 @@ if [ -x "$CACHED" ]; then WB="$CACHED"; fi
 # 删掉它，让根 .gitignore 的 !/build/index.js 放行生效。
 rm -f build/.gitignore
 
-echo "✅ 构建完成：build/index.js + build/index_bg.wasm（runtime=browser-wasm，已脱钩 CF）"
+echo "== 生成静态入口 index.html（注入版本号 __BUILD_VERSION__）=="
+PKG_VER="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+python3 - "$PKG_VER" <<'PY'
+import sys, re, pathlib
+ver = sys.argv[1]
+src = pathlib.Path("src/admin_ui.html").read_text(encoding="utf-8")
+# 版本占位：BUILD_MARK = "__BUILD_VERSION__" → 注入真实版本，缓存自检才有意义
+out = src.replace('"__BUILD_VERSION__"', '"' + ver + '"')
+out = out.replace("__BUILD_VERSION__", ver)
+pathlib.Path("build/index.html").write_text(out, encoding="utf-8")
+print("   stamped index.html ->", ver)
+PY
+
+echo "== 复制 PWA 资产（sw.js / manifest / 图标）=="
+cp -f src/sw.js build/sw.js 2>/dev/null || true
+cp -f src/manifest.webmanifest build/manifest.webmanifest 2>/dev/null || true
+cp -f src/icon.svg build/icon.svg 2>/dev/null || true
+
+echo "✅ 构建完成：build/index.html + build/index.js + build/index_bg.wasm（runtime=browser-wasm，已脱钩 CF，纯静态 PWA）"

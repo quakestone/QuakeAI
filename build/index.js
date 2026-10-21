@@ -1,104 +1,55 @@
 /* @ts-self-types="./index.d.ts" */
 
 /**
- * 管理面：method / 子路径(/api/...) / 请求体 / admin token。
- * @param {string} method
- * @param {string} sub
- * @param {string | null | undefined} body
- * @param {string} admin_token
+ * 管理面：method / 子路径(x-gw-sub 头) / 请求体 / admin token 全部从 Request 内读。
+ * @param {Request} req
  * @returns {Promise<Response>}
  */
-export function admin(method, sub, body, admin_token) {
-    const ptr0 = passStringToWasm0(method, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(sub, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    var ptr2 = isLikeNone(body) ? 0 : passStringToWasm0(body, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    var len2 = WASM_VECTOR_LEN;
-    const ptr3 = passStringToWasm0(admin_token, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len3 = WASM_VECTOR_LEN;
-    const ret = wasm.admin(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+export function admin(req) {
+    const ret = wasm.admin(req);
     return ret;
 }
 
 /**
- * 语音合成：{ model, input, voice } JSON。
- * @param {string} body
- * @param {string} device_keys
+ * 语音合成：Request 的 body 是 JSON 文本。
+ * @param {Request} req
  * @returns {Promise<Response>}
  */
-export function audio_speech(body, device_keys) {
-    const ptr0 = passStringToWasm0(body, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(device_keys, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ret = wasm.audio_speech(ptr0, len0, ptr1, len1);
+export function audio_speech(req) {
+    const ret = wasm.audio_speech(req);
     return ret;
 }
 
 /**
- * 语音转写：直接接收浏览器 FormData。
- * @param {FormData} fd
- * @param {string} device_keys
+ * 语音转写：Request 的 body 是浏览器 FormData。
+ * @param {Request} req
  * @returns {Promise<Response>}
  */
-export function audio_transcriptions(fd, device_keys) {
-    const ptr0 = passStringToWasm0(device_keys, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.audio_transcriptions(fd, ptr0, len0);
+export function audio_transcriptions(req) {
+    const ret = wasm.audio_transcriptions(req);
     return ret;
 }
 
 /**
- * 对话：OpenAI 兼容请求体 JSON + 系统特性(x-gw-features) + 设备 Key(JSON)。
- * @param {string} body
- * @param {string} gw_features
- * @param {string} device_keys
+ * 对话：前端把整段 fetch 的 Request 直接传进来，WASM 内用原生 web_sys 读
+ * 请求体 + x-gw-features / x-device-keys 头。
+ * @param {Request} req
  * @returns {Promise<Response>}
  */
-export function chat(body, gw_features, device_keys) {
-    const ptr0 = passStringToWasm0(body, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(gw_features, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passStringToWasm0(device_keys, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.chat(ptr0, len0, ptr1, len1, ptr2, len2);
+export function chat(req) {
+    const ret = wasm.chat(req);
     return ret;
 }
 
 /**
- * 健康检查（同步）。
- * @returns {string}
+ * 健康检查（同步）：直接返回 JSON Response。
+ * 注意：浏览器内 WASM 函数若返回 String，在部分运行时会被解成 [ptr,len] 数组，
+ * 故这里返回 web_sys::Response（与 admin/chat 同范式），由调用方直接透传。
+ * @returns {Response}
  */
 export function health() {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.health();
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
-}
-
-/**
- * 版本号（前端注入用）。
- * @returns {string}
- */
-export function version() {
-    let deferred1_0;
-    let deferred1_1;
-    try {
-        const ret = wasm.version();
-        deferred1_0 = ret[0];
-        deferred1_1 = ret[1];
-        return getStringFromWasm0(ret[0], ret[1]);
-    } finally {
-        wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
-    }
+    const ret = wasm.health();
+    return ret;
 }
 function __wbg_get_imports() {
     const import0 = {
@@ -166,6 +117,10 @@ function __wbg_get_imports() {
             const ret = arg0.fetch(arg1);
             return ret;
         },
+        __wbg_formData_016f42f66b3a4877: function() { return handleError(function (arg0) {
+            const ret = arg0.formData();
+            return ret;
+        }, arguments); },
         __wbg_getReader_e782bd33388a2c7b: function(arg0) {
             const ret = arg0.getReader();
             return ret;
@@ -204,6 +159,16 @@ function __wbg_get_imports() {
             let result;
             try {
                 result = arg0 instanceof File;
+            } catch (_) {
+                result = false;
+            }
+            const ret = result;
+            return ret;
+        },
+        __wbg_instanceof_FormData_84cff95c744bf820: function(arg0) {
+            let result;
+            try {
+                result = arg0 instanceof FormData;
             } catch (_) {
                 result = false;
             }
@@ -268,6 +233,13 @@ function __wbg_get_imports() {
             const ret = arg0.localStorage;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
         }, arguments); },
+        __wbg_method_6d02ee0808a7de31: function(arg0, arg1) {
+            const ret = arg1.method;
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg_name_06fefa2542c6ce51: function(arg0, arg1) {
             const ret = arg1.name;
             const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -289,6 +261,10 @@ function __wbg_get_imports() {
         },
         __wbg_new_83ca405eae412a62: function() { return handleError(function () {
             const ret = new Headers();
+            return ret;
+        }, arguments); },
+        __wbg_new_dd3c6976be76c0ab: function() { return handleError(function () {
+            const ret = new Response();
             return ret;
         }, arguments); },
         __wbg_new_from_slice_9a868026ffa4208a: function(arg0, arg1) {
@@ -400,6 +376,10 @@ function __wbg_get_imports() {
             const ret = arg0.status;
             return ret;
         },
+        __wbg_text_aaf360cc4f1c0167: function() { return handleError(function (arg0) {
+            const ret = arg0.text();
+            return ret;
+        }, arguments); },
         __wbg_text_ff3f476b3d6b1246: function() { return handleError(function (arg0) {
             const ret = arg0.text();
             return ret;
@@ -424,13 +404,13 @@ function __wbg_get_imports() {
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
         },
         __wbindgen_generic_0000000000000001: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 104, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__ha532af14353132eb);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 142, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h01c5e3eaf350a4d0);
             return ret;
         },
         __wbindgen_generic_0000000000000002: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 142, ret: Result(Unit), inner_ret: Some(Result(Unit)) }, mutable: true }) -> Externref`.
-            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h01c5e3eaf350a4d0);
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [Externref], shim_idx: 84, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__ha532af14353132eb);
             return ret;
         },
         __wbindgen_generic_0000000000000003: function(arg0, arg1) {

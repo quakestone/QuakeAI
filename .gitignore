@@ -1,9 +1,13 @@
-# Rust 构建产物（build/ 内的 index.js / index_bg.wasm 例外——部署必需，随仓库提交）
+# Rust 构建产物（build/ 内的部署必需文件例外——随仓库提交）
 /target
 /engine/target
 /build/*
 !/build/index.js
 !/build/index_bg.wasm
+!/build/index.html
+!/build/sw.js
+!/build/manifest.webmanifest
+!/build/icon.svg
 
 # 日志 / 临时
 *.log

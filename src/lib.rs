@@ -341,19 +341,38 @@ async fn fetch_channel(
     path: &str,
     body: &JsValue,
     extra_headers: &[(&str, String)],
+    env: &Env,
 ) -> Result<(u16, web_sys::Response)> {
-    let upstream_url = channel.url(path);
+    // 浏览器直连智谱等上游会被 CORS 拦截；客户端模式下统一经「上游转发 URL」
+    // （用户在设置页填写、存于 localStorage 的 gw_upstream_proxy）转发。
+    // 转发约定：网关把真实上游地址放在 x-gw-target 头，原样转交 method/headers/body，
+    // 由用户的转发服务去真正请求上游（转发服务需自行处理 CORS / 鉴权头透传）。
+    let real_url = channel.url(path);
+    let proxy = binding(env, "GW_UPSTREAM_PROXY", None)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let (target_url, forward_target) = match &proxy {
+        Some(p) => (p.clone(), Some(real_url.clone())),
+        None => (real_url.clone(), None),
+    };
+
     let init = web_sys::RequestInit::new();
     init.set_method("POST");
     init.set_body(body);
 
-    let web_req = web_sys::Request::new_with_str_and_init(&upstream_url, &init)
+    let web_req = web_sys::Request::new_with_str_and_init(&target_url, &init)
         .map_err(|e| GwError::msg(format!("build upstream request: {e:?}")))?;
     for (k, v) in extra_headers {
         web_req
             .headers()
             .set(k, v)
             .map_err(|e| GwError::msg(format!("set upstream header {k}: {e:?}")))?;
+    }
+    if let Some(t) = forward_target {
+        web_req
+            .headers()
+            .set("x-gw-target", &t)
+            .map_err(|e| GwError::msg(format!("set x-gw-target: {e:?}")))?;
     }
 
     let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
@@ -936,6 +955,7 @@ async fn try_model_attempts(
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.clone()))
                 .collect::<Vec<_>>(),
+            env,
         )
         .await
         {
@@ -1708,66 +1728,120 @@ async fn handle_audio_speech(body_text: String, device_keys: String, env: &Env) 
 // 不再经过 HTTP 服务器（已脱钩 Cloudflare Workers）。
 // ---------------------------------------------------------------------------
 
-/// 对话：OpenAI 兼容请求体 JSON + 系统特性(x-gw-features) + 设备 Key(JSON)。
+/// 抽取请求体文本（JSON 等）。注意：浏览器内 wasm-bindgen 对 String 参数的 ABI 在当前
+/// 工具链下解不出内容（所有 String 入参会变成空串），故统一改为「传 web_sys::Request，
+/// 在 WASM 内用原生 web_sys 读 body/headers/method」——只有 externref（Request/Response）
+/// 是可靠的桥接通道。
+async fn gw_req_text(req: &web_sys::Request) -> Result<String> {
+    let p: js_sys::Promise = req
+        .text()
+        .map_err(|e| GwError::msg(format!("req.text: {e:?}")))?;
+    let v = wasm_bindgen_futures::JsFuture::from(p)
+        .await
+        .map_err(|e| GwError::msg(format!("read body: {e:?}")))?;
+    Ok(v.as_string().unwrap_or_default())
+}
+
+async fn gw_req_form(req: &web_sys::Request) -> Result<web_sys::FormData> {
+    let p: js_sys::Promise = req
+        .form_data()
+        .map_err(|e| GwError::msg(format!("req.form_data: {e:?}")))?;
+    let v = wasm_bindgen_futures::JsFuture::from(p)
+        .await
+        .map_err(|e| GwError::msg(format!("read form: {e:?}")))?;
+    v.dyn_into::<web_sys::FormData>()
+        .map_err(|e| GwError::msg(format!("form cast: {e:?}")))
+}
+
+/// 对话：前端把整段 fetch 的 Request 直接传进来，WASM 内用原生 web_sys 读
+/// 请求体 + x-gw-features / x-device-keys 头。
 #[wasm_bindgen]
-pub async fn chat(body: String, gw_features: String, device_keys: String) -> web_sys::Response {
-    match handle_chat_completions(body, gw_features, device_keys, &Env).await {
+pub async fn chat(req: web_sys::Request) -> web_sys::Response {
+    let headers = req.headers();
+    let features = headers.get("x-gw-features").ok().flatten().unwrap_or_default();
+    let device_keys = headers.get("x-device-keys").ok().flatten().unwrap_or_default();
+    let body = match gw_req_text(&req).await {
+        Ok(b) => b,
+        Err(e) => return web_sys::Response::from(e),
+    };
+    match handle_chat_completions(body, features, device_keys, &Env).await {
         Ok(r) => r,
         Err(e) => web_sys::Response::from(e),
     }
 }
 
-/// 语音转写：直接接收浏览器 FormData。
+/// 语音转写：Request 的 body 是浏览器 FormData。
 #[wasm_bindgen]
-pub async fn audio_transcriptions(fd: web_sys::FormData, device_keys: String) -> web_sys::Response {
+pub async fn audio_transcriptions(req: web_sys::Request) -> web_sys::Response {
+    let headers = req.headers();
+    let device_keys = headers.get("x-device-keys").ok().flatten().unwrap_or_default();
+    let fd = match gw_req_form(&req).await {
+        Ok(f) => f,
+        Err(e) => return web_sys::Response::from(e),
+    };
     match handle_audio_transcriptions(fd, device_keys, &Env).await {
         Ok(r) => r,
         Err(e) => web_sys::Response::from(e),
     }
 }
 
-/// 语音合成：{ model, input, voice } JSON。
+/// 语音合成：Request 的 body 是 JSON 文本。
 #[wasm_bindgen]
-pub async fn audio_speech(body: String, device_keys: String) -> web_sys::Response {
+pub async fn audio_speech(req: web_sys::Request) -> web_sys::Response {
+    let headers = req.headers();
+    let device_keys = headers.get("x-device-keys").ok().flatten().unwrap_or_default();
+    let body = match gw_req_text(&req).await {
+        Ok(b) => b,
+        Err(e) => return web_sys::Response::from(e),
+    };
     match handle_audio_speech(body, device_keys, &Env).await {
         Ok(r) => r,
         Err(e) => web_sys::Response::from(e),
     }
 }
 
-/// 管理面：method / 子路径(/api/...) / 请求体 / admin token。
+/// 管理面：method / 子路径(x-gw-sub 头) / 请求体 / admin token 全部从 Request 内读。
 #[wasm_bindgen]
-pub async fn admin(method: String, sub: String, body: Option<String>, admin_token: String) -> web_sys::Response {
-    match admin::handle_admin(&method, &sub, body.as_deref().unwrap_or(""), &admin_token, &Env).await {
+pub async fn admin(req: web_sys::Request) -> web_sys::Response {
+    let method = req.method();
+    let headers = req.headers();
+    let sub = headers.get("x-gw-sub").ok().flatten().unwrap_or_default();
+    let admin_token = headers.get("x-admin-token").ok().flatten().unwrap_or_default();
+    let body = match gw_req_text(&req).await {
+        Ok(b) => b,
+        Err(e) => return web_sys::Response::from(e),
+    };
+    match admin::handle_admin(&method, &sub, &body, &admin_token, &Env).await {
         Ok(r) => r,
         Err(e) => web_sys::Response::from(e),
     }
 }
 
-/// 健康检查（同步）。
+/// 健康检查（同步）：直接返回 JSON Response。
+/// 注意：浏览器内 WASM 函数若返回 String，在部分运行时会被解成 [ptr,len] 数组，
+/// 故这里返回 web_sys::Response（与 admin/chat 同范式），由调用方直接透传。
 #[wasm_bindgen]
-pub fn health() -> String {
-    serde_json::json!({
-        "status": "ok",
-        "gateway": "zhipu-wasm-gateway",
-        "version": env!("CARGO_PKG_VERSION"),
-        "runtime": "browser-wasm",
-        "features": [
-            "resource-management-admin-ui",
-            "local-storage-ledger",
-            "stream-retry-first-packet",
-            "multipart-audio-video-upload",
-            "cooldown-skip-after-degrade",
-            "client-side-pwa"
-        ]
-    })
-    .to_string()
-}
-
-/// 版本号（前端注入用）。
-#[wasm_bindgen]
-pub fn version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+pub fn health() -> web_sys::Response {
+    match json_response(
+        200,
+        serde_json::json!({
+            "status": "ok",
+            "gateway": "zhipu-wasm-gateway",
+            "version": env!("CARGO_PKG_VERSION"),
+            "runtime": "browser-wasm",
+            "features": [
+                "resource-management-admin-ui",
+                "local-storage-ledger",
+                "stream-retry-first-packet",
+                "multipart-audio-video-upload",
+                "cooldown-skip-after-degrade",
+                "client-side-pwa"
+            ]
+        }),
+    ) {
+        Ok(r) => r,
+        Err(_) => web_sys::Response::new().unwrap(),
+    }
 }
 
 #[cfg(test)]

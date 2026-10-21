@@ -75,7 +75,7 @@ pub async fn handle_admin(method: &str, sub: &str, body: &str, admin_token: &str
                 500,
                 "internal_error",
                 &format!(
-                    "管理面内部错误：{e:?}。若与资源账本有关，请确认 Worker 已绑定 Durable Object（变量名 RESOURCE_STORE / 类名 ResourceStore），或打开 /admin/api/diag 自检。"
+                    "管理面内部错误：{e:?}。资源账本现为浏览器 localStorage（已脱钩 Cloudflare）；若异常请打开 /admin/api/diag 自检。"
                 ),
             )
         }
@@ -87,10 +87,10 @@ async fn handle_admin_inner(method: &str, sub: &str, body: &str, admin_token: &s
         return json_error(404, "not_found", "unknown admin route");
     }
 
-    // ---- API token 校验（配置来自浏览器 localStorage）----
-    if let Some(expected) = binding(env, "ADMIN_TOKEN", None) {
+    // ---- API token 校验（配置来自浏览器 localStorage 的 gw_admin_token）----
+    if let Some(expected) = binding(env, "gw_admin_token", None) {
         if admin_token != expected {
-            return json_error(401, "unauthorized", "ADMIN_TOKEN is set; send x-admin-token header");
+            return json_error(401, "unauthorized", "管理口令已设置；请在请求头带 x-admin-token（与本浏览器设置的一致）");
         }
     }
 
@@ -838,7 +838,7 @@ async fn api_diag(env: &Env) -> Result<Response> {
             "expected_binding": { "type": "localStorage" },
             "env": {
                 "has_zhipu_api_key": binding(env, "ZHIPU_API_KEY", None).map(|k| !k.is_empty()).unwrap_or(false),
-                "has_admin_token": binding(env, "ADMIN_TOKEN", None).is_some(),
+                "has_admin_token": binding(env, "gw_admin_token", None).is_some(),
                 "zhipu_base_url": binding(env, "ZHIPU_BASE_URL", Some(crate::DEFAULT_BASE_URL)).unwrap_or_default(),
             }
         }),

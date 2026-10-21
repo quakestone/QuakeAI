@@ -4,7 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0e14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="QuakeAI">
+<link rel="manifest" href="/manifest.webmanifest">
 <title>AI 聚合网关 · 模型服务商管理 · WASM</title>
+<script>
+/* 客户端化：把网关路径（/admin /v1 /health）从 window.fetch 拦截到浏览器内 WASM，
+   不走网络；/cdn-cgi/trace、/wf/kernel.wasm 等依旧走真实 fetch。WASM 未就绪时
+   网关请求挂起等待 __gwReady，避免首屏探测 /health 直接打空。 */
+(function(){
+  var orig = window.fetch ? window.fetch.bind(window) : null;
+  window.__origFetch = orig;
+  var resolveGw;
+  window.__gwReady = new Promise(function(r){ resolveGw = r; });
+  window.__resolveGw = resolveGw;
+  window.fetch = function(input, init){
+    init = init || {};
+    var url = (typeof input === 'string') ? input : (input && input.url) || '';
+    var isGw = /^\/admin(\/|$)/.test(url) || /^\/v1\//.test(url) || url === '/health' || url.indexOf('/health?') === 0;
+    if (!isGw) return orig ? orig(input, init) : Promise.reject(new Error('fetch unavailable'));
+    return window.__gwReady.then(function(gw){
+      if (!gw || !window.__gwDispatch) {
+        return new Response(JSON.stringify({error:{message:'网关 WASM 尚未就绪或加载失败'}}), {status:503, headers:{'Content-Type':'application/json'}});
+      }
+      return window.__gwDispatch(gw, url, init);
+    });
+  };
+})();
+</script>
 <style>
   :root {
     --bg: #0b0e14; --panel: #121722; --panel2: #171e2d; --border: #232c3f;
@@ -1291,6 +1320,11 @@
         <span class="tx"><span class="nm">接入方式</span><span class="ds">OpenAI 兼容端点与响应头</span></span>
         <span class="ar">›</span>
       </button>
+      <button class="sect-item" onclick="goSect('proxy')">
+        <span class="ic">🌐</span>
+        <span class="tx"><span class="nm">上游转发</span><span class="ds">脱钩 Cloudflare 后必填的转发地址</span></span>
+        <span class="ar">›</span>
+      </button>
       <button class="sect-item" onclick="goSect('auth')">
         <span class="ic">🔐</span>
         <span class="tx"><span class="nm">管理面鉴权</span><span class="ds">ADMIN_TOKEN</span></span>
@@ -1424,12 +1458,26 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
       </div>
     </div>
 
+    <!-- 3.5.1 客户端上游转发（脱钩 CF 后必填） -->
+    <div id="sect-proxy" hidden>
+      <div class="card">
+        <h2>上游转发 <span class="muted">脱钩 Cloudflare 后必填</span></h2>
+        <div class="hint" style="margin-bottom:10px">浏览器直连智谱等上游会被 CORS 拦截。在此填写你自己的「上游转发 URL」（能转发请求的服务，例如你部署的 Worker / 服务器）。网关把真实上游地址放在 <code>x-gw-target</code> 头、原样转交 method / headers / body，由转发服务去真正请求上游。留空 = 直连（将被 CORS 拦截，对话不可用）。</div>
+        <label style="font-size:12px;color:var(--dim);display:block;margin-bottom:4px">上游转发 URL（gw_upstream_proxy）</label>
+        <input id="upstream-proxy" placeholder="https://your-proxy.example.com/gateway （留空 = 直连）" autocomplete="off" style="width:100%">
+        <div class="toolbar" style="margin-top:10px">
+          <button class="primary" onclick="saveUpstreamProxy()">保存转发地址</button>
+          <span class="muted" id="proxy-hint"></span>
+        </div>
+      </div>
+    </div>
+
     <!-- 3.6 管理面鉴权 -->
     <div id="sect-auth" hidden>
       <div class="card">
         <h2>管理面鉴权</h2>
-        <div class="hint" style="margin-bottom:10px">部署时配置了 <code>ADMIN_TOKEN</code> 才需要填。填了之后所有 <code>/admin/api/*</code> 请求会带 <code>x-admin-token</code> 头，存在本浏览器 localStorage。</div>
-        <label style="font-size:12px;color:var(--dim);display:block;margin-bottom:4px">ADMIN_TOKEN</label>
+        <div class="hint" style="margin-bottom:10px">纯客户端应用无服务端密钥：这里填的「管理口令」只存本浏览器 localStorage（键 <code>gw_admin_token</code>），用于给 <code>/admin/api/*</code> 请求带 <code>x-admin-token</code> 头、做一层本地软锁。留空 = 不鉴权。</div>
+        <label style="font-size:12px;color:var(--dim);display:block;margin-bottom:4px">管理口令（gw_admin_token）</label>
         <input id="admin-token" placeholder="留空 = 未配置鉴权" autocomplete="off">
       </div>
     </div>
@@ -1691,6 +1739,16 @@ function toast(msg, cls="") {
   setTimeout(() => t.remove(), 4600);
 }
 function token() { return localStorage.getItem("gw_admin_token") || ""; }
+function upstreamProxy() { return localStorage.getItem("gw_upstream_proxy") || ""; }
+function saveUpstreamProxy() {
+  const v = ($("upstream-proxy").value || "").trim();
+  try { localStorage.setItem("gw_upstream_proxy", v); } catch {}
+  $("proxy-hint").textContent = v ? "已保存（对话将经此转发）" : "已清空（将直连，可能被 CORS 拦截）";
+  toast(v ? "已保存上游转发地址" : "已清空转发地址", "ok");
+}
+function loadUpstreamProxy() {
+  const el = $("upstream-proxy"); if (el) el.value = upstreamProxy();
+}
 
 // ================= 设备级 Key（浏览器绑定，不写共享账本） =================
 // 多人共用一个网关时，A 不想用 B 登记的 Key：浏览器按 provider 缓存一份自己的
@@ -1750,7 +1808,7 @@ async function api(path, method="GET", body=null, timeoutMs=0) {
 // 模型管理是聊天页里的一个二级入口（选择器 ⚙ / 侧栏 ⚙ 进设置）。
 const SECT_TTL = {
   registry: "模型持续性", mm: "多媒体配置",
-  wf: "工作流参数", api: "接入方式", auth: "管理面鉴权",
+  wf: "工作流参数", api: "接入方式", proxy: "上游转发", auth: "管理面鉴权",
 };
 function currentView() {
   const h = location.hash;
@@ -7825,6 +7883,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try { localStorage.setItem("gw_admin_token", e.target.value.trim()); } catch {}
     toast("已保存管理口令", "ok");
   });
+  loadUpstreamProxy();
   $("preset-search").addEventListener("input", e => renderPresets(e.target.value.trim()));
   const input = $("input");
   input.addEventListener("input", autoGrow);
@@ -7850,6 +7909,50 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Enter") { e.preventDefault(); const first = $("convo-list").querySelector(".convo"); if (first) first.click(); }
   });
 });
+</script>
+<script type="module">
+/* 浏览器内 WASM 网关引导：加载 build/index.js（wasm-bindgen --target web），
+   把导出挂到 window.__GW，并定义 window.__gwDispatch 把网关路径路由到对应函数。
+   window.fetch 已在 <head> 被拦截，这里只负责装载与分发。 */
+import init from '/build/index.js';
+(async () => {
+  try {
+    const gw = await init();
+    window.__GW = gw;
+    window.__resolveGw(gw);
+    window.__gwDispatch = async function (gw, url, init) {
+      const method = (init.method || 'GET').toUpperCase();
+      const H = init.headers || {};
+      const reqHeaders = (H instanceof Headers) ? new Headers(H) : new Headers(H);
+      if (url === '/health' || url.indexOf('/health?') === 0) {
+        return gw.health();
+      }
+      if (url.indexOf('/admin') === 0) {
+        const sub = url.slice('/admin'.length) || '/';
+        reqHeaders.set('x-gw-sub', sub);
+        const req = new Request(url, { method, headers: reqHeaders, body: init.body });
+        return await gw.admin(req);
+      }
+      if (url === '/v1/chat/completions') {
+        const req = new Request(url, { method, headers: reqHeaders, body: init.body });
+        return await gw.chat(req);
+      }
+      if (url === '/v1/audio/speech') {
+        const req = new Request(url, { method, headers: reqHeaders, body: init.body });
+        return await gw.audio_speech(req);
+      }
+      if (url === '/v1/audio/transcriptions') {
+        const req = new Request(url, { method, headers: reqHeaders, body: init.body });
+        return await gw.audio_transcriptions(req);
+      }
+      return window.__origFetch(input, init);
+    };
+    console.log('[gw] WASM ready (browser-wasm, 已脱钩 Cloudflare)');
+  } catch (e) {
+    console.error('[gw] WASM init failed', e);
+    window.__resolveGw(null);
+  }
+})();
 </script>
 </body>
 </html>
