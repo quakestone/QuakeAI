@@ -1436,6 +1436,27 @@ grep -q 'if path.starts_with("/v1/") { Some("\*") } else { None }' src/lib.rs; c
 grep -q 'fn cors_scope_only_public_api' src/lib.rs; check "4 边界单测（管理面不开）" $? "no scope test"
 grep -q 'fn expose_headers_cover_diagnostics' src/lib.rs; check "4 expose 完整性单测" $? "no expose test"
 
+echo "== 35. v0.19.33 控制台：魔法指令 /console: zsj 显示控制台按钮 =="
+# —— 隐藏按钮 + 面板 ——
+echo "$UI" | grep -q 'id="btn-console" onclick="openConsole()"'; check "1 顶栏控制台按钮（默认 hidden）" $? "no btn-console"
+echo "$UI" | grep -q 'aria-label="控制台" title="控制台（调试状态速览）" hidden'; check "1 默认隐藏不占常驻 UI" $? "not hidden"
+echo "$UI" | grep -q '<dialog id="console-dlg">'; check "1 控制台面板 dialog" $? "no console-dlg"
+echo "$UI" | grep -q '<pre id="console-body" class="console-body"></pre>'; check "1 状态展示区" $? "no console-body"
+echo "$UI" | grep -q '\.console-body { margin: 10px 0 0;'; check "1 等宽小字样式" $? "no style"
+# —— 魔法指令（容错拼写与全角冒号）——
+echo "$UI" | grep -q 'const CONSOLE_KEY = "gw_console";'; check "2 开关持久化 key" $? "no key"
+echo "$UI" | grep -q 'function handleMagicCommand(text)'; check "2 指令识别函数" $? "no handler"
+echo "$UI" | grep -q '\^\\s\*\\/\\s\*(console|consle)\\s\*\[:：\]'; check "2 兼容 consle 拼写 + 全角冒号" $? "regex weak"
+echo "$UI" | grep -q "if (arg === \"zsj\" || arg === \"on\")"; check "2 zsj 开启分支" $? "no zsj"
+echo "$UI" | grep -q 'else if (arg === "off")'; check "2 off 关闭分支" $? "no off"
+echo "$UI" | grep -q 'if (!atts.length && handleMagicCommand(text))'; check "2 发送入口消费（不发不落库）" $? "not wired"
+echo "$UI" | grep -q 'renderConsoleBtn(); // v0.19.33 控制台按钮'; check "2 初始化恢复按钮态" $? "no init"
+# —— 状态速览内容 ——
+echo "$UI" | grep -q 'function consoleState()'; check "3 状态速览函数" $? "no state"
+echo "$UI" | grep -q 'cacheMode: netCacheMode(),'; check "3 含网络缓存模式" $? "no cache mode"
+echo "$UI" | grep -q 'channels: { total: chs.length, usable }'; check "3 含渠道统计" $? "no channels"
+echo "$UI" | grep -q 'function copyConsoleState()'; check "3 复制状态动作" $? "no copy"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

@@ -786,6 +786,11 @@
   .form-grid .full { grid-column: 1 / -1; }
   .form-grid label { font-size: 12px; color: var(--dim); display: block; margin-bottom: 4px; }
   .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  /* v0.19.33 控制台状态面板：等宽小字 + 深底 + 可滚动（长 JSON 不撑破弹窗） */
+  .console-body { margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--border);
+    background: var(--bg); border-radius: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px; line-height: 1.55; color: var(--txt); max-height: 46vh; overflow: auto;
+    white-space: pre-wrap; word-break: break-all; }
   /* 模型行：两行结构。名称长短不齐时行高与徽章位置都稳定——
      单行 flex 会让长名称挤成多行、徽章被顶到下一行、meta 溢出屏幕。 */
   .model-opt { display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; margin-bottom: 6px; cursor: pointer; min-width: 0; }
@@ -983,6 +988,8 @@
       <!-- 顶栏右侧：主题 → 通话 → 新建会话。新会话贴最右（最高频操作），月亮挪到最左 -->
       <button class="icon-btn" id="btn-theme" onclick="toggleTheme()" aria-label="切换明暗主题" title="明暗切换">🌙</button>
       <button class="icon-btn" id="btn-call" onclick="openCall()" aria-label="语音通话" title="语音通话（按住说话，AI 语音回答）">📞</button>
+      <!-- v0.19.33 控制台（隐藏功能）：输入框发 `/console: zsj` 才出现 -->
+      <button class="icon-btn" id="btn-console" onclick="openConsole()" aria-label="控制台" title="控制台（调试状态速览）" hidden>⌗</button>
       <button class="icon-btn" id="btn-newchat" onclick="newConvo()" aria-label="新建会话" title="新建会话">＋</button>
     </header>
     <div id="messages"><div class="msg-col" id="msg-col"></div></div>
@@ -1455,6 +1462,20 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   </div>
 </dialog>
 
+<!-- v0.19.33 控制台（隐藏）：输入框发 `/console: zsj` 开启后，顶栏 ⌗ 打开本面板。
+     只做状态速览与调试动作，不占常驻 UI；指令本身不进聊天记录。 -->
+<dialog id="console-dlg">
+  <button class="dlg-back" onclick="consoleDlg.close()" aria-label="返回" title="返回">←</button>
+  <h3>控制台</h3>
+  <p class="dlg-sub">系统状态速览与调试动作。开启：输入框发 <code>/console: zsj</code>；关闭：<code>/console: off</code>。</p>
+  <pre id="console-body" class="console-body"></pre>
+  <div class="dlg-actions">
+    <button class="primary" onclick="probeNet('manual')">重新探测网络</button>
+    <button onclick="copyConsoleState()">复制状态</button>
+    <button onclick="renderConsoleBody()">刷新</button>
+  </div>
+</dialog>
+
 <!-- ==================== 对话框 ==================== --><dialog id="channel-dlg">
   <button class="dlg-back" onclick="channelDlg.close()" aria-label="返回" title="返回">←</button>
   <h3 id="drawer-title">添加服务商</h3>
@@ -1641,7 +1662,7 @@ const BUILD_MARK = "__BUILD_VERSION__";
 
 // ================= 基础 =================
 const $ = (id) => document.getElementById(id);
-const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), skillDlg = $("skill-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg");
+const channelDlg = $("channel-dlg"), keyDlg = $("key-dlg"), skillDlg = $("skill-dlg"), modelDlg = $("model-dlg"), diagDlg = $("diag-dlg"), voiceDlg = $("voice-dlg"), shareDlg = $("share-dlg"), consoleDlg = $("console-dlg");
 // 模型弹窗关闭时停掉「多久前自检」的定时器，避免后台空转
 modelDlg.addEventListener("close", () => stopScanAgoTimer());
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -3195,6 +3216,8 @@ async function sendOrStop() {
   const text = input.value.trim();
   const atts = attachments.slice();
   if (!text && !atts.length) return;
+  // v0.19.33 魔法指令（控制台开关）：只认纯文本、无附件的输入；消费后不发不落库
+  if (!atts.length && handleMagicCommand(text)) { input.value = ""; autoGrow(); updateSendBtn(); return; }
   // v0.19.29 缓存模式：不做无效网络等待——发送直接拦下并说明（历史会话/本地能力不受影响）
   if (netCacheMode()) { toast("缓存模式：网络恢复后才能发送（历史会话仍可查看，播音走本地合成）", "err"); return; }
   // v0.19.28 七类限额发送前拦截：任一维度超限 → 阻断 + 指出具体超限项（不静默丢弃）
@@ -5263,6 +5286,7 @@ async function loadAll() {
   loadSkills(); // skill 子系统：列表为空时自动种子化内置「三个诸葛亮」
   startNetMonitor(); // v0.19.29 网络状态栏：首屏探测 + 60s 心跳 + online/offline 事件
   registerSW();     // v0.19.29 离线韧性：SW 注册（预缓存主 UI，失败不阻塞）
+  renderConsoleBtn(); // v0.19.33 控制台按钮：按 localStorage 开关恢复显示
   // 管理页不可见时也刷新聊天首页的渠道可用性提示
   if (currentView() === "chat") renderMessages();
 }
@@ -7222,6 +7246,71 @@ function registerSW() {
   const host = location.hostname;
   if (!(location.protocol === "https:" || host === "localhost" || host === "127.0.0.1" || host === "[::1]")) return;
   navigator.serviceWorker.register("/sw.js").catch(() => { /* 离线增强失败不阻塞 */ });
+}
+
+// ================= v0.19.33 控制台（隐藏功能） =================
+// 输入框魔法指令：`/console: zsj` 开启、`/console: off` 关闭。容错处理：拼写 consle、
+// 全角冒号「：」、大小写、前后空格都认。指令本身**不发送、不进聊天记录**（在
+// sendOrStop 最前面就消费掉）。开启后顶栏出现 ⌗ 按钮，点开是系统状态速览——
+// 不占常驻 UI，普通用户完全看不到。
+const CONSOLE_KEY = "gw_console";
+function consoleOn() { return localStorage.getItem(CONSOLE_KEY) === "1"; }
+function setConsoleOn(v) {
+  if (v) localStorage.setItem(CONSOLE_KEY, "1"); else localStorage.removeItem(CONSOLE_KEY);
+  renderConsoleBtn();
+}
+function renderConsoleBtn() {
+  const b = $("btn-console");
+  if (b) b.hidden = !consoleOn();
+}
+/// 魔法指令识别。返回 true 表示已消费（调用方直接 return，不发送本轮）。
+function handleMagicCommand(text) {
+  const m = /^\s*\/\s*(console|consle)\s*[:：]\s*([\w-]+)\s*$/i.exec(String(text || ""));
+  if (!m) return false;
+  const arg = String(m[2]).toLowerCase();
+  if (arg === "zsj" || arg === "on") {
+    setConsoleOn(true);
+    toast("控制台已开启——顶栏出现 ⌗ 按钮", "ok");
+  } else if (arg === "off") {
+    setConsoleOn(false);
+    toast("控制台已关闭", "");
+  } else {
+    toast("参数不认识：/console: zsj 开启，/console: off 关闭", "err");
+  }
+  return true;
+}
+function openConsole() {
+  if (!consoleDlg) return;
+  renderConsoleBody();
+  try { consoleDlg.showModal(); } catch { consoleDlg.show(); }
+}
+/// 状态速览：网络（NET 全量）/ 渠道 / 模型 / skill / 开关。只读，调试用。
+function consoleState() {
+  const chs = CHANNELS || [];
+  const usable = chs.filter(c => c.enabled && (c.api_key_masked || c.api_key)).length;
+  return {
+    version: BUILD_MARK || "?",
+    net: {
+      state: NET.state, latency: NET.latency, proto: NET.proto,
+      colo: NET.colo || "(非 CF 边缘)", country: NET.country || "(未知)",
+      cacheMode: netCacheMode(),
+    },
+    channels: { total: chs.length, usable },
+    model: curModel || "(自动)",
+    skill: activeSkill ? activeSkill.title : "(无)",
+    defaultSkills: defaultSkillIds(),
+    console: consoleOn(),
+    ua: navigator.userAgent.slice(0, 80),
+  };
+}
+function renderConsoleBody() {
+  const el = $("console-body");
+  if (!el) return;
+  el.textContent = JSON.stringify(consoleState(), null, 2);
+}
+function copyConsoleState() {
+  navigator.clipboard.writeText(JSON.stringify(consoleState(), null, 2))
+    .then(() => toast("已复制状态", "ok")).catch(() => toast("复制失败", "err"));
 }
 
 // ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
