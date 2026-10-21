@@ -1,4 +1,27 @@
-## v0.19.23（本版）—— SKILL 管理改造：二级分类 + 台属性 + 分页 + 选择器趋同
+## v0.19.24（本版）—— 默认对话 skill 多选（≤3）：默认流独立必带 + 双流合并注入
+
+> 需求来源（用户 2026-10-22，原为暂缓项 #74，后随「好 执行」开工）：v0.19.1 引入的「默认对话 skill」是单选（`gw_default_skill` 存单个 id），口述需求为「用户设为默认的 skill，可以多个并存最多不能超过三个，也需要在首页展示 并可以一键不带上默认的 skill」。展示部分归 #77（首页三流展示管理），本版交付多选底座。
+
+### 需求
+1. 「设为默认对话」从单选改为**多选**，最多 **3** 个并存。
+2. 每次发送**必带**全部默认 skill（与用户手选的 skill 是两条独立流）。
+3. 管理页可直观看到当前默认了哪几个、还能加几个，达上限有明确提示。
+4. 旧版单选设置（localStorage `gw_default_skill`）不能丢，自动迁移。
+
+### 实现
+- **双 key 懒迁移**（src/admin_ui.html）：旧单选 key `gw_default_skill`（只读迁移源）→ 新多选 key `gw_default_skills`（JSON 数组）；`defaultSkillIds()` 读新 key，无值且旧 key 有值时迁移为单元素数组并落盘；`saveDefaultSkillIds()` `Set` 去重 + `slice(0, 3)` 钳制；`isDefaultSkill(id)` 统一判定。
+- **上限常量** `MAX_DEFAULT_SKILLS = 3`：管理页计数行 `sk-def-count` 显示 `N / 3` + 已默认标题列表；`toggleDefaultSkill(id)` 取代 `setDefaultSkill`——未默认则加入（达上限 toast「默认对话最多 3 个，先取消一个」），已默认则移除；按钮达上限时 `disabled` + title 提示。
+- **选择器口径**：默认徽标从「单选高亮」改多选判定（`isDefaultSkill`），多个默认时全部打标。
+- **发送双流注入**（sendWith）：默认流（`defaultSkillIds()` 保序）+ 手选流（`activeSkill`）合并，**既是默认又手选只注入一次**（`defIds.includes(activeSkill.id)` 去重）；`history.unshift(...sysMsgs.map(...))` 一次性前置，保持数组顺序（修复循环 unshift 会颠倒顺序的坑）；每个 skill 照旧 fire-and-forget `POST /skills/{id}/use` 累加使用数。
+- **默认不再回填 activeSkill**：v0.19.1 的「把唯一默认回填成手选 chip」逻辑删除——默认流是独立必带流，composer chip 只表手选态，避免「取消 chip 误以为取消默认」的语义混淆（配合 #77 首页三流展示的铺垫）。
+- **零迁移**：后端无改动（默认流是纯浏览器侧偏好，与 v0.19.23 的 category/tier 零迁移同范式）。
+
+### 测试
+- e2e：507 → **523/523**（+16：双 key 与上限常量、旧 key 懒迁移、计数行 markup、切换函数加/减逻辑、上限禁用 title、双流注入去重与保序、默认不回填 activeSkill 反向断言）
+- 行为测试（stub DOM 真跑）：47 → **49/49**（+2：多选徽标口径、默认流注入去重）
+- 单测：31/31；cargo test 通过
+
+## v0.19.23 —— SKILL 管理改造：二级分类 + 台属性 + 分页 + 选择器趋同
 
 ### 需求（用户口述整理）
 1. 管理页「所有模型」标签去掉「回到对话」「模型服务商」两按钮（v0.19.22 刚让两按钮全分支常驻，本版按反馈反转——仅主标签分支去掉，页头 ‹ 回退键与顶部标签栏导航不受影响）。

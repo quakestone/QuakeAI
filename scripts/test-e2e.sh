@@ -1058,7 +1058,7 @@ echo "$UI" | grep -q 'id="skill-dlg"'; check "前端 skill 对话框 DOM 存在"
 echo "$UI" | grep -q 'id="pane-skill"'; check "前端管理页 skill 面板 DOM 存在" $? "no pane-skill"
 echo "$UI" | grep -q 'sk-add'; check "前端扩展 skill 入口存在" $? "no sk-add"
 echo "$UI" | grep -q 'let activeSkill = null'; check "前端 activeSkill 状态存在" $? "no activeSkill"
-echo "$UI" | grep -q 'history.unshift({ role: "system", content: activeSkill.prompt })'; check "前端发送时注入 skill system 消息" $? "no inject"
+echo "$UI" | grep -q 'history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));'; check "前端发送时注入 skill system 消息（v0.19.24 双流）" $? "no inject"
 echo "$UI" | grep -q 'location.hash === "#/skills"'; check "前端 #/skills 路由存在" $? "no skills route"
 
 echo "== 23.5 v0.19.19：skill 简介（summary）+ 扩展按钮直通新增 + skill 管理页改造 =="
@@ -1173,6 +1173,28 @@ grep -q '#\[serde(default = "default_tier")\]' src/channels.rs; check "6 Skill.t
 grep -q '"invalid_category"' src/admin.rs; check "6 创建/更新 category 非法值 400" $? "no invalid_category"
 grep -q '"invalid_tier"' src/admin.rs; check "6 创建/更新 tier 非法值 400" $? "no invalid_tier"
 grep -q 'const category = SKILL_CATS.includes($("sk-category").value)' src/admin_ui.html; check "4 提交前分类白名单校验" $? "no client cat whitelist"
+
+echo "== 27. v0.19.24 默认对话 skill 多选（≤3，每次发送必带）=="
+# —— 多选存储与迁移 ——
+echo "$UI" | grep -q 'const GW_DEFAULT_SKILLS_KEY = "gw_default_skills";'; check "1 多选默认 skill 存储 key" $? "no multi key"
+echo "$UI" | grep -q 'const MAX_DEFAULT_SKILLS = 3;'; check "1 默认对话 skill 上限 3" $? "no cap 3"
+echo "$UI" | grep -q 'function defaultSkillIds()'; check "1 多选读取函数" $? "no defaultSkillIds"
+echo "$UI" | grep -q 'function saveDefaultSkillIds(ids)'; check "1 多选保存函数（去重 + 截断上限）" $? "no saveDefaultSkillIds"
+echo "$UI" | grep -q 'function isDefaultSkill(id)'; check "1 单选判定改多选口径" $? "no isDefaultSkill"
+echo "$UI" | grep -q 'const old = localStorage.getItem(GW_DEFAULT_SKILL_KEY) || "";'; check "1 旧单选 key 只读迁移" $? "no legacy migration"
+# —— 管理页：计数行 + 切换按钮 + 上限禁用 ——
+echo "$UI" | grep -q 'class="sk-def-count">默认对话 skill：'; check "2 管理页默认对话计数行" $? "no def count"
+echo "$UI" | grep -q 'function toggleDefaultSkill(id)'; check "2 默认对话切换函数（加/减）" $? "no toggleDefaultSkill"
+echo "$UI" | grep -q 'disabled title="默认对话最多 ' ; check "2 达上限时按钮禁用并提示" $? "no cap disable"
+echo "$UI" | grep -q 'toast(`默认对话最多 ${MAX_DEFAULT_SKILLS} 个 —— 先取消一个再加`, "err")'; check "2 超上限 toast 提示" $? "no cap toast"
+echo "$UI" | grep -q ' onclick="toggleDefaultSkill(' ; check "2 管理页按钮接切换函数" $? "btn not wired"
+# —— 选择器徽标 ——
+echo "$UI" | grep -q 'const isDef = isDefaultSkill(s.id);'; check "3 选择器徽标用多选判定" $? "picker badge not multi"
+# —— 发送注入双流 ——
+echo "$UI" | grep -q 'for (const id of defIds) {'; check "4 发送时遍历默认流注入" $? "no def loop"
+echo "$UI" | grep -q 'if (activeSkill && activeSkill.prompt && !defIds.includes(activeSkill.id)) sysMsgs.push(activeSkill);'; check "4 手选流追加且与默认流去重" $? "no dedup"
+echo "$UI" | grep -q 'history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));'; check "4 双流整体前置（保序）" $? "no ordered prefix"
+echo "$UI" | grep -q 'if (sysMsgs.length) {'; check "4 无 skill 时不注入空 system" $? "no empty guard"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

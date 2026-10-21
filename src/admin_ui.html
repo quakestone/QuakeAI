@@ -508,6 +508,9 @@
   .sk-cat { flex: none; border: 1px solid var(--border); background: var(--panel2); color: var(--dim); border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
   .sk-cat:hover { border-color: var(--acc); color: var(--acc); }
   .sk-cat.sel { border-color: var(--acc); background: var(--sel); color: var(--fg); font-weight: 600; }
+  /* v0.19.24：管理页默认对话 skill 计数行（多选 ≤3） */
+  .sk-def-count { font-size: 12px; color: var(--dim); margin: -4px 0 10px; line-height: 1.5; }
+  .sk-def-count b { color: var(--acc); }
   .sk-item.off { opacity: .45; cursor: not-allowed; }
   .sk-item.off:hover { border-color: var(--border); }
   .sk-badge { font-size: 10px; color: var(--acc); border: 1px solid var(--acc); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 1px; }
@@ -3051,12 +3054,20 @@ async function sendWith(text, atts) {
   const history = c.msgs.slice(ctxStart, -1)
     .filter(m => (m.role === "user" || m.role === "assistant") && !m.error && (m.content || (m.attachments && m.attachments.length)))
     .map(m => ({ role: m.role, content: buildApiContent(m) }));
-  // skill 独立表达线：选中 skill 时，把其提示词作为 system 消息注入本轮对话
-  // （history 由本轮全部消息组成，skill 指令随请求一起发给上游）。
-  // used_count 累加走 fire-and-forget，失败不影响本轮发送。
-  if (activeSkill && activeSkill.prompt) {
-    history.unshift({ role: "system", content: activeSkill.prompt });
-    api("/skills/" + encodeURIComponent(activeSkill.id) + "/use", "POST").catch(() => {});
+  // skill 注入（v0.19.24 双流）：默认对话 skill（多选 ≤3，每次发送必带）+
+  // 本轮手动选的 activeSkill（去重：既是默认又手选的只注入一次）。
+  // 默认流按用户排列顺序在前，手选流追加在后，整体前置到 history 头部；
+  // used_count 逐个 fire-and-forget，失败不影响本轮发送。
+  const sysMsgs = [];
+  const defIds = defaultSkillIds();
+  for (const id of defIds) {
+    const s = SKILLS.find(x => x.id === id);
+    if (s && s.prompt) sysMsgs.push(s);
+  }
+  if (activeSkill && activeSkill.prompt && !defIds.includes(activeSkill.id)) sysMsgs.push(activeSkill);
+  if (sysMsgs.length) {
+    history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));
+    for (const s of sysMsgs) api("/skills/" + encodeURIComponent(s.id) + "/use", "POST").catch(() => {});
   }
   const body = { messages: history, stream: true };
   // 让上游在 SSE 末块带回 usage（token 账本与「本条 tokens」徽章的数据源）
@@ -4919,8 +4930,32 @@ function skillTier(s) { return s.tier === SKILL_TIER_SYSTEM ? SKILL_TIER_SYSTEM 
 function skillListable(s) { return skillTier(s) !== SKILL_TIER_SYSTEM; }
 // 默认对话 skill：用户「启用」后持久化，新对话自动带上（无需每次手动点选）。
 // 这是真正让「启用」生效的开关——之前 enabled 只是个展示标签，点了对话里也不会带。
-const GW_DEFAULT_SKILL_KEY = "gw_default_skill";
-function defaultSkillId() { try { return localStorage.getItem(GW_DEFAULT_SKILL_KEY) || ""; } catch { return ""; } }
+// 默认对话 skill（v0.19.24 起多选）：用户指定的「每次发送必带」skill，
+// 多个并存、最多 MAX_DEFAULT_SKILLS(3) 个；持久化到本浏览器。
+// 旧版（≤v0.19.23）是单选（GW_DEFAULT_SKILL_KEY 存单个 id）——首次读取时
+// 自动迁移成单元素数组，不丢用户已有设置。
+const GW_DEFAULT_SKILL_KEY = "gw_default_skill";        // 旧版单选 key（只读迁移用）
+const GW_DEFAULT_SKILLS_KEY = "gw_default_skills";      // 新版多选 key（JSON 数组）
+const MAX_DEFAULT_SKILLS = 3;                            // 默认对话 skill 上限（用户需求）
+function defaultSkillIds() {
+  try {
+    const raw = localStorage.getItem(GW_DEFAULT_SKILLS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr.filter(x => typeof x === "string").slice(0, MAX_DEFAULT_SKILLS);
+    }
+    // 迁移：旧单选 key 有值且新 key没写过 → 转成单元素数组并落新 key
+    const old = localStorage.getItem(GW_DEFAULT_SKILL_KEY) || "";
+    if (old) { localStorage.setItem(GW_DEFAULT_SKILLS_KEY, JSON.stringify([old])); return [old]; }
+  } catch { /* 存储不可用：当没有默认 */ }
+  return [];
+}
+function saveDefaultSkillIds(ids) {
+  const uniq = [...new Set(ids.filter(Boolean))].slice(0, MAX_DEFAULT_SKILLS);
+  try { localStorage.setItem(GW_DEFAULT_SKILLS_KEY, JSON.stringify(uniq)); } catch {}
+  return uniq;
+}
+function isDefaultSkill(id) { return defaultSkillIds().includes(id); }
 
 async function loadAll() {
   try {
@@ -5060,13 +5095,9 @@ async function loadSkills() {
     if (!SKILL_CATS.includes(s.category)) s.category = SKILL_CATS[0];
     if (s.tier !== SKILL_TIER_SYSTEM) s.tier = "normal";
   }
-  // 恢复默认对话 skill：用户在管理面板「启用」后，新对话自动带上，不必每次点选。
-  // 仅在当前没手动选中时才回退到默认，避免覆盖用户当轮临时切的 skill。
-  const def = defaultSkillId();
-  if (!activeSkill && def) {
-    const d = SKILLS.find(x => x.id === def);
-    if (d) { activeSkill = d; renderSkillChip(); }
-  }
+  // 默认对话 skill（v0.19.24 多选）不再回填 activeSkill——默认是独立的「必带流」，
+  // 发送时统一注入；composer chip 只表示用户本轮手动选的表达线。
+  // （旧版把唯一默认回填成 activeSkill，多选后该语义由注入逻辑保证，无需回填。）
   if (mpTab === "skill") renderModelList();
   if (mgmtTab === "skill") renderSkillPane();
 }
@@ -5127,7 +5158,7 @@ function renderSkillPicker() {
       : `<div class="empty">没有匹配「${esc(mpQuery)}」的 SKILL —— 换个关键词试试</div>`;
   } else {
     for (const s of top) {
-      const isDef = s.id === defaultSkillId();
+      const isDef = isDefaultSkill(s.id);
       const sel = (activeSkill && activeSkill.id === s.id) || isDef ? " sel" : "";
       // 已停用（enabled=false）的 skill 在选择器里灰显且不可点 —— 让「启用」成为真正的开关
       const off = !s.enabled;
@@ -5173,6 +5204,9 @@ function renderSkillPane() {
   const cur = mgmtSkillPages[cat];
   const list = all.slice((cur - 1) * MP_PAGE_SIZE, cur * MP_PAGE_SIZE);
   let html = skCatBar("mgmt", cat);
+  // 默认对话 skill 计数行（v0.19.24 多选，上限 3）：让「必带流」在管理页可见可感
+  const defIds = defaultSkillIds().filter(id => SKILLS.some(s => s.id === id));
+  html += `<div class="sk-def-count">默认对话 skill：<b>${defIds.length} / ${MAX_DEFAULT_SKILLS}</b> —— 每次发送自动带上${defIds.length ? "（" + defIds.map(id => { const s = SKILLS.find(x => x.id === id); return s ? esc(s.title) : id; }).join("、") + "）" : ""}</div>`;
   if (all.length === 0) {
     html += `<div class="empty">「${esc(cat)}」分类下还没有 skill。去<b>模型选择器 › SKILL</b>标签点「＋ 扩展 SKILL」新增——只需填「标题」「提示词」和「简介」，分类选「${esc(cat)}」。</div>`;
   } else {
@@ -5185,9 +5219,9 @@ function renderSkillPane() {
           <span>已用 ${s.used_count} 次</span>
           <span class="sp"></span>
           <button type="button" onclick="toggleSkillEnabled('${esc(s.id)}')">${s.enabled ? "停用" : "启用"}</button>
-          ${s.id === defaultSkillId()
-            ? '<button type="button" class="primary" onclick="setDefaultSkill(\'\')">默认对话中 · 点击取消</button>'
-            : `<button type="button" onclick="setDefaultSkill('${esc(s.id)}')">设为默认对话</button>`}
+          ${isDefaultSkill(s.id)
+            ? '<button type="button" class="primary" onclick="toggleDefaultSkill(\'' + esc(s.id) + '\')">默认对话中 · 点击取消</button>'
+            : `<button type="button" onclick="toggleDefaultSkill('${esc(s.id)}')" ${defIds.length >= MAX_DEFAULT_SKILLS ? 'disabled title="默认对话最多 ' + MAX_DEFAULT_SKILLS + ' 个，先取消一个"' : ""}>设为默认对话</button>`}
           <button type="button" onclick="openSkillDialog('${esc(s.id)}')">编辑</button>
           <button type="button" class="danger" onclick="deleteSkill('${esc(s.id)}')">删除</button>
         </div>
@@ -5245,24 +5279,28 @@ function clearActiveSkill() {
 /// 管理面板「设为默认对话」：把某个 skill 固化为默认对话 skill（持久化到本浏览器）。
 /// 设默认后，新对话自动带上该 skill（composer 显示芯片、发送时注入 system 消息），
 /// 这正是「启用就驱动起来」的语义——之前 enabled 只是展示标签，并不会自动应用。
-function setDefaultSkill(id) {
-  if (!id) {
-    // 取消默认：清掉持久化的默认；若当前选中正是它，则同步撤下芯片
-    const old = defaultSkillId();
-    try { localStorage.setItem(GW_DEFAULT_SKILL_KEY, ""); } catch {}
-    if (old && activeSkill && activeSkill.id === old) clearActiveSkill();
-    if (mgmtTab === "skill") renderSkillPane();
-    if (mpTab === "skill") renderModelList();
+/// 管理面板「设为默认对话 / 取消」（v0.19.24 多选）：把 skill 加入/移出「每次发送必带」集合。
+/// 多个并存、最多 MAX_DEFAULT_SKILLS(3) 个；达上限时加不进来并提示先取消一个。
+/// 默认是独立的必带流——不改当前手动选中的 activeSkill（composer chip 只表手选）。
+function toggleDefaultSkill(id) {
+  if (!id) return;
+  const ids = defaultSkillIds();
+  const i = ids.indexOf(id);
+  if (i >= 0) {
+    ids.splice(i, 1);
+    saveDefaultSkillIds(ids);
     toast("已取消默认对话 skill", "ok");
-    return;
+  } else {
+    if (ids.length >= MAX_DEFAULT_SKILLS) {
+      toast(`默认对话最多 ${MAX_DEFAULT_SKILLS} 个 —— 先取消一个再加`, "err");
+      return;
+    }
+    ids.push(id);
+    saveDefaultSkillIds(ids);
+    toast(`已设为默认对话 skill（${ids.length}/${MAX_DEFAULT_SKILLS}，每次发送自动带上）`, "ok");
   }
-  // 设为默认对话 skill：持久化，并立即作为当前表达线生效
-  try { localStorage.setItem(GW_DEFAULT_SKILL_KEY, id); } catch {}
-  const s = SKILLS.find(x => x.id === id);
-  if (s) { activeSkill = s; renderSkillChip(); }
   if (mgmtTab === "skill") renderSkillPane();
   if (mpTab === "skill") renderModelList();
-  toast("已设为默认对话 skill（新对话自动带上）", "ok");
 }
 
 /// 切换 skill 的「启用 / 停用」。停用后它在模型选择器里灰显且不可点（真正生效的开关）；

@@ -207,7 +207,7 @@ console.log("== ④ modelHasVision：智能混合路由决策 ==");
 //    v0.19.22 起这里是纯渲染（输入 → HTML 字符串），用 stub DOM 真跑，比 grep 结实。
 console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
 {
-  const mkPicker = new Function("$", "SKILLS", "SKILL_CATS", "activeSkill", "defaultSkillId", "mpQuery",
+  const mkPicker = new Function("$", "SKILLS", "SKILL_CATS", "activeSkill", "isDefaultSkill", "mpQuery",
     "mpSkillCat", "mpSkillPages", "MP_PAGE_SIZE", "esc", "openSkillDialog", "summarizePrompt", "SKILL_LOGO",
     "skillCat", "skillListable",
     extractFn("skCatBar") + "\n" + extractFn("setSkCat") + "\n" + extractFn("renderSkillPicker") + "\nreturn renderSkillPicker;");
@@ -222,11 +222,11 @@ console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
   const skillListable = (s) => skillTier(s) !== "system";
   const mkSkills = (n, cat, tier) => Array.from({ length: n }, (_, i) =>
     ({ id: "s" + i, title: "技能" + i, prompt: "p" + i, summary: "简" + i, used_count: n - i, enabled: true, category: cat || "日常应用", tier: tier || "normal" }));
-  const run = (skills, q, page, cat) => {
+  const run = (skills, q, page, cat, isDef) => {
     const c = cat || "日常应用";
     const mpSkillPages = { [c]: page || 1 };
     // 双调用：先以桩参数取到内层函数，再执行（内层函数自身无参，全靠闭包读桩）
-    mkPicker.call(null, $, skills, SKILL_CATS, null, () => "", q || "", c, mpSkillPages, 5, esc, () => {}, (p) => "摘要", "<svg/>", skillCat, skillListable)();
+    mkPicker.call(null, $, skills, SKILL_CATS, null, isDef || (() => false), q || "", c, mpSkillPages, 5, esc, () => {}, (p) => "摘要", "<svg/>", skillCat, skillListable)();
     return { list: els["model-list"].innerHTML, pager: els["model-pager"].hidden, pageN: els["model-page-n"].textContent };
   };
   const nItem = (h) => (h.match(/sk-item/g) || []).length;
@@ -260,6 +260,11 @@ console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
   // 页码越界钳到末页：条目数与隐藏态是契约；page-n 的陈旧文本在隐藏态不可见
   // （与模型列表渲染器同模式，不苛求）
   check("⑤ 页码越界钳到末页（渲染全部条目且分页条隐藏）", nItem(rOver.list) === 2 && rOver.pager === true, JSON.stringify(rOver));
+  // —— v0.19.24：默认对话 skill（多选 ≤3）在选择器的徽标 ——
+  const rDef = run(mkSkills(2), "", 1, "日常应用", (id) => id === "s0");
+  check("⑤ 默认对话 skill 条目带「默认对话」徽标", rDef.list.includes('sk-badge">默认对话</span>') && (rDef.list.match(/sk-badge/g) || []).length === 1);
+  const rNoDef = run(mkSkills(2), "", 1, "日常应用", () => false);
+  check("⑤ 非默认 skill 无徽标", !rNoDef.list.includes("sk-badge"));
 }
 {
   const mkAtts = new Function("$", "PIPE", "attachments", "esc",
