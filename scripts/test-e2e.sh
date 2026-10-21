@@ -986,7 +986,7 @@ import re, sys
 s = open('src/admin_ui.html', encoding='utf-8').read()
 m = re.search(r'<div id="composer">(.*?)</div>\s*<input type="file"', s, re.S)
 ids = re.findall(r'id="([^"]+)"', m.group(1)) if m else []
-sys.exit(0 if ids == ["attach-bar", "btn-attach", "btn-model", "input", "btn-voice", "btn-send"] else 1)
+sys.exit(0 if ids == ["att-count", "attach-bar", "btn-attach", "btn-model", "input", "btn-voice", "btn-send"] else 1)
 PYX
 check "输入区顺序：附件栏（框内）→ + ⋯ 输入框 🎙 ↑" $? "wrong composer order"
 grep -q 'id="edit-chip"' "$ROOT/src/admin_ui.html"; check "有「修改中」提示条" $? "no edit chip"
@@ -1192,7 +1192,7 @@ echo "$UI" | grep -q ' onclick="toggleDefaultSkill(' ; check "2 管理页按钮�
 echo "$UI" | grep -q 'const isDef = isDefaultSkill(s.id);'; check "3 选择器徽标用多选判定" $? "picker badge not multi"
 # —— 发送注入双流 ——
 echo "$UI" | grep -q 'for (const id of defIds) {'; check "4 发送时遍历默认流注入" $? "no def loop"
-echo "$UI" | grep -q 'if (activeSkill && activeSkill.prompt && !defIds.includes(activeSkill.id)) sysMsgs.push(activeSkill);'; check "4 手选流追加且与默认流去重" $? "no dedup"
+echo "$UI" | grep -q 'if (activeSkill && activeSkill.prompt && !defIds.includes(activeSkill.id)) out.push(activeSkill);'; check "4 手选流追加且与默认流去重" $? "no dedup"
 echo "$UI" | grep -q 'history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));'; check "4 双流整体前置（保序）" $? "no ordered prefix"
 echo "$UI" | grep -q 'if (sysMsgs.length) {'; check "4 无 skill 时不注入空 system" $? "no empty guard"
 
@@ -1226,8 +1226,8 @@ echo "$UI" | grep -q 'if (dIds.includes(id)) saveDefaultSkillIds(dIds.filter(x =
 echo "$UI" | grep -q 'renderSkillFlows();   // v0.19.25：首页三流展示随 skill 列表刷新（默认 chips 标题查找）'; check "3 loadSkills 末尾刷新三流展示" $? "no flows refresh in loadSkills"
 echo "$UI" | grep -q 'renderSkillFlows();   // v0.19.25：首页默认流 chips 同步加减'; check "3 toggleDefaultSkill 后刷新三流展示" $? "no flows refresh in toggle"
 # —— 前端：发送三流合并 + 请求头 ——
-echo "$UI" | grep -q 'if (sysSkillOn("think")) { sysMsgs.push(SYS_SKILLS\[0\]); sysFeats.push("think"); }'; check "4 系统级深度思考流注入" $? "no think flow"
-echo "$UI" | grep -q 'if (sysSkillOn("search")) { sysMsgs.push(SYS_SKILLS\[1\]); sysFeats.push("search"); }'; check "4 系统级智能搜索流注入" $? "no search flow"
+echo "$UI" | grep -q 'if (sysSkillOn("think")) { out.push(SYS_SKILLS\[0\]); feats.push("think"); }'; check "4 系统级深度思考流注入（v0.19.28 收进 collectSkillMsgs）" $? "no think flow"
+echo "$UI" | grep -q 'if (sysSkillOn("search")) { out.push(SYS_SKILLS\[1\]); feats.push("search"); }'; check "4 系统级智能搜索流注入" $? "no search flow"
 echo "$UI" | grep -q 'const defIds = skipDefault() ? \[\] : defaultSkillIds();'; check "4 暂停时不注入默认流" $? "skip not honored"
 echo "$UI" | grep -q '"x-gw-features": sysFeats.join(",")'; check "4 系统级特性请求头下发" $? "no x-gw-features"
 echo "$UI" | grep -q 'history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));'; check "4 三流整体前置（保序）" $? "no ordered prefix"
@@ -1288,6 +1288,39 @@ echo "$UI" | grep -q '\.ic { width: 14px; height: 14px; fill: none; stroke: curr
 echo "$UI" | grep -q '#msg-menu button:hover { background: var(--bg3); }'; check "5 菜单样式保留" $? "menu style gone"
 absent '>🔊 播音</button>'; check "5 旧文字播音按钮已移除" $? "old speak btn remains"
 absent '<button id="mm-copy" type="button" class="mm-user" onclick="menuCopy()">复制</button>'; check "5 旧纯文字菜单项已移除" $? "old menu item remains"
+
+echo "== 31. v0.19.28 发送提交工作流：七类限额 + 全对象状态机 =="
+# —— 限额常量（字节单位，用户拍板）——
+echo "$UI" | grep -q 'const LIMITS = { text: 1048576, skill: 102400, media: 3145728, file: 20971520 };'; check "1 限额常量（1MB/100KB/3MB/20MB）" $? "no LIMITS"
+echo "$UI" | grep -q 'const KIND_CAPS = { image: 5, audio: 3, video: 1, file: 5 };'; check "1 类别数量上限（图5/音3/视1/文5）" $? "no KIND_CAPS"
+echo "$UI" | grep -q 'function byteLen(s)'; check "1 UTF-8 字节数工具" $? "no byteLen"
+echo "$UI" | grep -q 'function attCount(list, kind)'; check "1 类别计数工具" $? "no attCount"
+echo "$UI" | grep -q 'function mediaBytes(list) {'; check "1 多媒体体积（不含文件）" $? "no mediaBytes"
+echo "$UI" | grep -A1 'function mediaBytes(list) {' | grep -q 'a.kind !== "file"'; check "1 多媒体聚合排除文件类" $? "mediaBytes includes file"
+# —— picker 入口硬拦（不入列、不发请求）——
+echo "$UI" | grep -q 'if (f.size > LIMITS.file)'; check "2 单文件 20MB 硬顶" $? "no file cap"
+echo "$UI" | grep -q 'if (cur >= cap) {'; check "2 类别数量硬拦" $? "no kind cap"
+echo "$UI" | grep -q 'if (used + f.size > LIMITS.media)'; check "2 多媒体聚合 3MB 硬拦" $? "no media gate"
+echo "$UI" | grep -q 'const full = Object.keys(KIND_CAPS).every(k => attCount(attachments, k) >= KIND_CAPS\[k\]);'; check "2 全满时不再弹选择器" $? "no full check"
+# —— 实时计数 + 发送前拦截 + skill 限额 ——
+echo "$UI" | grep -q '<div id="att-count" class="att-count" hidden></div>'; check "3 附件实时计数条容器" $? "no att-count"
+echo "$UI" | grep -q 'function renderAttCount(list)'; check "3 计数渲染函数" $? "no renderAttCount"
+echo "$UI" | grep -q 'function validateSendPayload(text, atts)'; check "3 发送前统一校验函数" $? "no validate"
+echo "$UI" | grep -q 'const bad = validateSendPayload(text, atts);'; check "3 sendOrStop 接入发送前拦截" $? "validate not wired"
+echo "$UI" | grep -q 'if (n <= LIMITS.skill) return true;'; check "4 skill 100KB 限额过滤" $? "no skill cap"
+# —— 全对象入状态机（DAG 加 file/skill 两步）——
+echo "$UI" | grep -q '{ id: "file",  plugin: "wf.send_file",  depends_on: \["image"\]'; check "5 DAG file 步（依赖 image）" $? "no file step"
+echo "$UI" | grep -q '{ id: "skill", plugin: "wf.send_skill", depends_on: \["file"\]'; check "5 DAG skill 步（依赖 file）" $? "no skill step"
+echo "$UI" | grep -q 'async function pipeFile(inp)'; check "5 文件装载阶段（queued→done 直通）" $? "no pipeFile"
+echo "$UI" | grep -q 'async function pipeSkill()'; check "5 skill 装载阶段" $? "no pipeSkill"
+echo "$UI" | grep -q 'if (sid === "file") return pipeFile(inp);'; check "5 插件按 sid 分派 file" $? "no file dispatch"
+echo "$UI" | grep -q '{ key: "file",  icon: "📎", label: "文件装载" }'; check "5 进度条新增文件装载格" $? "no file stage"
+echo "$UI" | grep -q '{ key: "skill", icon: "✦",  label: "skill 装载" }'; check "5 进度条新增 skill 装载格" $? "no skill stage"
+echo "$UI" | grep -q 'await pipeFile({ atts });'; check "5 内核降级链补文件步" $? "degrade no file"
+echo "$UI" | grep -q 'await pipeSkill();'; check "5 内核降级链补 skill 步" $? "degrade no skill"
+# —— 终态齐备才下发（决策⑤）——
+echo "$UI" | grep -q 'const pending = atts.filter(a => a.st === FSM.QUEUED || a.st === FSM.WORKING);'; check "6 无 queued/working 残留才下发" $? "no terminal check"
+echo "$UI" | grep -q '文件名直传（不读内容）'; check "6 文件仅文件名装载（不读内容）" $? "file reads content"
 
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"

@@ -339,6 +339,10 @@
   /* 附件 chips（v0.19.22 起在文本框内左上部，不再悬在输入框外面）：
      小尺寸、可换行堆叠、× 可删——「未发送」与「已发送」一眼可辨。 */
   #attach-bar { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; margin: 0 0 6px; padding: 0; max-width: none; }
+  /* v0.19.28 附件实时计数：各类数量 + 多媒体合计体积，达上限标红（.full） */
+  .att-count { font-size: 11px; color: var(--dim); margin: 0 0 5px; line-height: 1.5; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .att-count[hidden] { display: none; }
+  .att-count .ac-i.full { color: var(--warn, #d19a2a); font-weight: 600; }
   #attach-bar[hidden] { display: none; } /* 作者的 display:flex 会覆盖 UA 的 [hidden] 规则，需显式重置 */
   /* 附件 chip 双形态（v0.19.22 缩略图入框后的小尺寸化）：
      ① att-pic（图片/视频有缩略图）：42×42 小方片，名称收进 title，不占版面；
@@ -956,6 +960,7 @@
            小尺寸 + × 可删 + 可继续补发——「没发送」一眼可辨，消除已发送误会。
            流水线期间同样渲染在框内（PIPE.atts 回退），状态徽标持续可见。 -->
       <div id="composer">
+        <div id="att-count" class="att-count" hidden></div>
         <div id="attach-bar" hidden></div>
         <div class="composer-row">
           <button id="btn-attach" type="button" onclick="pickFiles()" aria-label="添加附件" title="照片 / 视频 / 文件">+</button>
@@ -3082,6 +3087,9 @@ async function sendOrStop() {
   const text = input.value.trim();
   const atts = attachments.slice();
   if (!text && !atts.length) return;
+  // v0.19.28 七类限额发送前拦截：任一维度超限 → 阻断 + 指出具体超限项（不静默丢弃）
+  const bad = validateSendPayload(text, atts);
+  if (bad) { toast(bad, "err"); return; }
   // 修改态：先删原消息（及其后所有），再走正常发送。
   // 顺序不能反——先发再删会把新消息也一起截掉；只删原消息会让后面的回答失去提问。
   if (editCtx) {
@@ -3143,22 +3151,13 @@ async function sendWith(text, atts) {
   const history = c.msgs.slice(ctxStart, -1)
     .filter(m => (m.role === "user" || m.role === "assistant") && !m.error && (m.content || (m.attachments && m.attachments.length)))
     .map(m => ({ role: m.role, content: buildApiContent(m) }));
-  // skill 注入（v0.19.25 三流）：系统级流（深度思考/智能搜索，开启才注入）+
-  // 默认对话 skill（多选 ≤3，每次发送必带；「一键不带上」暂停时跳过）+
-  // 本轮手动选的 activeSkill。三级合并去重（既是默认又手选的只注入一次），
-  // 按 系统→默认→手选 顺序前置到 history 头部；used_count 逐个 fire-and-forget。
-  // 系统级开启同时经 x-gw-features 头通知网关按渠道注入真参数
-  // （智谱 thinking/web_search，见 lib.rs want_feature + is_zhipu_like）。
-  const sysMsgs = [];
-  const sysFeats = [];
-  if (sysSkillOn("think")) { sysMsgs.push(SYS_SKILLS[0]); sysFeats.push("think"); }
-  if (sysSkillOn("search")) { sysMsgs.push(SYS_SKILLS[1]); sysFeats.push("search"); }
-  const defIds = skipDefault() ? [] : defaultSkillIds();
-  for (const id of defIds) {
-    const s = SKILLS.find(x => x.id === id);
-    if (s && s.prompt) sysMsgs.push(s);
-  }
-  if (activeSkill && activeSkill.prompt && !defIds.includes(activeSkill.id)) sysMsgs.push(activeSkill);
+  // skill 注入（v0.19.28 三流合并抽为 collectSkillMsgs）：系统级流（深度思考/
+  // 智能搜索，开启才注入）+ 默认对话 skill（≤3，暂停时跳过）+ 手选 activeSkill，
+  // 去重保序；单个 skill 提示词 >100KB 的在收集时跳过并提示（限额统一处）。
+  // 流水线 skill 阶段已收集过则直接复用（避免二次收集重复弹超限提示）。
+  const sk = PIPE.skillMsgs || collectSkillMsgs();
+  const sysMsgs = sk.list;
+  const sysFeats = sk.feats;
   if (sysMsgs.length) {
     history.unshift(...sysMsgs.map(s => ({ role: "system", content: s.prompt })));
     for (const s of sysMsgs) api("/skills/" + encodeURIComponent(s.id) + "/use", "POST").catch(() => {});
@@ -3248,7 +3247,15 @@ let attachments = []; // { name, size, type, kind: "image"|"audio"|"file", dataU
 // 模型搜索框：模糊过滤（模型名 / 渠道 / provider），换词回到第 1 页
 $("model-search").addEventListener("input", (e) => setModelQuery(e.target.value));
 
-function pickFiles() { $("file-input").click(); }
+/// 打开文件选择器。v0.19.28：全部类别都满员时不再弹选择器（省一次白选）。
+function pickFiles() {
+  const full = Object.keys(KIND_CAPS).every(k => attCount(attachments, k) >= KIND_CAPS[k]);
+  if (full) {
+    toast("附件已达上限（图片 5 / 音频 3 / 视频 1 / 文件 5），先移除一些再添加", "err");
+    return;
+  }
+  $("file-input").click();
+}
 function fmtSize(b) {
   if (b == null) return "";
   if (b < 1024) return b + "B";
@@ -3266,17 +3273,35 @@ function readAsDataURL(f) {
 $("file-input").addEventListener("change", async (e) => {
   const files = Array.from(e.target.files || []);
   e.target.value = ""; // 允许再次选择同一文件
+  let added = 0;
   for (const f of files) {
-    if (f.size > 20 * 1024 * 1024) { toast(`${f.name} 超过 20MB，已跳过`, "err"); continue; }
+    // ① 单文件硬顶 20MB
+    if (f.size > LIMITS.file) { toast(`${f.name} 超过 20MB 单文件上限，已跳过`, "err"); continue; }
     const kind = f.type.startsWith("image/") ? "image" : f.type.startsWith("audio/") ? "audio" : f.type.startsWith("video/") ? "video" : "file";
+    // ② 类别数量上限（入口硬拦：不入列、不发任何请求——不浪费流量）
+    const cap = KIND_CAPS[kind], cur = attCount(attachments, kind);
+    if (cur >= cap) {
+      toast(`${KIND_LABEL[kind]}最多 ${cap} 个（已有 ${cur} 个），「${f.name}」未添加`, "err");
+      continue;
+    }
+    // ③ 多媒体聚合上限 3MB（图片+音频+视频，不含文件）
+    if (kind !== "file") {
+      const used = mediaBytes(attachments);
+      if (used + f.size > LIMITS.media) {
+        toast(`多媒体（图片+音频+视频）合计最多 3MB，当前 ${fmtSize(used)}，「${f.name}」有 ${fmtSize(f.size)}，未添加`, "err");
+        continue;
+      }
+    }
     const att = { name: f.name, size: f.size, type: f.type || "application/octet-stream", kind, file: f };
     if (kind === "image") { try { att.dataUrl = await readAsDataURL(f); } catch { /* 无预览也能发 */ } }
     attachments.push(att);
+    added++;
     // 视频首帧缩略图异步抽取：不阻塞后续文件与发送，抽帧失败就只留播放器
     if (kind === "video") videoPoster(f).then(p => {
       if (p && attachments.includes(att)) { att.poster = p; renderAttachments(); }
     }).catch(() => {});
   }
+  if (added && added < files.length) toast(`已添加 ${added} 个，${files.length - added} 个超限未添加`, "err");
   renderAttachments();
 });
 function renderAttachments() {
@@ -3300,6 +3325,23 @@ function renderAttachments() {
       : `<div class="att-chip att-file" data-st="${a.st || ""}"${tip}><span class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎"}</span><span class="att-nm">${esc(a.name)}</span>${stHtml}${xHtml}</div>`;
   }).join("");
   bar.hidden = list.length === 0;
+  renderAttCount(list);
+}
+/// v0.19.28 附件实时计数条：图片 x/5 · 音频 x/3 · 视频 x/1 · 文件 x/5 · 多媒体 x.x/3MB。
+/// 无附件时隐藏；达上限的项标 .full（橙色加粗），一眼看出哪个满了。
+function renderAttCount(list) {
+  const el = $("att-count");
+  if (!el) return;
+  if (!list.length) { el.hidden = true; el.innerHTML = ""; return; }
+  const parts = [];
+  for (const k of ["image", "audio", "video", "file"]) {
+    const n = attCount(list, k), cap = KIND_CAPS[k];
+    parts.push(`<span class="ac-i${n >= cap ? " full" : ""}">${KIND_LABEL[k]} ${n}/${cap}</span>`);
+  }
+  const mb = mediaBytes(list);
+  parts.push(`<span class="ac-i${mb > LIMITS.media ? " full" : ""}">多媒体 ${(mb / 1048576).toFixed(1)}/${(LIMITS.media / 1048576).toFixed(0)}MB</span>`);
+  el.innerHTML = parts.join("");
+  el.hidden = false;
 }
 function removeAttachment(i) { attachments.splice(i, 1); renderAttachments(); }
 
@@ -3312,11 +3354,31 @@ function removeAttachment(i) { attachments.splice(i, 1); renderAttachments(); }
 // 串行调度由 WASM 工作流内核的 DAG（depends_on）保证，见 WF_SEED_SEND。
 const FSM = { READY: "ready", QUEUED: "queued", WORKING: "working", DONE: "done", FAILED: "failed", SKIPPED: "skipped" };
 const FSM_MARK = { ready: "·", queued: "…", working: "⏳", done: "✓", failed: "✗", skipped: "—", idle: "·" };
+// v0.19.28 七类资源限额（字节单位，用户拍板）：
+//   text=1MB · skill=100KB · 多媒体合计=3MB（图片+音频+视频，不含文件）· 单文件硬顶=20MB；
+//   数量上限：文件 5 / 图片 5 / 音频 3 / 视频 1。
+// 超限一律在**入口硬拦**（不入列、不发任何上传/处理请求）——不浪费流量。
+const LIMITS = { text: 1048576, skill: 102400, media: 3145728, file: 20971520 };
+const KIND_CAPS = { image: 5, audio: 3, video: 1, file: 5 };
+const KIND_LABEL = { image: "图片", audio: "音频", video: "视频", file: "文件" };
+/// UTF-8 字节数（中文 1 字 3 字节——「文本不超过 1m」按真实传输字节算，不是字符数）
+function byteLen(s) {
+  try { return new TextEncoder().encode(String(s || "")).length; }
+  catch { return String(s || "").length; }
+}
+function attCount(list, kind) {
+  return list.filter(a => a.kind === kind).length;
+}
+/// 多媒体合计体积：图片+音频+视频（决策②：**不含文件**——文件不做任何读取与处理）
+function mediaBytes(list) {
+  return list.filter(a => a.kind !== "file").reduce((s, a) => s + (a.size || 0), 0);
+}
 const PIPE = {
   atts: [],      // 本轮发送的附件实例（输入区 attachments 的浅拷贝）
   textSt: FSM.READY,
-  stages: {},    // stage key → 状态（stt / video / image / chat）
+  stages: {},    // stage key → 状态（stt / video / image / file / skill / chat）
   notes: {},     // stage key → 备注（失败原因 / 跳过原因，chip 与进度条 title 展示）
+  skillCount: 0, // 本轮装载的 skill 数（>0 才显示「skill 装载」阶段）
   visible: false,
 };
 /// 流水线阶段定义：顺序即「模型问答串行流」的顺序
@@ -3325,6 +3387,8 @@ const PIPE_STAGES = [
   { key: "stt",   icon: "🎙", label: "语音识别" },
   { key: "video", icon: "🎬", label: "视频理解" },
   { key: "image", icon: "🖼", label: "图片理解" },
+  { key: "file",  icon: "📎", label: "文件装载" },
+  { key: "skill", icon: "✦",  label: "skill 装载" },
   { key: "chat",  icon: "💬", label: "生成回答" },
 ];
 /// 附件状态机迁移：改状态 → 重渲染 chip + 进度条（note 仅失败/跳过时用于 title 提示）
@@ -3350,7 +3414,9 @@ function pipeRender() {
   const hasKind = (k) => PIPE.atts.some(a => a.kind === k);
   const show = PIPE_STAGES.filter(s =>
     s.key === "text" || s.key === "chat" ||
-    (s.key === "stt" && hasKind("audio")) || (s.key === "video" && hasKind("video")) || (s.key === "image" && hasKind("image")));
+    (s.key === "stt" && hasKind("audio")) || (s.key === "video" && hasKind("video"))
+    || (s.key === "image" && hasKind("image")) || (s.key === "file" && hasKind("file"))
+    || (s.key === "skill" && (PIPE.skillCount || 0) > 0));
   const stOf = (k) => (k === "text" ? PIPE.textSt : (PIPE.stages[k] || "idle"));
   bar.innerHTML = show.map((s, i) => {
     const st = stOf(s.key);
@@ -3366,7 +3432,7 @@ function pipeRender() {
 /// 成功路径清掉徽标，下一轮从"就绪"重新开始。
 function pipeDone(keepSt) {
   PIPE.visible = false;
-  PIPE.textSt = FSM.READY; PIPE.stages = {}; PIPE.notes = {};
+  PIPE.textSt = FSM.READY; PIPE.stages = {}; PIPE.notes = {}; PIPE.skillCount = 0; PIPE.skillMsgs = null;
   if (!keepSt) for (const a of PIPE.atts) { delete a.st; delete a.stNote; }
   renderAttachments();
   pipeRender();
@@ -5202,6 +5268,44 @@ const SYS_SKILLS = [
   { id: SYS_SEARCH_ID, title: "智能搜索", prompt: WEB_SEARCH_PROMPT, summary: "联网搜索：先检索再作答" },
 ];
 
+/// v0.19.28 本轮 skill 三流合并（系统级 → 默认流 → 手选，去重），供发送注入与
+/// 流水线「skill 装载」阶段共用。长度限额在此统一执行：单个提示词 >100KB 的
+/// 跳过并 toast（系统级是内置短文，实际只会命中用户自建的超长 skill）。
+/// 返回 { list, feats }：list 为待注入 skill 数组（保序），feats 为系统级特性名。
+function collectSkillMsgs() {
+  const out = [];
+  const feats = [];
+  if (sysSkillOn("think")) { out.push(SYS_SKILLS[0]); feats.push("think"); }
+  if (sysSkillOn("search")) { out.push(SYS_SKILLS[1]); feats.push("search"); }
+  const defIds = skipDefault() ? [] : defaultSkillIds();
+  for (const id of defIds) {
+    const s = SKILLS.find(x => x.id === id);
+    if (s && s.prompt) out.push(s);
+  }
+  if (activeSkill && activeSkill.prompt && !defIds.includes(activeSkill.id)) out.push(activeSkill);
+  const list = out.filter(s => {
+    const n = byteLen(s.prompt);
+    if (n <= LIMITS.skill) return true;
+    toast(`skill「${s.title}」提示词 ${fmtSize(n)} 超过 100KB 上限，本轮未带上`, "err");
+    return false;
+  });
+  return { list, feats };
+}
+
+/// v0.19.28 发送前统一校验（防御 + 明确提示）：文本 1MB / 各类数量 / 多媒体合计 3MB。
+/// 返回 null 表示通过，否则返回错误提示串（调用方 toast 后阻断发送）。
+function validateSendPayload(text, atts) {
+  const tb = byteLen(text);
+  if (tb > LIMITS.text) return `文本内容 ${fmtSize(tb)} 超过 1MB 上限，请删减后再发送`;
+  for (const k of Object.keys(KIND_CAPS)) {
+    const n = attCount(atts, k);
+    if (n > KIND_CAPS[k]) return `${KIND_LABEL[k]} ${n} 个超过上限 ${KIND_CAPS[k]} 个，请移除后再发送`;
+  }
+  const mb = mediaBytes(atts);
+  if (mb > LIMITS.media) return `多媒体（图片+音频+视频）合计 ${fmtSize(mb)} 超过 3MB 上限，请移除一些再发送`;
+  return null;
+}
+
 /// 系统级流开关状态（v0.19.25）：which = "think" | "search"。
 function sysSkillOn(which) {
   return localStorage.getItem(which === "search" ? GW_SYS_SEARCH_KEY : GW_SYS_THINK_KEY) === "1";
@@ -6798,6 +6902,10 @@ const WF_SEED_SEND = JSON.stringify({ id: "send_pipeline", version: 1, trigger: 
     { id: "stt",   plugin: "wf.send_stt",   depends_on: [],       input: { sid: "stt",   atts: "${/event/atts}" } },
     { id: "video", plugin: "wf.send_video", depends_on: ["stt"],   input: { sid: "video", atts: "${/event/atts}" } },
     { id: "image", plugin: "wf.send_image", depends_on: ["video"], input: { sid: "image", atts: "${/event/atts}", direct: "${/event/imageDirect}" } },
+    // v0.19.28 全对象入状态机：文件（零处理直通，**不读内容**，仅文件名装载）+
+    // skill（装载态：三流合并后的长度限额校验，>100KB 跳过）。两步均无网络请求。
+    { id: "file",  plugin: "wf.send_file",  depends_on: ["image"], input: { sid: "file",  atts: "${/event/atts}" } },
+    { id: "skill", plugin: "wf.send_skill", depends_on: ["file"],  input: { sid: "skill" } },
   ] });
 
 // ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
@@ -6973,7 +7081,38 @@ async function wfSendPlugin(inp) {
   if (sid === "stt") return pipeStt(inp);
   if (sid === "video") return pipeVideo(inp);
   if (sid === "image") return pipeImage(inp);
+  if (sid === "file") return pipeFile(inp);
+  if (sid === "skill") return pipeSkill(inp);
   return { skipped: true };
+}
+
+/// v0.19.28 文件装载阶段：文件类附件 queued→done 直通——**不读取任何内容**
+/// （决策④：资源原样连同文件名说明直接提交给上游 API，网关也不解析）。
+/// 仅把一个 FSM 终态打上（供「全对象状态齐备才下发」的判定），无网络请求。
+async function pipeFile(inp) {
+  const atts = (inp && inp.atts) || PIPE.atts || [];
+  const files = atts.filter(a => a.kind === "file");
+  if (!files.length) { pipeSet("file", FSM.SKIPPED); return { ok: true, count: 0 }; }
+  pipeSet("file", FSM.WORKING);
+  for (const a of files) {
+    fsmSet(a, FSM.QUEUED);
+    await Promise.resolve();   // 让出一帧，chip 徽标可见（状态机推进的真实感）
+    fsmSet(a, FSM.DONE, "文件名直传（不读内容）");
+  }
+  pipeSet("file", FSM.DONE, `${files.length} 个文件已装载（仅文件名）`);
+  return { ok: true, count: files.length };
+}
+
+/// v0.19.28 skill 装载阶段：三流合并 + 单个提示词 ≤100KB 限额（超限跳过并提示）。
+/// 装载结果记入 PIPE.skillCount（决定 pipe-bar 是否显示该阶段）。
+async function pipeSkill() {
+  pipeSet("skill", FSM.WORKING);
+  const sk = collectSkillMsgs();
+  PIPE.skillMsgs = sk;   // 供 sendWith 复用（避免二次收集重复 toast）
+  PIPE.skillCount = sk.list.length;
+  if (!sk.list.length) { pipeSet("skill", FSM.SKIPPED, "本轮无 skill"); return { ok: true, loaded: 0 }; }
+  pipeSet("skill", FSM.DONE, `${sk.list.length} 个 skill 已装载`);
+  return { ok: true, loaded: sk.list.length };
 }
 
 /// ① 语音识别：音频附件逐个走 /v1/audio/transcriptions（与麦克风同链路），
@@ -7079,7 +7218,7 @@ async function runSendPipeline(text, atts) {
   PIPE.gen = (PIPE.gen || 0) + 1;
   PIPE.atts = atts;
   for (const a of atts) { a.st = FSM.READY; delete a.desc; }
-  PIPE.textSt = FSM.QUEUED; PIPE.stages = {}; PIPE.notes = {};
+  PIPE.textSt = FSM.QUEUED; PIPE.stages = {}; PIPE.notes = {}; PIPE.skillCount = 0;
   PIPE.visible = true;
   renderAttachments(); pipeRender();
   // 图片路由决策（智能混合）：主请求 effective 模型有视觉能力 → 直连 vision parts；
@@ -7102,10 +7241,18 @@ async function runSendPipeline(text, atts) {
       await pipeStt({ atts });
       await pipeVideo({ atts });
       await pipeImage({ atts, direct: out.imageDirect });
+      await pipeFile({ atts });
+      await pipeSkill();
     }
   } catch (e) { console.warn("发送流水线异常（已降级为直发）:", e); }
   if (PIPE.stages.stt === FSM.FAILED) {
     throw new Error((PIPE.notes.stt || "语音识别失败"));
+  }
+  // v0.19.28 终态齐备校验（决策⑤：全对象状态齐备才下发）：附件不得残留
+  // queued/working——有残留说明某步异常中断，此时不下发，避免半成品请求。
+  const pending = atts.filter(a => a.st === FSM.QUEUED || a.st === FSM.WORKING);
+  if (pending.length) {
+    throw new Error(`有 ${pending.length} 个附件仍停在处理中（${pending.map(a => a.name).join("、")}），已中止发送`);
   }
   out.sttText = PIPE.sttText || "";
   PIPE.textSt = FSM.DONE;

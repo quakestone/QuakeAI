@@ -122,8 +122,8 @@ async function driveRun(event, plugin) {
   const r = await driveRun(
     { event: "send.start", atts: [{ kind: "audio", name: "a.wav" }, { kind: "video", name: "v.mp4" }, { kind: "image", name: "p.png" }], imageDirect: false },
     async (sid) => { seen.push(sid); return { ok: true }; });
-  check("三步全部执行", r.order.length === 3, JSON.stringify(r.order));
-  check("执行顺序 stt→video→image（depends_on 链串行）", r.order.join(",") === "stt,video,image", r.order.join(","));
+  check("五步全部执行（stt/video/image/file/skill）", r.order.length === 5, JSON.stringify(r.order));
+  check("执行顺序 stt→video→image→file→skill（depends_on 链串行）", r.order.join(",") === "stt,video,image,file,skill", r.order.join(","));
   check("每批就绪步恰好 1 个（无并行泄漏）", r.batches.every(b => b === 1), JSON.stringify(r.batches));
   check("run 终态 DONE", r.status === 1, "status=" + r.status);
 }
@@ -131,7 +131,7 @@ async function driveRun(event, plugin) {
 // 场景 2：无附件 → 三步仍走完（插件自行 skipped），不卡死
 {
   const r = await driveRun({ event: "send.start", atts: [], imageDirect: false }, async () => ({ skipped: true }));
-  check("空附件：三步照常完成（skipped 不阻塞依赖）", r.order.join(",") === "stt,video,image" && r.status === 1, r.order.join(","));
+  check("空附件：五步照常完成（skipped 不阻塞依赖）", r.order.join(",") === "stt,video,image,file,skill" && r.status === 1, r.order.join(","));
 }
 
 // 场景 3：imageDirect=true 时第③步拿到 direct 标记（模板 ${/event/imageDirect} 解析）
@@ -146,7 +146,7 @@ async function driveRun(event, plugin) {
 {
   const r = await driveRun({ event: "send.start", atts: [{ kind: "audio", name: "a.wav" }], imageDirect: false },
     async (sid) => (sid === "stt" ? { ok: false, error: "识别失败" } : { ok: true }));
-  check("插件 ok:false 不杀 run（降级由上层决定）", r.status === 1 && r.order.length === 3, "status=" + r.status);
+  check("插件 ok:false 不杀 run（降级由上层决定）", r.status === 1 && r.order.length === 5, "status=" + r.status);
 }
 
 // 场景 5：插件 throw（真异常）→ run FAILED，后续步 SKIPPED（这就是插件必须自吞异常的原因）
@@ -163,7 +163,7 @@ console.log("== ② MediaFSM 状态词汇与阶段表 ==");
   const PIPE_STAGES = new Function(extractConst("PIPE_STAGES") + "\nreturn PIPE_STAGES;")();
   const want = ["ready", "queued", "working", "done", "failed", "skipped"];
   check("FSM 六态齐全", want.every(w => Object.values(FSM).includes(w)), JSON.stringify(Object.values(FSM)));
-  check("阶段顺序 文本→语音→视频→图片→回答", PIPE_STAGES.map(s => s.key).join(",") === "text,stt,video,image,chat", JSON.stringify(PIPE_STAGES.map(s => s.key)));
+  check("阶段顺序 文本→语音→视频→图片→文件→skill→回答", PIPE_STAGES.map(s => s.key).join(",") === "text,stt,video,image,file,skill,chat", JSON.stringify(PIPE_STAGES.map(s => s.key)));
   const FSM_MARK = new Function(extractConst("FSM_MARK") + "\nreturn FSM_MARK;")();
   check("每态都有展示标记", want.every(w => FSM_MARK[w]), JSON.stringify(FSM_MARK));
 }
@@ -270,10 +270,15 @@ console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
   check("⑤ 非默认 skill 无徽标", !rNoDef.list.includes("sk-badge"));
 }
 {
-  const mkAtts = new Function("$", "PIPE", "attachments", "esc",
-    extractFn("renderAttachments") + "\nreturn renderAttachments;");
+  // v0.19.28：renderAttachments 现在会刷新实时计数条（renderAttCount），
+  // 一并抽出计数函数与它依赖的限额常量；$ 桩同时提供 attach-bar 与 att-count。
+  const attSrc = [extractConst("KIND_CAPS"), extractConst("KIND_LABEL"), extractConst("LIMITS"),
+      extractFn("attCount"), extractFn("mediaBytes"), extractFn("renderAttCount"), extractFn("renderAttachments")]
+    .join("\n");
+  const mkAtts = new Function("$", "PIPE", "attachments", "esc", attSrc + "\nreturn renderAttachments;");
   const bar = { innerHTML: "", hidden: true };
-  const $ = (id) => (id === "attach-bar" ? bar : null);
+  const cnt = { innerHTML: "", hidden: true };
+  const $ = (id) => (id === "attach-bar" ? bar : id === "att-count" ? cnt : null);
   const esc = (s) => String(s);
   const PIPE = { visible: false, atts: [] };
   const atts = [
@@ -289,6 +294,9 @@ console.log("== ⑤ v0.19.23：SKILL 分类/台/分页 + 附件双形态 ==");
   check("⑤ 图片 chip 无名称行（名称收进 title）", !/<div class="att-nm">/.test(bar.innerHTML) && bar.innerHTML.includes('title="a.png"'));
   check("⑤ working 态徽标渲染", bar.innerHTML.includes('data-st="working"') && bar.innerHTML.includes('class="att-st"'));
   check("⑤ 有附件时附件栏展开", bar.hidden === false);
+  check("⑤ 实时计数条渲染（各类数量 + 多媒体体积）",
+    cnt.hidden === false && cnt.innerHTML.includes("图片 1/5") && cnt.innerHTML.includes("音频 1/3")
+    && cnt.innerHTML.includes("视频 1/1") && cnt.innerHTML.includes("/3MB"), cnt.innerHTML);
   PIPE.visible = true; PIPE.atts = atts;   // 流水线期间：输入区 attachments 已清空
   render([]);
   check("⑤ 流水线期间回退渲染 PIPE.atts（chip 不消失）", bar.innerHTML.includes("att-pic"));
