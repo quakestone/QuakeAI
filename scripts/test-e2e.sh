@@ -1068,6 +1068,34 @@ echo "$UI" | grep -q 'title="skill 提示词：独立于模型的表达线">skil
 echo "$UI" | grep -q 'for (const s of SKILLS) if (!s.summary) s.summary = summarizePrompt(s.prompt);'; check "旧 skill 无 summary 时前端兜底生成" $? "no legacy fallback"
 echo "$UI" | grep -q 'summary: "回答前三角度自辩，再统一作答"'; check "内置种子 skill 带简介" $? "seed has no summary"
 
+echo "== 24. v0.19.21 发送流水线：文本/图片/音频/视频状态机 + 工作流小引擎串行流 =="
+# 行为测试（真跑 WASM 内核 + 抽测纯函数）：串行依赖由 depends_on 链保证，
+# 一旦种子漏依赖（三步同时就绪变并行），静态断言全过但流水线语义已坏。
+SP_OUT=$(node "$ROOT/scripts/test-send-pipeline.mjs" 2>&1)
+SP_FAIL=$(echo "$SP_OUT" | sed -n 's/^结果: PASS=[0-9]* FAIL=\([0-9]*\)$/\1/p')
+SP_PASSN=$(echo "$SP_OUT" | sed -n 's/^结果: PASS=\([0-9]*\) FAIL=[0-9]*$/\1/p')
+[ "${SP_FAIL:-1}" = "0" ]; check "发送流水线行为测试全通过（${SP_PASSN:-0} 项，含内核串行语义）" $? "$(echo "$SP_OUT" | grep FAIL | head -3)"
+echo "$UI" | grep -q 'id="pipe-bar"'; check "输入区含流水线进度条容器" $? "no pipe-bar"
+echo "$UI" | grep -q 'const FSM = { READY: "ready"'; check "媒体状态机六态常量存在" $? "no FSM"
+echo "$UI" | grep -q 'const PIPE_STAGES = \['; check "流水线阶段表存在" $? "no PIPE_STAGES"
+echo "$UI" | grep -q '{ key: "chat",  icon: "💬", label: "生成回答" }'; check "末阶段为生成回答" $? "no chat stage"
+echo "$UI" | grep -q 'function fsmSet'; check "附件状态机迁移函数存在" $? "no fsmSet"
+echo "$UI" | grep -q 'function pipeRender'; check "流水线进度条渲染函数存在" $? "no pipeRender"
+echo "$UI" | grep -q 'const WF_SEED_SEND'; check "发送流水线工作流种子存在" $? "no WF_SEED_SEND"
+echo "$UI" | grep -q '{ id: "video", plugin: "wf.send_video", depends_on: \["stt"\]'; check "视频步依赖语音步（串行链）" $? "no dep stt->video"
+echo "$UI" | grep -q '{ id: "image", plugin: "wf.send_image", depends_on: \["video"\]'; check "图片步依赖视频步（串行链）" $? "no dep video->image"
+echo "$UI" | grep -q 'send: load(WF_SEED_SEND)'; check "发送种子随内核一起加载" $? "seed not loaded"
+echo "$UI" | grep -q 'async function runSendPipeline'; check "发送流水线编排函数存在" $? "no runSendPipeline"
+echo "$UI" | grep -q 'await runSendPipeline(text, atts)'; check "sendWith 已接入流水线" $? "sendWith not wired"
+echo "$UI" | grep -q 'function modelHasVision'; check "图片智能混合路由决策函数存在" $? "no modelHasVision"
+echo "$UI" | grep -q 'async function videoFrames'; check "视频多帧抽取函数存在" $? "no videoFrames"
+echo "$UI" | grep -q 'async function wfVisionDescribe'; check "视觉理解调用函数存在" $? "no wfVisionDescribe"
+echo "$UI" | grep -q 'a.desc'; check "附件理解结果（desc）字段已使用" $? "no desc"
+echo "$UI" | grep -q 'if (a.desc) base.desc = a.desc;'; check "desc 随附件持久化进 IDB" $? "desc not persisted"
+echo "$UI" | grep -q '理解：${a.desc}'; check "buildApiContent 渲染理解注记" $? "no desc note"
+echo "$UI" | grep -q 'pipeFinishChat(true)'; check "流式结束收尾流水线⑤阶段" $? "no chat stage finish"
+echo "$UI" | grep -q 'const inPipe = PIPE.visible'; check "流水线期间输入区 chip 持续可见" $? "no inPipe fallback"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null

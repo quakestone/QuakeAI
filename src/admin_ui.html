@@ -330,6 +330,27 @@
   .att-chip .att-ic { width: 58px; height: 58px; display: flex; align-items: center; justify-content: center; font-size: 22px; border-radius: 6px; background: var(--panel); }
   .att-chip .att-nm { font-size: 10px; color: var(--dim); max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .att-chip .att-x { position: absolute; top: 6px; right: 6px; width: 19px; height: 19px; border-radius: 50%; background: rgba(0, 0, 0, .55); border: none; color: #fff; font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; cursor: pointer; }
+  /* 附件 chip 的媒体状态机徽标（就绪/处理中/完成/失败，见 MediaFSM） */
+  .att-chip .att-st { position: absolute; top: 6px; left: 6px; min-width: 19px; height: 19px; padding: 0 4px; border-radius: 10px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 10px; line-height: 19px; text-align: center; display: none; }
+  .att-chip[data-st="working"] .att-st { display: block; background: var(--acc); animation: att-st-pulse 1s ease-in-out infinite; }
+  .att-chip[data-st="done"] .att-st { display: block; background: var(--ok); }
+  .att-chip[data-st="failed"] .att-st { display: block; background: var(--err, #e5534b); }
+  .att-chip[data-st="working"] { border-color: var(--acc); }
+  .att-chip[data-st="failed"] { border-color: var(--err, #e5534b); opacity: .75; }
+  @keyframes att-st-pulse { 50% { opacity: .55; } }
+  /* 发送流水线进度条（工作流小引擎：文本→语音→视频→图片→回答 串行状态） */
+  #pipe-bar { max-width: var(--chat-max); margin: 0 auto 8px; display: flex; align-items: center; gap: 6px; overflow-x: auto; padding: 6px 10px; scrollbar-width: none; border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); font-size: 12px; color: var(--dim); }
+  #pipe-bar[hidden] { display: none; }
+  #pipe-bar::-webkit-scrollbar { display: none; }
+  .pipe-st { flex: none; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .pipe-st .pipe-ic { font-size: 13px; }
+  .pipe-st[data-st="working"] { color: var(--acc); font-weight: 600; }
+  .pipe-st[data-st="working"] .pipe-ic { animation: att-st-pulse 1s ease-in-out infinite; }
+  .pipe-st[data-st="done"] { color: var(--ok); }
+  .pipe-st[data-st="failed"] { color: var(--err, #e5534b); }
+  .pipe-st[data-st="idle"] { opacity: .45; }
+  .pipe-sep { flex: none; color: var(--border); }
+  .pipe-st .pipe-mk { margin-left: 1px; font-size: 11px; }
   /* 录音浮层 */
   #rec-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 60; display: flex; align-items: center; justify-content: center; }
   #rec-overlay[hidden] { display: none; }
@@ -426,6 +447,9 @@
   .att-row .att-media-nm { font-size: 10px; color: var(--dim); max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .att-row audio.att-audio { width: 230px; height: 32px; }
   .att-row video.att-video { width: var(--att-video-w, 260px); max-height: var(--att-video-h, 190px); border-radius: 8px; background: #000; display: block; }
+  /* 发送流水线的理解产出（图片降级描述 / 视频帧理解）：气泡内一行小字，模型看到的注记用户也看得到 */
+  .att-row .att-desc { font-size: 11px; line-height: 1.45; color: var(--dim); max-width: 260px; margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .att-row .att-img-wrap, .att-row .att-file-wrap { display: flex; flex-direction: column; }
   .composer-hint { text-align: center; font-size: 11px; color: var(--dim); margin-top: 6px; }
 
   /* ================= skill 独立表达线 ================= */
@@ -806,6 +830,7 @@
     <div class="composer-wrap">
       <button id="to-bottom" type="button" hidden onclick="jumpToBottom()" title="回到最新内容">↓ 回到最新</button>
       <div id="attach-bar" hidden></div>
+      <div id="pipe-bar" class="pipe-bar" hidden></div>
       <div id="skill-chip" class="skill-chip" hidden>
         <span class="sk-ic">🧩</span>
         <span class="sk-t" id="skill-chip-title"></span>
@@ -1734,12 +1759,14 @@ const IDB = {
   },
 };
 /// 附件持久化形态：图片存 dataUrl（渲染缩略图）、音频/视频存 Blob（容器播放源）、
-/// 视频另存首帧 poster；普通文件只存元信息。File/Blob 可被结构化克隆进 IDB。
+/// 视频另存首帧 poster；理解结果 desc 一并落库（刷新后历史消息的注记不丢）；
+/// 普通文件只存元信息。File/Blob 可被结构化克隆进 IDB。
 function slimAtt(a) {
   const base = { name: a.name, size: a.size, type: a.type, kind: a.kind };
   if (a.kind === "image" && a.dataUrl) base.dataUrl = a.dataUrl;
   if ((a.kind === "audio" || a.kind === "video") && a.file) base.file = a.file;
   if (a.kind === "video" && a.poster) base.poster = a.poster;
+  if (a.desc) base.desc = a.desc;
   return base;
 }
 /// blob: URL 按附件对象缓存复用（同一消息多次渲染不重复 createObjectURL）。
@@ -1754,34 +1781,7 @@ function attMediaUrl(att) {
   }
   return u;
 }
-/// 视频首帧缩略图（canvas 抽帧）：muted + metadata 预载后 seek 近 0 处抓帧。
-/// 失败/超时/无轨一律返回 null —— 播放器无 poster 也能正常用，只是不显示首帧。
-function videoPoster(file) {
-  return new Promise(res => {
-    let v;
-    try { v = document.createElement("video"); } catch { return res(null); }
-    let url;
-    try { url = URL.createObjectURL(file); } catch { return res(null); }
-    const finish = (poster) => { try { URL.revokeObjectURL(url); } catch {} try { v.pause(); v.src = ""; } catch {} res(poster); };
-    const timer = setTimeout(() => finish(null), 8000);
-    v.muted = true; v.playsInline = true; v.preload = "metadata";
-    v.onloadeddata = () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 10); } catch { clearTimeout(timer); finish(null); } };
-    v.onseeked = () => {
-      clearTimeout(timer);
-      try {
-        const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
-        if (!vw || !vh) return finish(null);
-        const w = 200, h = Math.max(1, Math.round(w * vh / vw));
-        const c = document.createElement("canvas");
-        c.width = w; c.height = h;
-        c.getContext("2d").drawImage(v, 0, 0, w, h);
-        finish(c.toDataURL("image/jpeg", 0.72));
-      } catch { finish(null); }
-    };
-    v.onerror = () => { clearTimeout(timer); finish(null); };
-    v.src = url;
-  });
-}
+/// 视频首帧缩略图：见下方 videoFrameAt / videoPoster（发送流水线区，已推广为按比例抽帧）。
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 let convos = [];            // 内存全量（UI 数据源，按 updated 倒序），IDB 是持久镜像
 let currentId = null;       // null = 新对话（还没落库的空白态）
@@ -2244,6 +2244,8 @@ function streamBegin(convoId, idx, msg, gen) {
   STREAM.lag = 1000;
   STREAM.stableLen = 0;
   STREAM.stableEl = null; STREAM.tailEl = null; STREAM.cursorEl = null;
+  // 发送流水线⑤「生成回答」：首字流启动即进入处理中（pipe-bar 反映）
+  pipeSet("chat", FSM.WORKING);
 }
 
 /// 只登记目标文本，实际推进交给 rAF —— 一帧内来十个 chunk 也只画一次
@@ -2430,6 +2432,8 @@ function streamEnd(gen) {
   STREAM.started = false; STREAM.firstArrival = 0;
   STREAM.lastTs = 0; STREAM.lastArrival = 0; STREAM.gaps = []; STREAM.lag = 1000;
   STREAM.stableLen = 0; STREAM.stableEl = null; STREAM.tailEl = null; STREAM.cursorEl = null;
+  // 发送流水线⑤「生成回答」完成：✓ 后 1.2s 收起进度条
+  pipeFinishChat(true);
 }
 
 // ---- 滚动跟随：用户往上翻时不抢滚动条 ----
@@ -2454,11 +2458,15 @@ function msgHtml(m, i) {
   }
   if (m.role === "user") {
     const chips = (m.attachments || []).map(a => {
-      if (a.dataUrl) return `<img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">`;
+      // 发送流水线的理解产出：图片降级描述 / 视频帧理解，在气泡里给一行小字
+      // （请求里也是以同样注记发给模型的——用户看到的就是模型看到的）。
+      const descLine = a.desc
+        ? `<div class="att-desc">${a.kind === "image" ? "🖼" : a.kind === "video" ? "🎬" : "📎"} 理解：${esc(a.desc)}</div>` : "";
+      if (a.dataUrl) return `<div class="att-img-wrap"><img class="att-thumb" src="${a.dataUrl}" alt="${esc(a.name)}">${descLine}</div>`;
       const src = attMediaUrl(a);
-      if (a.kind === "audio" && src) return `<div class="att-media"><div class="att-media-ic">🎵</div><audio class="att-audio" controls preload="metadata" src="${src}"></audio><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
-      if (a.kind === "video" && src) return `<div class="att-media"><video class="att-video" controls preload="metadata" playsinline${a.poster ? ` poster="${a.poster}"` : ""} src="${src}"></video><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div></div>`;
-      return `<span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>`;
+      if (a.kind === "audio" && src) return `<div class="att-media"><div class="att-media-ic">🎵</div><audio class="att-audio" controls preload="metadata" src="${src}"></audio><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div>${descLine}</div>`;
+      if (a.kind === "video" && src) return `<div class="att-media"><video class="att-video" controls preload="metadata" playsinline${a.poster ? ` poster="${a.poster}"` : ""} src="${src}"></video><div class="att-media-nm">${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</div>${descLine}</div>`;
+      return `<div class="att-file-wrap"><span class="att-file">📎 ${esc(a.name)}${a.size ? `（${fmtSize(a.size)}）` : ""}</span>${descLine}</div>`;
     }).join("");
     const attRow = chips ? `<div class="att-row">${chips}</div>` : "";
     // 用户头像：与助手「AI」实心渐变形成对照（描边 vs 填充）；「…」在气泡右上角。
@@ -2777,7 +2785,7 @@ function menuRetry() {
   const atts = (m.attachments || []).map(a => ({ ...a }));
   truncateFrom(c, idx);
   renderMessages();
-  sendWith(text, atts);
+  sendWith(text, atts).catch(e => toast("重试失败：" + ((e && e.message) || e), "err"));
 }
 /// 修改（用户消息）：把内容打回底部输入框，**不删任何东西**。
 /// 发送那一刻才截断原消息及其后所有消息（见 sendOrStop），
@@ -2845,7 +2853,7 @@ function menuRegen() {
   const atts = (um.attachments || []).map(a => ({ ...a }));
   truncateFrom(c, j);
   renderMessages();
-  sendWith(text, atts);
+  sendWith(text, atts).catch(e => toast("重新生成失败：" + ((e && e.message) || e), "err"));
 }
 /// 强调：本地标记（左侧橙条 + 「重点」徽标），不改请求内容，可再点取消。
 function menuEmphasis() {
@@ -2959,6 +2967,8 @@ async function sendOrStop() {
     // 转写失败等：把原文与附件还回输入框，用户改一下就能重发（不必重输）
     input.value = text; autoGrow();
     attachments = atts; renderAttachments();
+    toast("发送未开始：" + ((e && e.message) || e), "err");
+    pipeDone(true);   // 收起进度条，但保留附件失败徽标（哪个附件失败一目了然）
   } finally {
     updateSendBtn();
   }
@@ -2967,24 +2977,11 @@ async function sendOrStop() {
 /// 实际发送链路（输入框发送 / 长按重发 / 通话共用）。
 /// text/atts 由调用方给出；atts 为内存对象（含 file/dataUrl 的浅拷贝）。
 async function sendWith(text, atts) {
-  // 音频附件先走 /v1/audio/transcriptions 转写成文字（与麦克风同一条链路）
-  let spoken = "";
-  const audioAtts = atts.filter(a => a.kind === "audio");
-  if (audioAtts.length) {
-    setVoiceBusy(true);
-    try {
-      for (const a of audioAtts) {
-        toast(`识别语音 ${a.name} …`);
-        spoken += (spoken ? " " : "") + await transcribeBlob(a.file, a.name);
-      }
-    } catch (e) {
-      toast("语音识别失败：" + e.message, "err");
-      setVoiceBusy(false);
-      throw e; // 不发送：调用方保留原文
-    }
-    setVoiceBusy(false);
-  }
-  const fullText = [text, spoken].filter(Boolean).join(" ");
+  // 发送流水线（工作流小引擎）：文本 → 语音识别 → 视频理解 → 图片理解 串行，
+  // 每类媒体各走各的状态机；产出（转写文本 / a.desc 画面理解）汇入本轮请求。
+  // 音频全部识别失败 → 这里 throw，调用方（sendOrStop）把原文与附件还回输入框。
+  const pipe = await runSendPipeline(text, atts);
+  const fullText = [text, pipe.sttText].filter(Boolean).join("\n");
 
   const c = ensureConvo();
   const convoId = c.id;
@@ -3085,7 +3082,7 @@ async function sendWith(text, atts) {
     if (myGen === streamGen) {
       streaming = false; aborter = null; updateSendBtn();
       streamEnd(myGen);            // flush 剩余文字 + 补操作按钮（不重建整条）
-      if (asst.error) renderMessages();   // 错误行只能靠整条重绘
+      if (asst.error) { renderMessages(); pipeFinishChat(false); }   // 错误行只能靠整条重绘；流水线⑤标记失败
     }
     // 工作流事件：token 记账 / LLM 标题升级 / 记忆更新。异步、失败静默，不阻塞 UI。
     if (!asst.error) wfAfterAnswer(c, convoId, asst, fullText, atts);
@@ -3135,31 +3132,113 @@ $("file-input").addEventListener("change", async (e) => {
 });
 function renderAttachments() {
   const bar = $("attach-bar");
-  bar.innerHTML = attachments.map((a, i) => {
+  // 发送流水线进行中：输入区 attachments 已清空（防重复发送），此时回退渲染
+  // PIPE.atts（同一批附件对象）——chip 上的媒体状态机徽标持续可见，且流水线期间不允许移除。
+  const inPipe = PIPE.visible && PIPE.atts.length > 0 && attachments.length === 0;
+  const list = inPipe ? PIPE.atts : attachments;
+  const chipMark = { working: "…", done: "✓", failed: "✗", skipped: "—" };
+  bar.innerHTML = list.map((a, i) => {
     const thumb = a.dataUrl || a.poster; // 图片 dataUrl / 视频首帧 → 缩略图，无则类型图标
+    const stHtml = (a.st && chipMark[a.st])
+      ? `<span class="att-st"${a.stNote ? ` title="${esc(a.stNote)}"` : ""}>${chipMark[a.st]}</span>` : "";
+    const xHtml = inPipe ? "" : `<button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button>`;
+    const descTip = a.desc ? ` title="理解：${esc(a.desc.slice(0, 80))}"` : "";
     return thumb
-      ? `<div class="att-chip"><img src="${thumb}" alt=""><div class="att-nm">${esc(a.name)}</div><button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button></div>`
-      : `<div class="att-chip"><div class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎"}</div><div class="att-nm">${esc(a.name)}</div><button class="att-x" onclick="removeAttachment(${i})" aria-label="移除">×</button></div>`;
+      ? `<div class="att-chip" data-st="${a.st || ""}"${descTip}><img src="${thumb}" alt="">${stHtml}<div class="att-nm">${esc(a.name)}</div>${xHtml}</div>`
+      : `<div class="att-chip" data-st="${a.st || ""}"${descTip}><div class="att-ic">${a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎"}</div>${stHtml}<div class="att-nm">${esc(a.name)}</div>${xHtml}</div>`;
   }).join("");
-  bar.hidden = attachments.length === 0;
+  bar.hidden = list.length === 0;
 }
 function removeAttachment(i) { attachments.splice(i, 1); renderAttachments(); }
+
+// ================= 媒体状态机（MediaFSM）+ 发送流水线 UI =================
+// 文本 / 图片 / 音频 / 视频四类媒体统一进状态机管理，状态词汇：
+//   ready(就绪待发) → queued(进入流水线排队) → working(模型处理中)
+//     → done(完成) / failed(失败降级) / skipped(无需处理，如图片可直连视觉模型)
+// 附件实例的状态挂在 a.st / a.stNote 上（瞬态，不落库）；文本以 PIPE.textSt 表示。
+// UI 双反馈：① 附件 chip 左上角徽标 ② 输入区上方 pipe-bar 流水线进度条。
+// 串行调度由 WASM 工作流内核的 DAG（depends_on）保证，见 WF_SEED_SEND。
+const FSM = { READY: "ready", QUEUED: "queued", WORKING: "working", DONE: "done", FAILED: "failed", SKIPPED: "skipped" };
+const FSM_MARK = { ready: "·", queued: "…", working: "⏳", done: "✓", failed: "✗", skipped: "—", idle: "·" };
+const PIPE = {
+  atts: [],      // 本轮发送的附件实例（输入区 attachments 的浅拷贝）
+  textSt: FSM.READY,
+  stages: {},    // stage key → 状态（stt / video / image / chat）
+  notes: {},     // stage key → 备注（失败原因 / 跳过原因，chip 与进度条 title 展示）
+  visible: false,
+};
+/// 流水线阶段定义：顺序即「模型问答串行流」的顺序
+const PIPE_STAGES = [
+  { key: "text",  icon: "📝", label: "文本" },
+  { key: "stt",   icon: "🎙", label: "语音识别" },
+  { key: "video", icon: "🎬", label: "视频理解" },
+  { key: "image", icon: "🖼", label: "图片理解" },
+  { key: "chat",  icon: "💬", label: "生成回答" },
+];
+/// 附件状态机迁移：改状态 → 重渲染 chip + 进度条（note 仅失败/跳过时用于 title 提示）
+function fsmSet(att, st, note) {
+  if (!att) return;
+  att.st = st; att.stNote = note || "";
+  renderAttachments();
+  pipeRender();
+}
+/// 阶段（stt/video/image/chat）状态迁移 + 进度条刷新
+function pipeSet(stage, st, note) {
+  PIPE.stages[stage] = st;
+  if (note) PIPE.notes[stage] = note; else delete PIPE.notes[stage];
+  pipeRender();
+}
+/// 文本阶段迁移（文本无附件实例，状态直接记在 PIPE.textSt）
+function pipeText(st) { PIPE.textSt = st; pipeRender(); }
+/// 渲染 pipe-bar：只展示与本轮相关的阶段（无音频则隐藏语音阶段），文本与回答恒显示
+function pipeRender() {
+  const bar = $("pipe-bar");
+  if (!bar) return;
+  if (!PIPE.visible) { bar.hidden = true; bar.innerHTML = ""; return; }
+  const hasKind = (k) => PIPE.atts.some(a => a.kind === k);
+  const show = PIPE_STAGES.filter(s =>
+    s.key === "text" || s.key === "chat" ||
+    (s.key === "stt" && hasKind("audio")) || (s.key === "video" && hasKind("video")) || (s.key === "image" && hasKind("image")));
+  const stOf = (k) => (k === "text" ? PIPE.textSt : (PIPE.stages[k] || "idle"));
+  bar.innerHTML = show.map((s, i) => {
+    const st = stOf(s.key);
+    const note = s.key !== "text" ? (PIPE.notes[s.key] || "") : "";
+    const tip = note ? ` title="${esc(note)}"` : "";
+    return `<span class="pipe-st" data-st="${st}" data-stage="${s.key}"${tip}><span class="pipe-ic">${s.icon}</span>${s.label}<span class="pipe-mk">${FSM_MARK[st] || "·"}</span></span>`
+      + (i < show.length - 1 ? `<span class="pipe-sep">›</span>` : "");
+  }).join("");
+  bar.hidden = false;
+}
+/// 发送收尾（成功 / 失败 / 中止都走这里）：进度条收起。
+/// keepSt=true（失败路径）：附件 chip 保留失败徽标——用户看得见是哪个附件拖了后腿；
+/// 成功路径清掉徽标，下一轮从"就绪"重新开始。
+function pipeDone(keepSt) {
+  PIPE.visible = false;
+  PIPE.textSt = FSM.READY; PIPE.stages = {}; PIPE.notes = {};
+  if (!keepSt) for (const a of PIPE.atts) { delete a.st; delete a.stNote; }
+  renderAttachments();
+  pipeRender();
+}
 /// 构造发给网关的 content：
-/// - 图片 → OpenAI vision parts（image_url = data URL），需渠道模型支持视觉（如 GLM-4V / Qwen-VL）
-/// - 其他文件（视频/PDF/文档等）→ 文字说明附在正文前（网关无文档解析端点）
+/// - 图片有 dataUrl 且**无理解结果**（a.desc）→ OpenAI vision parts 直连（需渠道模型支持视觉）
+/// - 附件带 a.desc（发送流水线的画面理解产出）→ 「[图片/视频 xxx 理解：…]」文字注记——
+///   主模型无视觉能力时图片走这条降级路；视频始终走这条（帧描述）
+/// - 其他文件（PDF/文档等）→ 「[附件: 名字]」文字说明
 /// - 刷新后丢失 dataUrl 的图片降级为文字说明
 function buildApiContent(m) {
   const atts = m.attachments || [];
   if (!atts.length) return m.content || "";
-  const images = atts.filter(a => a.kind === "image" && a.dataUrl);
-  const notes = atts.filter(a => !(a.kind === "image" && a.dataUrl))
-    .map(a => `[附件: ${a.name}${a.size ? `（${fmtSize(a.size)}）` : ""}]`);
+  const directImgs = atts.filter(a => a.kind === "image" && a.dataUrl && !a.desc);
+  const notes = atts.filter(a => !(a.kind === "image" && a.dataUrl && !a.desc))
+    .map(a => a.desc
+      ? `[${a.kind === "image" ? "图片" : a.kind === "video" ? "视频" : "附件"} ${a.name} 理解：${a.desc}]`
+      : `[附件: ${a.name}${a.size ? `（${fmtSize(a.size)}）` : ""}]`);
   let text = m.content || "";
   if (notes.length) text = text ? notes.join("\n") + "\n" + text : notes.join("\n");
-  if (!images.length) return text;
+  if (!directImgs.length) return text;
   const parts = [];
   if (text) parts.push({ type: "text", text });
-  for (const im of images) parts.push({ type: "image_url", image_url: { url: im.dataUrl } });
+  for (const im of directImgs) parts.push({ type: "image_url", image_url: { url: im.dataUrl } });
   return parts;
 }
 
@@ -6178,6 +6257,7 @@ const WF = {
       this.h = {
         usage: load(WF_SEED_USAGE), title: load(WF_SEED_TITLE),
         format: load(WF_SEED_FORMAT), memory: load(WF_SEED_MEMORY),
+        send: load(WF_SEED_SEND),
       };
       this.ex = ex;
       return ex;
@@ -6283,7 +6363,7 @@ async function wfDrive(ex, handle, eventJson, plugin) {
   }
 }
 
-// ---- 4 个工作流种子（单步 DAG；事件名统一 chat.completed；模板指向 /event/*） ----
+// ---- 5 个工作流种子（前 4 条单步 DAG 回答后触发；send 为三步串行 DAG，发送时触发） ----
 const WF_SEED_USAGE = JSON.stringify({ id: "usage_tally", version: 1, trigger: { event: "chat.completed" },
   steps: [{ id: "tally", plugin: "wf.usage_tally", input: { total: "${/event/usage/total_tokens}", convoId: "${/event/convoId}", answers: "${/event/answers}", model: "${/event/model}" } }] });
 const WF_SEED_TITLE = JSON.stringify({ id: "auto_title", version: 1, trigger: { event: "chat.completed" },
@@ -6292,6 +6372,17 @@ const WF_SEED_FORMAT = JSON.stringify({ id: "content_format", version: 1, trigge
   steps: [{ id: "fmt", plugin: "wf.content_format", input: { thumb: "${/event/cfg/thumb}", vw: "${/event/cfg/vw}", vh: "${/event/cfg/vh}" } }] });
 const WF_SEED_MEMORY = JSON.stringify({ id: "memory_update", version: 1, trigger: { event: "chat.completed" },
   steps: [{ id: "mem", plugin: "wf.memory_update", input: { convoId: "${/event/convoId}", total: "${/event/usage/total_tokens}" } }] });
+// 发送流水线（send.start）：音频 STT → 视频理解 → 图片理解，depends_on 链保证**串行**——
+// 内核每一步只在全部依赖完成后变就绪（take_ready），wfDrive 顺序驱动，天然串行流。
+// 第④步「生成回答」不是 DAG 步——它是 sendWith 的主聊天链路（流式），由 pipe-bar 的
+// chat 阶段反映状态（streamBegin/streamEnd/中止）。
+// input.sid 供 Host 侧分派（内核 ready 步只回 {id,input}，无 plugin 字段，同 model_probe 模式）。
+const WF_SEED_SEND = JSON.stringify({ id: "send_pipeline", version: 1, trigger: { event: "send.start" },
+  steps: [
+    { id: "stt",   plugin: "wf.send_stt",   depends_on: [],       input: { sid: "stt",   atts: "${/event/atts}" } },
+    { id: "video", plugin: "wf.send_video", depends_on: ["stt"],   input: { sid: "video", atts: "${/event/atts}" } },
+    { id: "image", plugin: "wf.send_image", depends_on: ["video"], input: { sid: "image", atts: "${/event/atts}", direct: "${/event/imageDirect}" } },
+  ] });
 
 // ---- 4 个插件：真实副作用都在这里（IDB / LLM / CSS 变量） ----
 const WF_PLUGINS = {
@@ -6381,6 +6472,238 @@ const WF_PLUGINS = {
     return { ok: true, state: c.memfsm.state, didSummarize };
   },
 };
+
+// ================= 发送流水线（send.start）：文本 → 语音 → 视频 → 图片 →（聊天回答）=================
+// 按下发送键后由 runSendPipeline 驱动：WASM 内核 DAG 保证 stt→video→image 串行，
+// 每个附件实例走 MediaFSM 状态机（fsmSet），pipe-bar 实时反映整条流水线。
+// 「生成回答」是 sendWith 的主聊天链路（流式），不占 DAG 步，由 pipeFinishChat 收尾。
+
+/// 视频按时间比例抽一帧 → jpeg dataUrl（本地 video+canvas，不上传原文件）。
+/// ratio 0~1；width 为理解分辨率（海报用低分辨率、理解用高分辨率）。失败/超时返回 null。
+function videoFrameAt(file, ratio, width) {
+  return new Promise(res => {
+    let v;
+    try { v = document.createElement("video"); } catch { return res(null); }
+    let url;
+    try { url = URL.createObjectURL(file); } catch { return res(null); }
+    const finish = (frame) => { try { URL.revokeObjectURL(url); } catch {} try { v.pause(); v.src = ""; } catch {} res(frame); };
+    const timer = setTimeout(() => finish(null), 8000);
+    v.muted = true; v.playsInline = true; v.preload = "metadata";
+    v.onloadeddata = () => {
+      try { v.currentTime = Math.max(0.05, Math.min((v.duration || 1) * ratio, (v.duration || 1) - 0.05)); }
+      catch { clearTimeout(timer); finish(null); }
+    };
+    v.onseeked = () => {
+      clearTimeout(timer);
+      try {
+        const vw = v.videoWidth || 0, vh = v.videoHeight || 0;
+        if (!vw || !vh) return finish(null);
+        const w = width || 200, h = Math.max(1, Math.round(w * vh / vw));
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(v, 0, 0, w, h);
+        finish(c.toDataURL("image/jpeg", 0.72));
+      } catch { finish(null); }
+    };
+    v.onerror = () => { clearTimeout(timer); finish(null); };
+    v.src = url;
+  });
+}
+/// 视频首帧海报（附件缩略图用）——低分辨率，抽帧失败只留播放器
+function videoPoster(file) { return videoFrameAt(file, 0.02, 200); }
+/// 视频理解抽帧：按给定比例列表**顺序**抽帧（避免多视频元素并发吃内存），返回 dataUrl 数组。
+/// 默认首/中/尾三点（0.1/0.5/0.9），理解分辨率 480px。
+async function videoFrames(file, ratios) {
+  const out = [];
+  for (const r of (ratios || [0.1, 0.5, 0.9])) {
+    const f = await videoFrameAt(file, r, 480);
+    if (f) out.push(f);
+  }
+  return out;
+}
+
+/// 视觉理解调用：图片（dataUrl 列表）以 vision parts 发网关 chat 端点——
+/// payload 含 image_url 时网关自动按 vision 能力选路（want_kind=vision）。
+/// 非流式拿 content。返回 { ok, text } / { ok:false, error }，绝不 throw。
+async function wfVisionDescribe(images, prompt, model) {
+  if (!images || !images.length) return { ok: false, error: "无图片" };
+  const parts = [{ type: "text", text: prompt }];
+  for (const im of images) parts.push({ type: "image_url", image_url: { url: im.dataUrl } });
+  const body = { messages: [{ role: "user", content: parts }], stream: false };
+  if (model) body.model = model;
+  try {
+    const h = gwHeaders({ "Content-Type": "application/json" });
+    const resp = await fetch("/v1/chat/completions", { method: "POST", headers: h, body: JSON.stringify(body) });
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok) return { ok: false, error: j.error?.message || ("HTTP " + resp.status) };
+    const text = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+    return { ok: true, text: String(text).trim() };
+  } catch (e) { return { ok: false, error: (e && e.message) || String(e) }; }
+}
+
+/// 指定模型是否具备视觉能力（图片「直连 vs 预描述」决策用）。
+/// 空模型 = 自动模式：网关按 payload 能力选路，池内有可用视觉模型即可直连。
+function modelHasVision(name) {
+  const pool = modelsByCap("vision");
+  if (!name) return pool.length > 0;
+  return pool.some(m => m.name === name);
+}
+
+// ---- 发送流水线插件（wfDrive 以函数形式传入，按 input.sid 分派）----
+// 所有分支**绝不 throw**：失败以 { ok:false } 作为正常输出回报（complete 而非 fail），
+// 任一步失败不会杀死整条 run——降级策略由 sendWith / buildApiContent 依附件状态决定。
+async function wfSendPlugin(inp) {
+  const sid = inp && inp.sid;
+  if (sid === "stt") return pipeStt(inp);
+  if (sid === "video") return pipeVideo(inp);
+  if (sid === "image") return pipeImage(inp);
+  return { skipped: true };
+}
+
+/// ① 语音识别：音频附件逐个走 /v1/audio/transcriptions（与麦克风同链路），
+/// 识别文本进 PIPE.sttText。部分失败继续（能转几段转几段）；全部失败才 ok:false
+/// → runSendPipeline throw，sendWith 回填输入框（与历史行为一致）。
+async function pipeStt(inp) {
+  const atts = (PIPE.atts || []).filter(a => a.kind === "audio");
+  if (!atts.length) { pipeSet("stt", FSM.SKIPPED, "无音频附件"); return { skipped: true, text: "" }; }
+  pipeSet("stt", FSM.WORKING);
+  setVoiceBusy(true);
+  let spoken = ""; const failed = [];
+  try {
+    for (const a of atts) {
+      fsmSet(a, FSM.WORKING, "语音识别中…");
+      try {
+        const t = await transcribeBlob(a.file, a.name);
+        spoken += (spoken ? " " : "") + t;
+        fsmSet(a, FSM.DONE, t ? ("已转写：" + t.slice(0, 40)) : "无语音内容");
+      } catch (e) {
+        failed.push(a.name);
+        fsmSet(a, FSM.FAILED, "识别失败：" + ((e && e.message) || e));
+      }
+    }
+  } finally { setVoiceBusy(false); }
+  PIPE.sttText = spoken;
+  if (!spoken) {
+    pipeSet("stt", FSM.FAILED, "全部识别失败：" + failed.join("、"));
+    return { ok: false, error: "语音识别失败", text: "", failed };
+  }
+  pipeSet("stt", FSM.DONE, failed.length ? `部分失败：${failed.join("、")}` : "");
+  return { ok: true, text: spoken, failed };
+}
+
+/// ② 视频理解：首/中/尾 3 帧 → 视觉模型描述 → 写入 a.desc（buildApiContent 渲染为
+/// 「[视频 xxx 理解：…]」注记）。视频从不直发 video_url——帧描述是池内唯一稳妥路径。
+async function pipeVideo(inp) {
+  const atts = (PIPE.atts || []).filter(a => a.kind === "video");
+  if (!atts.length) { pipeSet("video", FSM.SKIPPED, "无视频附件"); return { skipped: true }; }
+  pipeSet("video", FSM.WORKING);
+  // 视频模型 › 视觉模型 › 留空自动（网关按 vision 能力选路）
+  const model = (voiceCfg.videoModel || voiceCfg.visionModel || "");
+  let okN = 0; const failed = [];
+  for (const a of atts) {
+    fsmSet(a, FSM.WORKING, "抽帧理解中…");
+    try {
+      const frames = await videoFrames(a.file, [0.1, 0.5, 0.9]);
+      if (!frames.length) throw new Error("抽帧失败");
+      const r = await wfVisionDescribe(frames,
+        `这是同一个视频按时间顺序抽取的 ${frames.length} 帧画面。请用中文简要描述视频的主要内容、场景与变化，200 字以内，只输出描述。`, model);
+      if (!r.ok || !r.text) throw new Error(r.error || "视觉模型无返回");
+      a.desc = r.text;
+      fsmSet(a, FSM.DONE, "已理解（" + frames.length + " 帧）：" + r.text.slice(0, 40));
+      okN++;
+    } catch (e) {
+      failed.push(a.name);
+      fsmSet(a, FSM.FAILED, "理解失败，降级为文件名：" + ((e && e.message) || e));
+    }
+  }
+  if (!okN) { pipeSet("video", FSM.FAILED, "全部理解失败：" + failed.join("、")); return { ok: false, failed }; }
+  pipeSet("video", FSM.DONE, failed.length ? `部分失败：${failed.join("、")}` : "");
+  return { ok: true, described: okN, failed };
+}
+
+/// ③ 图片理解（智能混合的降级路径）：direct=true 时整步跳过——图片以 vision parts
+/// 随主请求直发视觉模型；direct=false（主模型无视觉能力）才逐张预描述成文字。
+async function pipeImage(inp) {
+  const atts = (PIPE.atts || []).filter(a => a.kind === "image");
+  if (!atts.length) { pipeSet("image", FSM.SKIPPED, "无图片附件"); return { skipped: true }; }
+  if (inp && inp.direct) {
+    for (const a of atts) fsmSet(a, FSM.SKIPPED, "直连视觉模型（vision parts 随主请求发送）");
+    pipeSet("image", FSM.SKIPPED, "图片直连视觉模型");
+    return { skipped: "direct" };
+  }
+  pipeSet("image", FSM.WORKING);
+  // 降级专用视觉模型：设置里配了用配的；留空 = 网关按能力自动选路
+  const model = voiceCfg.visionModel || "";
+  let okN = 0; const failed = [];
+  for (const a of atts) {
+    if (!a.dataUrl) { failed.push(a.name); fsmSet(a, FSM.FAILED, "无图片数据，降级为文件名"); continue; }
+    fsmSet(a, FSM.WORKING, "视觉理解中…");
+    try {
+      const r = await wfVisionDescribe([a], "请用中文简要描述这张图片的关键内容，100 字以内，只输出描述。", model);
+      if (!r.ok || !r.text) throw new Error(r.error || "视觉模型无返回");
+      a.desc = r.text;
+      fsmSet(a, FSM.DONE, "已理解：" + r.text.slice(0, 40));
+      okN++;
+    } catch (e) {
+      failed.push(a.name);
+      fsmSet(a, FSM.FAILED, "理解失败，降级为文件名：" + ((e && e.message) || e));
+    }
+  }
+  if (!okN) { pipeSet("image", FSM.FAILED, "全部理解失败：" + failed.join("、")); return { ok: false, failed }; }
+  pipeSet("image", FSM.DONE, failed.length ? `部分失败：${failed.join("、")}` : "");
+  return { ok: true, described: okN, failed };
+}
+
+/// 发送流水线编排（sendWith 第一步）：初始化 MediaFSM → 驱动 send_pipeline DAG。
+/// 返回 { sttText, imageDirect }；音频全部识别失败时 throw（sendWith 回填输入框）。
+/// 无附件直接返回（不加载内核）；内核不可用则按同一顺序直调三个 pipe*（功能不依赖 wasm）。
+async function runSendPipeline(text, atts) {
+  const out = { sttText: "", imageDirect: false };
+  if (!atts || !atts.length) return out;
+  PIPE.gen = (PIPE.gen || 0) + 1;
+  PIPE.atts = atts;
+  for (const a of atts) { a.st = FSM.READY; delete a.desc; }
+  PIPE.textSt = FSM.QUEUED; PIPE.stages = {}; PIPE.notes = {};
+  PIPE.visible = true;
+  renderAttachments(); pipeRender();
+  // 图片路由决策（智能混合）：主请求 effective 模型有视觉能力 → 直连 vision parts；
+  // 否则走「视觉模型预描述」降级。effective = 多媒体模型 › 用户显式选择 › 自动（空）。
+  const hasImg = atts.some(a => a.kind === "image");
+  const effModel = pickMmModel(true) || curModel || "";
+  out.imageDirect = hasImg ? modelHasVision(effModel) : false;
+  const ex = await WF.ensure();
+  try {
+    if (ex && WF.h.send) {
+      const event = {
+        event: "send.start",
+        atts: atts.map(a => ({ kind: a.kind, name: a.name, size: a.size || 0 })),
+        imageDirect: out.imageDirect,
+        text: (text || "").slice(0, 500),
+      };
+      await wfDrive(ex, WF.h.send, event, wfSendPlugin);
+    } else {
+      // 内核降级链：顺序与 DAG 的 depends_on 一致（串行语义不打折）
+      await pipeStt({ atts });
+      await pipeVideo({ atts });
+      await pipeImage({ atts, direct: out.imageDirect });
+    }
+  } catch (e) { console.warn("发送流水线异常（已降级为直发）:", e); }
+  if (PIPE.stages.stt === FSM.FAILED) {
+    throw new Error((PIPE.notes.stt || "语音识别失败"));
+  }
+  out.sttText = PIPE.sttText || "";
+  PIPE.textSt = FSM.DONE;
+  pipeRender();
+  return out;
+}
+
+/// ⑤生成回答阶段收尾：成功 ✓ / 失败 ✗，1.2s 后整条进度条收起（pipeDone）。
+/// gen 守卫：期间用户又发了一条，旧超时不再收起新流水线。
+function pipeFinishChat(ok) {
+  const g = PIPE.gen || 0;
+  pipeSet("chat", ok ? FSM.DONE : FSM.FAILED);
+  setTimeout(() => { if ((PIPE.gen || 0) === g) pipeDone(); }, 1200);
+}
 
 // 回答结束后入口（sendWith 的 finally 调用）。异步、失败静默、不阻塞 UI。
 async function wfAfterAnswer(c, convoId, asst, fullText, atts) {
