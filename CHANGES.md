@@ -1,4 +1,21 @@
-## v0.19.31（本版）—— 底部信息行紧密化 + SKILL 管理四项 UI 优化
+## v0.19.32（本版）—— CORS：公共 API 跨域放行（保证 API 的能力）
+
+> 需求来源（用户 2026-10-21）：「做个伪造 cros 的实现可以不」→「试下 保证 API 的能力」。
+> 关键结论：不做「反射 Origin + credentials」的危险形态，只做 `Allow-Origin: *`（/v1 用 Bearer token、不依赖 cookie，任意站点带调用者自己的 key 即可调——OpenAI 兼容端点标准做法）。
+
+### 实现
+- **`cors_origin(path)`**：仅 `/v1/*` 返回 `Some("*")`；`/admin/*`、`/`、`/health`、`/s` 返回 `None`（同源）——管理面误开 `*` 等于任意页面可带 token 打管理接口，这条是安全线。
+- **预检 `OPTIONS /v1/*`**：`preflight_response()` → 204 + `Allow-Origin: *` + `Allow-Methods: GET, POST, OPTIONS` + `Allow-Headers`（`Authorization, Content-Type, x-device-keys, x-admin-token, x-gw-features`）+ `Max-Age: 86400` + `Expose-Headers` + `Vary`。允许头必须含自定义头——漏 `x-gw-features` 的话「深度思考/智能搜索」跨域请求会在预检被拒，表现为「开关点了没效果」。
+- **统一注入**：`main` 拆为 `main`（预检 → `dispatch` → `with_cors`）+ `dispatch`（原路由主体）。所有出口（成功/错误/404/SSE 流）在 `with_cors` 一处加头，避免逐条 `return` 漏加。
+- **`EXPOSE_HEADERS`**：`x-gateway-model, x-gateway-attempts, x-gateway-channel, x-gateway-model-unavailable, x-gateway-degraded, x-gateway-version` 六个诊断头——跨域 JS 只能读 expose 白名单里的响应头，不列出来则模型/渠道/降级徽章全部失效。
+- SSE 跨域：`fetch + ReadableStream` 可用（不受 `EventSource` 不能带自定义头限制），响应头由同一出口带上。
+
+### 测试
+- 单测：32 → **34/34**（`cors_scope_only_public_api` 边界八例、`expose_headers_cover_diagnostics` 六头齐全）
+- e2e：693 → **710/710**（+17：预检 204/方法/自定义头/设备头/max-age、正式响应 allow-origin 与三个 expose 关键头、管理面/页面/health 三条「无 CORS」反向断言、源码边界与单测存在性）
+- **浏览器真跨域实测**：`http://127.0.0.1:8900`（静态页）→ `http://127.0.0.1:8787/v1/chat/completions`，带 `x-gw-features: think` 自定义头 → 预检通过、`status=200`、`x-gateway-model=glm-test-text` 与 `x-gateway-channel` 均可读（expose 生效）——证明 API 的跨域能力完整可用。
+
+## v0.19.31 —— 底部信息行紧密化 + SKILL 管理四项 UI 优化
 
 > 需求来源（用户 2026-10-21）：①「底部文本与网络状态表达不够紧密 占位高度要缩小」；② SKILL 管理四项（说明收进「？」浮层 / 分类标签一体化 / 标签栏加高 + 默认态色彩 / 依附区动效与 toast 上移）。
 

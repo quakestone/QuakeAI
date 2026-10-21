@@ -1689,6 +1689,56 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let path = req.path();
     let method = req.method();
+    // ---- v0.19.32 CORS（公共 API 放行）----
+    // 预检先行：/v1/* 允许任意来源（/v1 用 Bearer token 鉴权、不依赖 cookie，
+    // 任意站点带调用者自己的 key 即可调用——OpenAI 兼容端点标准做法）。
+    // 管理面 /admin/* 与页面保持同源，不开 CORS。
+    if method == Method::Options && path.starts_with("/v1/") {
+        return preflight_response();
+    }
+    let resp = dispatch(req, env).await?;
+    Ok(with_cors(resp, &path))
+}
+
+/// 公共 API 的 CORS 允许来源：仅 /v1/*。管理面与页面返回 None（同源）。
+fn cors_origin(path: &str) -> Option<&'static str> {
+    if path.starts_with("/v1/") { Some("*") } else { None }
+}
+
+/// 诊断头必须 expose：跨域 JS 只能读 CORS 白名单内的响应头——不列出来，
+/// 「模型 / 渠道 / 降级 / 版本」这些徽章会全部失效（表现为跨域调用后 UI 空白）。
+const EXPOSE_HEADERS: &str = "x-gateway-model, x-gateway-attempts, x-gateway-channel, x-gateway-model-unavailable, x-gateway-degraded, x-gateway-version";
+
+/// 给响应统一附 CORS 头（成功 / 错误 / 404 / SSE 流都覆盖——SSE 跨域用
+/// fetch + ReadableStream，不受 EventSource 不能用自定义头限制）。
+fn with_cors(mut resp: Response, path: &str) -> Response {
+    if let Some(origin) = cors_origin(path) {
+        let h = resp.headers_mut();
+        let _ = h.set("Access-Control-Allow-Origin", origin);
+        let _ = h.set("Access-Control-Expose-Headers", EXPOSE_HEADERS);
+    }
+    resp
+}
+
+/// OPTIONS 预检：一次性告知方法/头/缓存时长，省掉后续每次请求的预检往返。
+/// 允许的头必须包含自定义头（x-gw-features / x-device-keys）——漏掉的话带
+/// 「深度思考 / 智能搜索」或设备 Key 的跨域请求会在预检阶段被浏览器直接拒。
+fn preflight_response() -> Result<Response> {
+    let h = worker::Headers::new();
+    h.set("Access-Control-Allow-Origin", "*")?;
+    h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")?;
+    h.set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-device-keys, x-admin-token, x-gw-features")?;
+    h.set("Access-Control-Max-Age", "86400")?;
+    h.set("Access-Control-Expose-Headers", EXPOSE_HEADERS)?;
+    h.set("Vary", "Origin, Access-Control-Request-Headers")?;
+    Ok(Response::empty()?.with_status(204).with_headers(h))
+}
+
+/// 路由分派（原 main 主体）：与 CORS 注入解耦——所有出口（含 404 / 错误）
+/// 统一在 main 里包一层 with_cors，避免逐条 return 漏加头。
+async fn dispatch(req: Request, env: Env) -> Result<Response> {
+    let path = req.path();
+    let method = req.method();
 
     // 管理页 / 管理面
     if path == "/" {
@@ -2280,5 +2330,34 @@ mod tests {
             !super::want_feature("thinking", "think"),
             "整段精确匹配，thinking 不等于 think"
         );
+    }
+
+    /// CORS 放行范围（v0.19.32）：只有公共 API /v1/* 开 `*`，管理面与页面同源。
+    /// 这条边界是安全线——管理面若误开 `*`，任意页面都能带着 x-admin-token 打管理接口。
+    #[test]
+    fn cors_scope_only_public_api() {
+        assert_eq!(super::cors_origin("/v1/chat/completions"), Some("*"));
+        assert_eq!(super::cors_origin("/v1/audio/speech"), Some("*"));
+        assert_eq!(super::cors_origin("/v1/audio/transcriptions"), Some("*"));
+        assert_eq!(super::cors_origin("/admin/api/channels"), None);
+        assert_eq!(super::cors_origin("/admin"), None);
+        assert_eq!(super::cors_origin("/"), None);
+        assert_eq!(super::cors_origin("/health"), None);
+        assert_eq!(super::cors_origin("/s"), None);
+    }
+
+    /// expose 列表必须覆盖前端依赖的六个诊断头——漏一个对应徽章就跨域失效。
+    #[test]
+    fn expose_headers_cover_diagnostics() {
+        for h in [
+            "x-gateway-model",
+            "x-gateway-attempts",
+            "x-gateway-channel",
+            "x-gateway-model-unavailable",
+            "x-gateway-degraded",
+            "x-gateway-version",
+        ] {
+            assert!(super::EXPOSE_HEADERS.contains(h), "expose 缺 {h}");
+        }
     }
 }

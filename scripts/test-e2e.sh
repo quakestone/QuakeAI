@@ -1410,6 +1410,32 @@ echo "$UI" | grep -q '#toast { position: fixed; left: 50%; transform: translateX
 echo "$UI" | grep -q 'flex-direction: column-reverse; gap: 8px; z-index: 60;'; check "6 新消息贴最上" $? "no reverse"
 echo "$UI" | grep -q '@keyframes tin { from { transform: translateY(-8px); opacity: 0; } }'; check "6 toast 从上方滑入" $? "no top anim"
 
+echo "== 34. v0.19.32 CORS：公共 API 放行 + 管理面同源 =="
+# —— 预检（OPTIONS）：204 + 方法/头/缓存时长/expose ——
+H=$(curl -s -D- -o /dev/null -X OPTIONS http://127.0.0.1:8787/v1/chat/completions -H 'Origin: https://example.com' -H 'Access-Control-Request-Method: POST')
+echo "$H" | grep -q '204 No Content'; check "1 预检返回 204" $? "not 204"
+echo "$H" | grep -qi 'access-control-allow-origin: \*'; check "1 预检 Allow-Origin *" $? "no allow-origin"
+echo "$H" | grep -qi 'access-control-allow-methods: GET, POST, OPTIONS'; check "1 预检允许方法" $? "no methods"
+echo "$H" | grep -qi 'x-gw-features'; check "1 预检允许自定义头 x-gw-features" $? "no custom header"
+echo "$H" | grep -qi 'x-device-keys'; check "1 预检允许设备 Key 头" $? "no device header"
+echo "$H" | grep -qi 'access-control-max-age: 86400'; check "1 预检缓存 24h（省往返）" $? "no max-age"
+# —— 正式请求：Allow-Origin + expose 六个诊断头 ——
+P=$(curl -s -D- -o /dev/null -X POST http://127.0.0.1:8787/v1/chat/completions -H 'Origin: https://example.com' -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"hi"}]}')
+echo "$P" | grep -qi 'access-control-allow-origin: \*'; check "2 正式响应 Allow-Origin *" $? "no allow-origin"
+echo "$P" | grep -qi 'access-control-expose-headers:.*x-gateway-model'; check "2 expose 模型诊断头" $? "no expose model"
+echo "$P" | grep -qi 'x-gateway-attempts'; check "2 expose 尝试链头" $? "no expose attempts"
+echo "$P" | grep -qi 'x-gateway-degraded'; check "2 expose 降权头" $? "no expose degraded"
+# —— 管理面 / 页面 / 健康检查保持同源（安全线）——
+for p in /admin/api/channels / /health; do
+  N=$(curl -s -D- -o /dev/null "http://127.0.0.1:8787$p" | grep -ci 'access-control' || true)
+  [ "$N" = "0" ]; check "3 $p 无 CORS 头（同源）" $? "got $N"
+done
+# —— 源码：边界与单测 ——
+grep -q 'fn cors_origin(path: &str) -> Option<&.static str>' src/lib.rs; check "4 放行范围函数" $? "no cors_origin"
+grep -q 'if path.starts_with("/v1/") { Some("\*") } else { None }' src/lib.rs; check "4 仅 /v1/* 放行" $? "scope wrong"
+grep -q 'fn cors_scope_only_public_api' src/lib.rs; check "4 边界单测（管理面不开）" $? "no scope test"
+grep -q 'fn expose_headers_cover_diagnostics' src/lib.rs; check "4 expose 完整性单测" $? "no expose test"
+
 echo
 echo "结果: PASS=$PASS FAIL=$FAIL"
 kill $MOCK_PID 2>/dev/null
