@@ -1,0 +1,634 @@
+{
+  "exported_at": "2026-10-21T17:54:09.006Z",
+  "note": "api_key 均为掩码，不含明文",
+  "channels": [
+    {
+      "api_key": "",
+      "api_key_masked": "9f1***qVph",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "caps": [],
+      "created_at": "2026-10-19T10:56:36.346Z",
+      "enabled": true,
+      "health": {
+        "cooldown_until_ms": null,
+        "fail_count": 25,
+        "last_check": "2026-10-21T16:16:20.041Z",
+        "last_error": null,
+        "latency_ms": 39001,
+        "status": "healthy"
+      },
+      "id": "seed-zhipu-chat",
+      "kind": "chat",
+      "models": [
+        "glm-4-flash",
+        "glm-4.7-flash",
+        "glm-4-plus"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T16:15:13.003Z",
+            "last_error": null,
+            "latency_ms": 2953,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "glm-4-flash",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T16:16:20.041Z",
+            "last_error": null,
+            "latency_ms": 39001,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "glm-4.7-flash",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T14:05:51.435Z",
+            "last_error": null,
+            "latency_ms": 747,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "glm-4-plus",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        }
+      ],
+      "name": "智谱 GLM 主线",
+      "note": "国内 T0 主力；新用户 2000 万 Token。登记 Key 后启用。",
+      "priority": 100,
+      "provider": "zhipu",
+      "tier": "T0",
+      "updated_at": "2026-10-19T21:46:13.730Z"
+    },
+    {
+      "api_key": "",
+      "api_key_masked": "9f1***qVph",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "caps": [],
+      "created_at": "2026-10-19T10:56:36.346Z",
+      "enabled": true,
+      "health": {
+        "cooldown_until_ms": 1792580922943,
+        "fail_count": 67,
+        "last_check": "2026-10-21T11:03:42.943Z",
+        "last_error": "HTTP 429",
+        "latency_ms": 204,
+        "status": "degraded"
+      },
+      "id": "seed-zhipu-audio",
+      "kind": "audio",
+      "models": [
+        "glm-4-voice"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": 1792580922943,
+            "fail_count": 28,
+            "last_check": "2026-10-21T11:03:42.943Z",
+            "last_error": "HTTP 429",
+            "latency_ms": 324,
+            "status": "degraded"
+          },
+          "kind": "stt",
+          "name": "glm-asr-2512",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        }
+      ],
+      "name": "智谱音频 GLM-4-Voice",
+      "note": "音频转写；与主线同 Key。登记 Key 后启用。",
+      "priority": 80,
+      "provider": "zhipu",
+      "tier": "T2",
+      "updated_at": "2026-10-19T12:24:45.508Z"
+    },
+    {
+      "api_key": "",
+      "api_key_masked": "sk-***fzay",
+      "base_url": "https://api.siliconflow.cn/v1",
+      "caps": [],
+      "created_at": "2026-10-19T10:56:36.346Z",
+      "enabled": true,
+      "health": {
+        "cooldown_until_ms": null,
+        "fail_count": 13,
+        "last_check": "2026-10-21T14:44:06.508Z",
+        "last_error": null,
+        "latency_ms": 948,
+        "status": "healthy"
+      },
+      "id": "seed-siliconflow-chat",
+      "kind": "chat",
+      "models": [
+        "Qwen/Qwen2.5-7B-Instruct",
+        "Qwen/Qwen3-8B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T14:44:06.508Z",
+            "last_error": null,
+            "latency_ms": 948,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "Qwen/Qwen2.5-7B-Instruct",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-20T21:57:50.826Z",
+            "last_error": null,
+            "latency_ms": 625,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "Qwen/Qwen3-8B",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 7,
+            "last_check": "2026-10-20T21:37:10.048Z",
+            "last_error": "HTTP 403",
+            "latency_ms": null,
+            "status": "degraded"
+          },
+          "kind": "text",
+          "name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 50
+        }
+      ],
+      "name": "硅基流动 SiliconFlow",
+      "note": "国内 OpenAI 兼容；≤10B 模型 0 元永久免费。登记 Key 后启用。",
+      "priority": 90,
+      "provider": "siliconflow",
+      "tier": "T2",
+      "updated_at": "2026-10-19T21:46:54.727Z"
+    },
+    {
+      "api_key": "",
+      "api_key_masked": "sk-***229e",
+      "base_url": "https://openrouter.ai/api/v1",
+      "caps": [
+        "text",
+        "vision"
+      ],
+      "created_at": "2026-10-20T05:12:24.888Z",
+      "enabled": true,
+      "health": {
+        "cooldown_until_ms": null,
+        "fail_count": 27,
+        "last_check": "2026-10-21T16:17:01.476Z",
+        "last_error": null,
+        "latency_ms": 617,
+        "status": "healthy"
+      },
+      "id": "seed-openrouter-chat",
+      "kind": "chat",
+      "models": [
+        "openrouter/free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "qwen/qwen3.8-27b:free",
+        "google/gemma-4-31b-it:free",
+        "cohere/north-mini-code:free"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T05:20:14.668Z",
+            "last_error": null,
+            "latency_ms": 745,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "openrouter/free",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 100
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 5,
+            "last_check": "2026-10-20T21:37:12.300Z",
+            "last_error": "HTTP 400",
+            "latency_ms": 668,
+            "status": "degraded"
+          },
+          "kind": "text",
+          "name": "nvidia/nemotron-3-super-120b-a12b:free",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 90
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 4,
+            "last_check": "2026-10-20T21:37:12.948Z",
+            "last_error": "HTTP 400",
+            "latency_ms": null,
+            "status": "degraded"
+          },
+          "kind": "text",
+          "name": "qwen/qwen3.8-27b:free",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 80
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": 1792593813695,
+            "fail_count": 12,
+            "last_check": "2026-10-21T14:38:33.695Z",
+            "last_error": "HTTP 429",
+            "latency_ms": null,
+            "status": "degraded"
+          },
+          "kind": "vision",
+          "name": "google/gemma-4-31b-it:free",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 70
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T16:17:01.476Z",
+            "last_error": null,
+            "latency_ms": 617,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "cohere/north-mini-code:free",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 60
+        }
+      ],
+      "name": "OpenRouter（海外兜底）",
+      "note": "海外聚合网关，17 个 :free 免卡模型（多数 50/天，部分 1000/天）。国内全挂时兜底；需 Key + 可能需科学上网。避 poolside 10-31 到期。",
+      "priority": 40,
+      "provider": "openrouter",
+      "tier": "T0",
+      "updated_at": "2026-10-20T05:18:09.284Z"
+    },
+    {
+      "api_key": "",
+      "api_key_masked": "gsk***YOyq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "caps": [
+        "text",
+        "vision"
+      ],
+      "created_at": "2026-10-20T05:12:24.888Z",
+      "enabled": true,
+      "health": {
+        "cooldown_until_ms": null,
+        "fail_count": 21,
+        "last_check": "2026-10-20T21:37:15.013Z",
+        "last_error": "HTTP 400",
+        "latency_ms": 162,
+        "status": "degraded"
+      },
+      "id": "seed-groq-chat",
+      "kind": "chat",
+      "models": [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-3.2-11b-vision-preview"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 8,
+            "last_check": "2026-10-20T21:37:14.301Z",
+            "last_error": "HTTP 400",
+            "latency_ms": null,
+            "status": "degraded"
+          },
+          "kind": "text",
+          "name": "llama-3.3-70b-versatile",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 100
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 5,
+            "last_check": "2026-10-20T21:37:15.013Z",
+            "last_error": "HTTP 400",
+            "latency_ms": null,
+            "status": "degraded"
+          },
+          "kind": "text",
+          "name": "llama-3.1-8b-instant",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 90
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 8,
+            "last_check": "2026-10-20T19:42:51.236Z",
+            "last_error": "HTTP 400",
+            "latency_ms": null,
+            "status": "degraded"
+          },
+          "kind": "vision",
+          "name": "llama-3.2-11b-vision-preview",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 70
+        }
+      ],
+      "name": "Groq（海外兜底）",
+      "note": "免费层 14400 RPD / 30 RPM 免卡；极速推理。国内全挂时兜底；需 Key + 可能需科学上网。",
+      "priority": 35,
+      "provider": "groq",
+      "tier": "T1",
+      "updated_at": "2026-10-20T05:26:24.245Z"
+    },
+    {
+      "api_key": "",
+      "api_key_masked": "未登记",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "caps": [
+        "text",
+        "vision"
+      ],
+      "created_at": "2026-10-20T05:12:24.888Z",
+      "enabled": false,
+      "health": {
+        "cooldown_until_ms": null,
+        "fail_count": 0,
+        "last_check": "2026-10-20T05:13:23.891Z",
+        "last_error": "Header of type `authorization` was missing",
+        "latency_ms": 44,
+        "status": "degraded"
+      },
+      "id": "seed-nvidia-chat",
+      "kind": "chat",
+      "models": [
+        "nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        "deepseek-ai/deepseek-v4.1-flash",
+        "meta/llama-3.3-70b-instruct"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": null,
+            "last_error": null,
+            "latency_ms": null,
+            "status": "unknown"
+          },
+          "kind": "text",
+          "name": "nvidia/nemotron-3-ultra-550b-a55b",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 100
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": null,
+            "last_error": null,
+            "latency_ms": null,
+            "status": "unknown"
+          },
+          "kind": "vision",
+          "name": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 70
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": null,
+            "last_error": null,
+            "latency_ms": null,
+            "status": "unknown"
+          },
+          "kind": "text",
+          "name": "deepseek-ai/deepseek-v4.1-flash",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 90
+        },
+        {
+          "alt_kind": "",
+          "currency": "",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": null,
+            "last_error": null,
+            "latency_ms": null,
+            "status": "unknown"
+          },
+          "kind": "text",
+          "name": "meta/llama-3.3-70b-instruct",
+          "price_in_hit": 0,
+          "price_in_miss": 0,
+          "price_out": 0,
+          "priority": 80
+        }
+      ],
+      "name": "NVIDIA NIM（海外兜底）",
+      "note": "约 40 RPM 免卡，100+ 模型。国内全挂时兜底；需 Key + 可能需科学上网。",
+      "priority": 30,
+      "provider": "nvidia",
+      "tier": "T0",
+      "updated_at": "2026-10-20T05:12:24.888Z"
+    },
+    {
+      "api_key": "",
+      "api_key_masked": "sk-***0968",
+      "base_url": "https://api.deepseek.com/v1",
+      "caps": [
+        "text",
+        "vision"
+      ],
+      "created_at": "2026-10-20T13:38:20.015Z",
+      "enabled": true,
+      "health": {
+        "cooldown_until_ms": null,
+        "fail_count": 6,
+        "last_check": "2026-10-21T12:07:18.797Z",
+        "last_error": null,
+        "latency_ms": 297,
+        "status": "healthy"
+      },
+      "id": "seed-deepseek-chat",
+      "kind": "chat",
+      "models": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ],
+      "models_meta": [
+        {
+          "alt_kind": "vision",
+          "currency": "CNY",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T11:02:37.843Z",
+            "last_error": null,
+            "latency_ms": 298,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "deepseek-flash",
+          "price_in_hit": 0.02,
+          "price_in_miss": 1,
+          "price_out": 2,
+          "priority": 100
+        },
+        {
+          "alt_kind": "",
+          "currency": "CNY",
+          "enabled": true,
+          "health": {
+            "cooldown_until_ms": null,
+            "fail_count": 0,
+            "last_check": "2026-10-21T12:07:18.797Z",
+            "last_error": null,
+            "latency_ms": 297,
+            "status": "healthy"
+          },
+          "kind": "text",
+          "name": "deepseek-v4-pro",
+          "price_in_hit": 0.025,
+          "price_in_miss": 3,
+          "price_out": 6,
+          "priority": 90
+        }
+      ],
+      "name": "DeepSeek（国内主力 · 带计价）",
+      "note": "国内主力付费渠道：1M 上下文、OpenAI 兼容。deepseek-flash 为主力低价模型且原生支持 image 输入（text/vision 双能力，纯文本与看图都走它），deepseek-v4-pro 纯文本旗舰。内置单价档案（CNY/百万 token，命中/未命中两段输入计价），每次调用自动折算成本并可导出对齐官方 cost-*.csv 的账单做对账。登记 Key 后启用。",
+      "priority": 70,
+      "provider": "deepseek",
+      "tier": "T1",
+      "updated_at": "2026-10-20T15:22:38.125Z"
+    }
+  ]
+}
