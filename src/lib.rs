@@ -28,9 +28,9 @@
 //!   POST   /v1/audio/transcriptions  multipart 音视频上传（原生解析→裸 bytes→手工重建）
 //!   /admin/*                         管理面 API（见 admin.rs）
 
-use worker::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
+use web_sys::*;
 
 use crate::channels::Channel;
 use crate::channels::ModelMeta;
@@ -39,6 +39,61 @@ mod admin;
 mod channels;
 mod store;
 mod zhipu_jwt;
+
+// ---- 脱钩 Cloudflare Workers：配置改读浏览器 localStorage，Env 仅占位兼容旧签名 ----
+/// 占位类型：保留旧调用点签名（binding / load_channels / store::* 仍收 `&Env`），
+/// 但运行时不再使用——配置一律读 localStorage。
+#[derive(Debug, Clone, Copy)]
+pub struct Env;
+
+/// 轻量错误类型，替代原 worker::Error（仅承载消息文本）。
+#[derive(Debug)]
+pub struct GwError(pub String);
+pub type Result<T> = std::result::Result<T, GwError>;
+impl GwError {
+    pub fn msg(s: impl Into<String>) -> Self {
+        GwError(s.into())
+    }
+}
+impl From<JsValue> for GwError {
+    fn from(e: JsValue) -> GwError {
+        GwError(format!("{:?}", e))
+    }
+}
+impl From<GwError> for JsValue {
+    fn from(e: GwError) -> JsValue {
+        JsValue::from_str(&e.0)
+    }
+}
+impl From<GwError> for web_sys::Response {
+    fn from(e: GwError) -> web_sys::Response {
+        error_response(500, "internal_error", &e.0)
+    }
+}
+
+/// 构造 JSON 错误响应（web_sys::Response），供 WASM 边界把 GwError 转成可返回响应。
+pub(crate) fn error_response(status: u16, code: &str, message: &str) -> web_sys::Response {
+    let body = serde_json::json!({
+        "error": { "code": code, "message": message, "gateway": "zhipu-wasm-gateway" }
+    })
+    .to_string();
+    let init = web_sys::ResponseInit::new();
+    init.set_status(status);
+    if let Ok(h) = web_sys::Headers::new() {
+        let _ = h.set("Content-Type", "application/json; charset=utf-8");
+        let _ = h.set("x-gateway-version", env!("CARGO_PKG_VERSION"));
+        init.set_headers(&h);
+    }
+    web_sys::Response::new_with_opt_str_and_init(Some(&body), &init).unwrap()
+}
+
+/// web_sys File 读裸字节（array_buffer -> Uint8Array -> Vec<u8>）。
+pub(crate) async fn file_array_buffer(file: &web_sys::File) -> Result<Vec<u8>> {
+    let p = file.array_buffer();
+    let buf = wasm_bindgen_futures::JsFuture::from(p).await?;
+    let u8 = js_sys::Uint8Array::new(&buf);
+    Ok(u8.to_vec())
+}
 
 const DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 const DEFAULT_MODEL: &str = "glm-4-flash";
@@ -101,15 +156,13 @@ pub(crate) const COOLDOWN_MS: f64 = 60_000.0;
 // 绑定与通道
 // ---------------------------------------------------------------------------
 
-/// 读取绑定值：先 var（非敏感配置），再 secret（密钥），最后默认值。
-fn binding(env: &Env, name: &str, default: Option<&str>) -> Option<String> {
-    if let Ok(v) = env.var(name) {
-        return Some(v.to_string());
-    }
-    if let Ok(s) = env.secret(name) {
-        return Some(s.to_string());
-    }
-    default.map(|s| s.to_string())
+/// 读取配置值：浏览器 localStorage（脱钩 CF 后替代 worker env 绑定）。
+/// 保持签名兼容，env 参数已废弃不再使用（后续阶段统一去除）。
+fn binding(_env: &Env, name: &str, default: Option<&str>) -> Option<String> {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|ls| ls.get(name).ok().flatten())
+        .or_else(|| default.map(|s| s.to_string()))
 }
 
 /// 静态通道 URL 列表（ZHIPU_CHANNELS JSON 绑定），缺省单通道。
@@ -236,16 +289,15 @@ fn no_candidates_response(want_kind: &str, notes: &[String]) -> Result<Response>
 
 pub(crate) fn json_response(status: u16, value: serde_json::Value) -> Result<Response> {
     let headers = web_sys::Headers::new()
-        .map_err(|e| Error::RustError(format!("headers: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("headers: {e:?}")))?;
     headers
         .set("Content-Type", "application/json")
-        .map_err(|e| Error::RustError(format!("set header: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("set header: {e:?}")))?;
     let init = web_sys::ResponseInit::new();
     init.set_status(status);
     init.set_headers(&headers);
     web_sys::Response::new_with_opt_str_and_init(Some(&value.to_string()), &init)
-        .map(Response::from)
-        .map_err(|e| Error::RustError(format!("build response: {e:?}")))
+        .map_err(|e| GwError::msg(format!("build response: {e:?}")))
 }
 
 pub(crate) fn json_error(status: u16, code: &str, message: &str) -> Result<Response> {
@@ -277,25 +329,6 @@ pub(crate) fn bearer_token(ch: &Channel) -> String {
     ch.api_key.clone()
 }
 
-/// GET /health：证明 WASM Worker 本体在运行
-fn handle_health() -> Result<Response> {
-    json_response(
-        200,
-        serde_json::json!({
-            "status": "ok",
-            "gateway": "zhipu-wasm-gateway",
-            "version": env!("CARGO_PKG_VERSION"),
-            "runtime": "cloudflare-workers-wasm",
-            "features": [
-                "resource-management-admin-ui",
-                "durable-object-channel-ledger",
-                "stream-retry-first-packet",
-                "multipart-audio-video-upload",
-                "cooldown-skip-after-degrade"
-            ]
-        }),
-    )
-}
 
 // ---------------------------------------------------------------------------
 // 上游请求工具
@@ -315,22 +348,22 @@ async fn fetch_channel(
     init.set_body(body);
 
     let web_req = web_sys::Request::new_with_str_and_init(&upstream_url, &init)
-        .map_err(|e| Error::RustError(format!("build upstream request: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("build upstream request: {e:?}")))?;
     for (k, v) in extra_headers {
         web_req
             .headers()
             .set(k, v)
-            .map_err(|e| Error::RustError(format!("set upstream header {k}: {e:?}")))?;
+            .map_err(|e| GwError::msg(format!("set upstream header {k}: {e:?}")))?;
     }
 
     let global = js_sys::global().unchecked_into::<web_sys::WorkerGlobalScope>();
     let promise = global.fetch_with_request(&web_req);
     let resp = wasm_bindgen_futures::JsFuture::from(promise)
         .await
-        .map_err(|e| Error::RustError(format!("fetch failed: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("fetch failed: {e:?}")))?;
     let web_resp: web_sys::Response = resp
         .dyn_into()
-        .map_err(|e| Error::RustError(format!("response cast: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("response cast: {e:?}")))?;
     let status = web_resp.status();
     Ok((status, web_resp))
 }
@@ -344,7 +377,7 @@ async fn read_chunk(reader: &web_sys::ReadableStreamDefaultReader) -> Result<(bo
     let p = reader.read();
     let result = wasm_bindgen_futures::JsFuture::from(p)
         .await
-        .map_err(|e| Error::RustError(format!("read failed: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("read failed: {e:?}")))?;
     let done = js_sys::Reflect::get(&result, &JsValue::from_str("done"))
         .ok()
         .and_then(|v| v.as_bool())
@@ -400,13 +433,12 @@ fn build_restream_response(
     start.forget(); // JS 回调持有期间不能 drop 闭包
 
     let stream = web_sys::ReadableStream::new_with_underlying_source(&underlying)
-        .map_err(|e| Error::RustError(format!("new ReadableStream: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("new ReadableStream: {e:?}")))?;
     let init = web_sys::ResponseInit::new();
     init.set_status(200);
     init.set_headers(headers);
     web_sys::Response::new_with_opt_readable_stream_and_init(Some(&stream), &init)
-        .map(Response::from)
-        .map_err(|e| Error::RustError(format!("build stream response: {e:?}")))
+        .map_err(|e| GwError::msg(format!("build stream response: {e:?}")))
 }
 
 /// HTTP 响应头值只允许 ASCII：中文渠道名/ID 直接塞进头会被浏览器按 Latin-1
@@ -562,7 +594,7 @@ fn diag_headers(
     stream: bool,
 ) -> Result<web_sys::Headers> {
     let h = web_sys::Headers::new()
-        .map_err(|e| Error::RustError(format!("headers: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("headers: {e:?}")))?;
     let attempt_str = attempts.join(";");
     let ch_name = header_safe(&channel.name);
     let ch_attempts = header_safe(&attempt_str);
@@ -588,13 +620,13 @@ fn diag_headers(
         ("x-zhipu-attempts", ch_attempts),
     ] {
         h.set(k, &v)
-            .map_err(|e| Error::RustError(format!("set header {k}: {e:?}")))?;
+            .map_err(|e| GwError::msg(format!("set header {k}: {e:?}")))?;
     }
     h.set("Content-Type", content_type)
-        .map_err(|e| Error::RustError(format!("set content-type: {e:?}")))?;
+        .map_err(|e| GwError::msg(format!("set content-type: {e:?}")))?;
     if stream {
         h.set("Cache-Control", "no-cache")
-            .map_err(|e| Error::RustError(format!("set cache-control: {e:?}")))?;
+            .map_err(|e| GwError::msg(format!("set cache-control: {e:?}")))?;
     }
     Ok(h)
 }
@@ -637,22 +669,25 @@ fn final_error_response(
     err_body: String,
     attempts: &[String],
     degraded: &[String],
-) -> Result<Response> {
-    let hdrs = worker::Headers::new();
-    hdrs.set("Content-Type", "application/json")?;
-    hdrs.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
-    hdrs.set("x-zhipu-gateway", "wasm")?;
+) -> Result<web_sys::Response> {
+    let mut bytes = err_body.into_bytes();
+    let init = web_sys::ResponseInit::new();
+    init.set_status(status);
+    let resp = web_sys::Response::new_with_opt_u8_array_and_init(Some(&mut bytes), &init)
+        .map_err(|e| GwError::msg(format!("build response: {e:?}")))?;
+    let hdrs = resp.headers();
+    let _ = hdrs.set("Content-Type", "application/json");
+    let _ = hdrs.set("x-gateway-version", env!("CARGO_PKG_VERSION"));
+    let _ = hdrs.set("x-zhipu-gateway", "wasm");
     let attempts_safe = header_safe(&attempts.join(";"));
-    hdrs.set("x-gateway-attempts", &attempts_safe)?;
-    hdrs.set("x-zhipu-attempts", &attempts_safe)?;
-    hdrs.set("x-gateway-degraded", &header_safe(&degraded.join(",")))?;
-    Ok(Response::from_bytes(err_body.into_bytes())?
-        .with_status(status)
-        .with_headers(hdrs))
+    let _ = hdrs.set("x-gateway-attempts", &attempts_safe);
+    let _ = hdrs.set("x-zhipu-attempts", &attempts_safe);
+    let _ = hdrs.set("x-gateway-degraded", &header_safe(&degraded.join(",")));
+    Ok(resp)
 }
 
-fn all_channels_failed(attempts: &[String], degraded: &[String]) -> Result<Response> {
-    let mut resp = json_response(
+fn all_channels_failed(attempts: &[String], degraded: &[String]) -> Result<web_sys::Response> {
+    let resp = json_response(
         502,
         serde_json::json!({
             "error": {
@@ -663,8 +698,7 @@ fn all_channels_failed(attempts: &[String], degraded: &[String]) -> Result<Respo
             }
         }),
     )?;
-    resp.headers_mut()
-        .set("x-gateway-degraded", &header_safe(&degraded.join(",")))?;
+    let _ = resp.headers().set("x-gateway-degraded", &header_safe(&degraded.join(",")));
     Ok(resp)
 }
 
@@ -842,17 +876,11 @@ struct DeviceKeys {
     keys: std::collections::BTreeMap<String, String>,
 }
 
-fn apply_device_keys(channels: &mut [Channel], req: &worker::Request) {
-    let raw = req
-        .headers()
-        .get("x-device-keys")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+fn apply_device_keys(channels: &mut [Channel], raw: &str) {
     if raw.trim().is_empty() {
         return;
     }
-    let dk: DeviceKeys = match serde_json::from_str(&raw) {
+    let dk: DeviceKeys = match serde_json::from_str(raw) {
         Ok(v) => v,
         Err(_) => return, // 头格式不对：忽略（不影响共享账本链路）
     };
@@ -914,7 +942,7 @@ async fn try_model_attempts(
             Ok(t) => t,
             Err(e) => {
                 attempts.push(format!("{}=conn-failed", ch.name));
-                worker::console_error!("channel {} conn failed: {e:?}", ch.name);
+                web_sys::console::error_1(&format!("channel {} conn failed: {e:?}", ch.name).into());
                 note_failure(env, ch, 0, scope, &att.model, &attempts).await;
                 degraded.push(att.model.clone());
                 continue;
@@ -957,7 +985,7 @@ async fn try_model_attempts(
         let reader: web_sys::ReadableStreamDefaultReader = body_stream
             .get_reader()
             .dyn_into()
-            .map_err(|e| Error::RustError(format!("get_reader: {e:?}")))?;
+            .map_err(|e| GwError::msg(format!("get_reader: {e:?}")))?;
 
         match read_chunk(&reader).await {
             Ok((done, value)) if done || value.is_undefined() => {
@@ -1162,18 +1190,17 @@ fn build_usage_record(
 // POST /v1/chat/completions
 // ---------------------------------------------------------------------------
 
-async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response> {
+async fn handle_chat_completions(body_text: String, gw_features: String, device_keys: String, env: &Env) -> Result<web_sys::Response> {
     let fallback_key = binding(env, "ZHIPU_API_KEY", None).unwrap_or_default();
     let default_base = binding(env, "ZHIPU_BASE_URL", Some(DEFAULT_BASE_URL))
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
-    // ---- 解析客户端请求体 ----
-    let body_text = req.text().await?;
+    // ---- 解析客户端请求体（body_text 已由 WASM 边界 gw::chat 传入）----
     let payload: serde_json::Value = if body_text.trim().is_empty() {
         serde_json::json!({})
     } else {
         serde_json::from_str(&body_text)
-            .map_err(|e| Error::RustError(format!("invalid JSON body: {e}")))?
+            .map_err(|e| GwError::msg(format!("invalid JSON body: {e}")))?
     };
 
     let stream = payload
@@ -1185,12 +1212,6 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     // 网关在转发前按渠道能力注入参数：智谱系支持 thinking（推理模式）与
     // web_search 工具（联网搜索）；其他渠道由前端 system 提示词保底，网关不动
     // body——避免不认识的参数被严格校验的上游 400 打回。
-    let gw_features = req
-        .headers()
-        .get("x-gw-features")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
     let want_think = want_feature(&gw_features, "think");
     let want_search = want_feature(&gw_features, "search");
 
@@ -1202,7 +1223,7 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
 
     // ---- 渠道（账本动态优先，回退静态）----
     let mut channels = load_channels(env, "chat", &fallback_key, &default_base).await;
-    apply_device_keys(&mut channels, &req);
+    apply_device_keys(&mut channels, &device_keys);
 
     let model_missing = payload
         .get("model")
@@ -1309,7 +1330,7 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
     // 若用户所选模型不可用（已回退自动选路），在每个出口都打上标记头，前端提示。
     let mark_unavailable = |resp: &mut Response| {
         if model_unavailable {
-            let _ = resp.headers_mut().set("x-gateway-model-unavailable", "1");
+            let _ = resp.headers().set("x-gateway-model-unavailable", "1");
         }
     };
     match outcome {
@@ -1329,7 +1350,7 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
                 && !model_name_eq(&used, requested.as_deref().unwrap_or_default());
             if model_unavailable || fell_back {
                 let v = if used.is_empty() { "1".to_string() } else { used };
-                let _ = resp.headers_mut().set("x-gateway-model-unavailable", &v);
+                let _ = resp.headers().set("x-gateway-model-unavailable", &v);
             }
             Ok(resp)
         }
@@ -1365,7 +1386,7 @@ async fn handle_chat_completions(mut req: Request, env: &Env) -> Result<Response
                     }),
                 )?;
                 let _ = r
-                    .headers_mut()
+                    .headers()
                     .set("x-gateway-degraded", &header_safe(&degraded.join(",")));
                 r
             } else {
@@ -1445,42 +1466,41 @@ fn build_multipart_body(
 }
 
 /// POST /v1/audio/transcriptions（同路径亦适用于视频等任意二进制上传）
-async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Response> {
+async fn handle_audio_transcriptions(fd: web_sys::FormData, device_keys: String, env: &Env) -> Result<web_sys::Response> {
     let fallback_key = binding(env, "ZHIPU_API_KEY", None).unwrap_or_default();
     let default_base = binding(env, "ZHIPU_BASE_URL", Some(DEFAULT_BASE_URL))
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
-    // ---- 1. 解析 inbound multipart ----
-    let fd = req
-        .form_data()
-        .await
-        .map_err(|e| Error::RustError(format!("form_data parse failed: {e:?}")))?;
-    let file = match fd.get("file") {
-        Some(worker::FormEntry::File(f)) => f,
-        Some(worker::FormEntry::Field(_)) => {
-            return json_error(400, "bad_file_field", "field 'file' is a text field, expected a file part")
+    // ---- 1. 解析 inbound multipart（web_sys FormData）----
+    let file = match fd.get("file").dyn_ref::<web_sys::File>() {
+        Some(f) => f.clone(),
+        None => {
+            if fd.get("file").as_string().is_some() {
+                return json_error(400, "bad_file_field", "field 'file' is a text field, expected a file part");
+            }
+            return json_error(400, "missing_file", "multipart field 'file' is required");
         }
-        None => return json_error(400, "missing_file", "multipart field 'file' is required"),
     };
     let filename = file.name();
     // 客户端显式指定的 stt 模型（可空——空则交给引擎按能力挑选）
     let model = fd
-        .get_field("model")
+        .get("model")
+        .as_string()
         .or_else(|| binding(env, "ZHIPU_AUDIO_MODEL", None))
         .unwrap_or_default();
 
-    // ---- 2. 裸字节读取（File::bytes：Blob.arrayBuffer -> Vec<u8>） ----
-    let bytes = file.bytes().await?;
+    // ---- 2. 裸字节读取（File.array_buffer -> Uint8Array -> Vec<u8>） ----
+    let bytes = file_array_buffer(&file).await?;
     let file_mime = file.type_();
     let content_type = format!("multipart/form-data; boundary={MULTIPART_BOUNDARY}");
 
     // ---- 4. 模型选择引擎（stt 能力）+ Key 复用 + 首帧前重试 ----
     let mut channels = load_channels(env, "audio", &fallback_key, &default_base).await;
-    apply_device_keys(&mut channels, &req);
+    apply_device_keys(&mut channels, &device_keys);
     // Key 借用候选池：除音频渠道自身外，还纳入同 provider 的聊天渠道
     // —— 用户只在智谱主线登记一次 Key，音频渠道自动复用（修复"语音识别报错"）。
     let mut donors = load_channels(env, "chat", &fallback_key, &default_base).await;
-    apply_device_keys(&mut donors, &req);
+    apply_device_keys(&mut donors, &device_keys);
     let donor_pool: Vec<Channel> = channels.iter().chain(donors.iter()).cloned().collect();
     let requested_model = if model.is_empty() { None } else { Some(model.clone()) };
     let (mut candidates, notes) = pick_model_attempts(
@@ -1529,7 +1549,7 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
                 ("model".into(), model),
                 ("stream".into(), "false".into()),
             ];
-            if let Some(lang) = fd.get_field("language") {
+            if let Some(lang) = fd.get("language").as_string() {
                 tf.push(("language".into(), lang));
             }
             let bb = build_multipart_body(
@@ -1576,17 +1596,17 @@ async fn handle_audio_transcriptions(mut req: Request, env: &Env) -> Result<Resp
 
 /// POST /v1/audio/speech：{ model, input, voice } → 上游音频字节流。
 /// 供「播音按钮 / 双向通话」使用；tts 能力模型经引擎挑选，Key 复用同主线。
-async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
+async fn handle_audio_speech(body_text: String, device_keys: String, env: &Env) -> Result<web_sys::Response> {
     let fallback_key = binding(env, "ZHIPU_API_KEY", None).unwrap_or_default();
     let default_base = binding(env, "ZHIPU_BASE_URL", Some(DEFAULT_BASE_URL))
         .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
 
-    let body_text = req.text().await?;
+    // body_text 已由 WASM 边界 gw::audio_speech 传入
     let payload: serde_json::Value = if body_text.trim().is_empty() {
         serde_json::json!({})
     } else {
         serde_json::from_str(&body_text)
-            .map_err(|e| Error::RustError(format!("invalid JSON body: {e}")))?
+            .map_err(|e| GwError::msg(format!("invalid JSON body: {e}")))?
     };
     let input = payload.get("input").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if input.trim().is_empty() {
@@ -1608,8 +1628,8 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
     // 只取 chat 会「播音无模型」；Key 借用池同理（音频渠道常缺 Key，借主线）。
     let mut chat_ch = load_channels(env, "chat", &fallback_key, &default_base).await;
     let mut audio_ch = load_channels(env, "audio", &fallback_key, &default_base).await;
-    apply_device_keys(&mut chat_ch, &req);
-    apply_device_keys(&mut audio_ch, &req);
+    apply_device_keys(&mut chat_ch, &device_keys);
+    apply_device_keys(&mut audio_ch, &device_keys);
     let mut channels: Vec<Channel> = chat_ch;
     channels.extend(audio_ch);
     let donor_pool: Vec<Channel> = channels.clone();
@@ -1661,10 +1681,7 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
         false,
         |resp| {
             resp.headers()
-                .get("content-type")
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| "audio/wav".to_string())
+                .get("content-type").ok().flatten().unwrap_or_else(|| "audio/wav".to_string())
         },
         "tts",
     )
@@ -1685,120 +1702,72 @@ async fn handle_audio_speech(mut req: Request, env: &Env) -> Result<Response> {
 // 路由
 // ---------------------------------------------------------------------------
 
-#[event(fetch)]
-pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    let path = req.path();
-    let method = req.method();
-    // ---- v0.19.32 CORS（公共 API 放行）----
-    // 预检先行：/v1/* 允许任意来源（/v1 用 Bearer token 鉴权、不依赖 cookie，
-    // 任意站点带调用者自己的 key 即可调用——OpenAI 兼容端点标准做法）。
-    // 管理面 /admin/* 与页面保持同源，不开 CORS。
-    if method == Method::Options && path.starts_with("/v1/") {
-        return preflight_response();
+
+// ---------------------------------------------------------------------------
+// 客户端 WASM 入口：前端（admin_ui.html）直接调用这些导出函数，
+// 不再经过 HTTP 服务器（已脱钩 Cloudflare Workers）。
+// ---------------------------------------------------------------------------
+
+/// 对话：OpenAI 兼容请求体 JSON + 系统特性(x-gw-features) + 设备 Key(JSON)。
+#[wasm_bindgen]
+pub async fn chat(body: String, gw_features: String, device_keys: String) -> web_sys::Response {
+    match handle_chat_completions(body, gw_features, device_keys, &Env).await {
+        Ok(r) => r,
+        Err(e) => web_sys::Response::from(e),
     }
-    let resp = dispatch(req, env).await?;
-    Ok(with_cors(resp, &path))
 }
 
-/// 公共 API 的 CORS 允许来源：仅 /v1/*。管理面与页面返回 None（同源）。
-fn cors_origin(path: &str) -> Option<&'static str> {
-    if path.starts_with("/v1/") { Some("*") } else { None }
+/// 语音转写：直接接收浏览器 FormData。
+#[wasm_bindgen]
+pub async fn audio_transcriptions(fd: web_sys::FormData, device_keys: String) -> web_sys::Response {
+    match handle_audio_transcriptions(fd, device_keys, &Env).await {
+        Ok(r) => r,
+        Err(e) => web_sys::Response::from(e),
+    }
 }
 
-/// 诊断头必须 expose：跨域 JS 只能读 CORS 白名单内的响应头——不列出来，
-/// 「模型 / 渠道 / 降级 / 版本」这些徽章会全部失效（表现为跨域调用后 UI 空白）。
-const EXPOSE_HEADERS: &str = "x-gateway-model, x-gateway-attempts, x-gateway-channel, x-gateway-model-unavailable, x-gateway-degraded, x-gateway-version";
-
-/// 给响应统一附 CORS 头（成功 / 错误 / 404 / SSE 流都覆盖——SSE 跨域用
-/// fetch + ReadableStream，不受 EventSource 不能用自定义头限制）。
-fn with_cors(mut resp: Response, path: &str) -> Response {
-    if let Some(origin) = cors_origin(path) {
-        let h = resp.headers_mut();
-        let _ = h.set("Access-Control-Allow-Origin", origin);
-        let _ = h.set("Access-Control-Expose-Headers", EXPOSE_HEADERS);
+/// 语音合成：{ model, input, voice } JSON。
+#[wasm_bindgen]
+pub async fn audio_speech(body: String, device_keys: String) -> web_sys::Response {
+    match handle_audio_speech(body, device_keys, &Env).await {
+        Ok(r) => r,
+        Err(e) => web_sys::Response::from(e),
     }
-    resp
 }
 
-/// OPTIONS 预检：一次性告知方法/头/缓存时长，省掉后续每次请求的预检往返。
-/// 允许的头必须包含自定义头（x-gw-features / x-device-keys）——漏掉的话带
-/// 「深度思考 / 智能搜索」或设备 Key 的跨域请求会在预检阶段被浏览器直接拒。
-fn preflight_response() -> Result<Response> {
-    let h = worker::Headers::new();
-    h.set("Access-Control-Allow-Origin", "*")?;
-    h.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")?;
-    h.set("Access-Control-Allow-Headers", "Authorization, Content-Type, x-device-keys, x-admin-token, x-gw-features")?;
-    h.set("Access-Control-Max-Age", "86400")?;
-    h.set("Access-Control-Expose-Headers", EXPOSE_HEADERS)?;
-    h.set("Vary", "Origin, Access-Control-Request-Headers")?;
-    Ok(Response::empty()?.with_status(204).with_headers(h))
+/// 管理面：method / 子路径(/api/...) / 请求体 / admin token。
+#[wasm_bindgen]
+pub async fn admin(method: String, sub: String, body: Option<String>, admin_token: String) -> web_sys::Response {
+    match admin::handle_admin(&method, &sub, body.as_deref().unwrap_or(""), &admin_token, &Env).await {
+        Ok(r) => r,
+        Err(e) => web_sys::Response::from(e),
+    }
 }
 
-/// 路由分派（原 main 主体）：与 CORS 注入解耦——所有出口（含 404 / 错误）
-/// 统一在 main 里包一层 with_cors，避免逐条 return 漏加头。
-async fn dispatch(req: Request, env: Env) -> Result<Response> {
-    let path = req.path();
-    let method = req.method();
+/// 健康检查（同步）。
+#[wasm_bindgen]
+pub fn health() -> String {
+    serde_json::json!({
+        "status": "ok",
+        "gateway": "zhipu-wasm-gateway",
+        "version": env!("CARGO_PKG_VERSION"),
+        "runtime": "browser-wasm",
+        "features": [
+            "resource-management-admin-ui",
+            "local-storage-ledger",
+            "stream-retry-first-packet",
+            "multipart-audio-video-upload",
+            "cooldown-skip-after-degrade",
+            "client-side-pwa"
+        ]
+    })
+    .to_string()
+}
 
-    // 管理页 / 管理面
-    if path == "/" {
-        return admin::handle_admin(req, &env, "").await;
-    }
-    // 浏览器侧工作流引擎内核（engine/ crate 编出的 wasm，include_bytes! 随 Worker
-    // 同体分发；Blob Worker 启动时 fetch 一次、WebAssembly.Module 缓存复用）。
-    if method == Method::Get && path == "/wf/kernel.wasm" {
-        let hdrs = worker::Headers::new();
-        hdrs.set("Content-Type", "application/wasm")?;
-        hdrs.set("Cache-Control", "public, max-age=3600")?;
-        hdrs.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
-        return Ok(Response::from_bytes(include_bytes!("engine_wasm.bin").to_vec())?
-            .with_headers(hdrs));
-    }
-    if path.starts_with("/admin") {
-        return admin::handle_admin(req, &env, &path["/admin".len()..]).await;
-    }
-    // 分享二级子页（/s）：内容压缩后放在 URL hash 里，服务端零存储。
-    // 生产环境可把 s.<域名> CNAME 到本 Worker，即得独立的二级子域分享页。
-    if method == Method::Get && (path == "/s" || path == "/s/") {
-        return admin::html_response(include_str!("share_ui.html"));
-    }
-    // v0.19.29 离线韧性：Service Worker + 离线兜底页（wasm 内嵌资源，零额外构建产物）。
-    // offline.html 特意用「可缓存」头——SW 的 cache.addAll 会拒绝 no-store 响应，
-    // 用 html_response（no-store）会导致兜底页永远存不进 Cache API。
-    if method == Method::Get && path == "/offline.html" {
-        let h = worker::Headers::new();
-        h.set("Content-Type", "text/html; charset=utf-8")?;
-        h.set("Cache-Control", "public, max-age=300")?;
-        h.set("x-gateway-version", env!("CARGO_PKG_VERSION"))?;
-        return Ok(Response::from_bytes(include_str!("offline.html").as_bytes().to_vec())?
-            .with_headers(h));
-    }
-    if method == Method::Get && path == "/sw.js" {
-        // 版本占位替换：每次发版缓存名自动翻新（与 admin_ui.html 同机制）
-        const MARK: &str = "__BUILD_VERSION__";
-        let js: String = include_str!("sw.js").split(MARK).collect::<Vec<_>>().join(env!("CARGO_PKG_VERSION"));
-        let h = worker::Headers::new();
-        h.set("Content-Type", "application/javascript; charset=utf-8")?;
-        h.set("Cache-Control", "no-cache")?;
-        h.set("Service-Worker-Allowed", "/")?;
-        return Ok(Response::from_bytes(js.into_bytes())?.with_headers(h));
-    }
-    if method == Method::Get && path == "/health" {
-        return handle_health();
-    }
-
-    match (method, path.as_str()) {
-        (Method::Post, "/v1/chat/completions") => handle_chat_completions(req, &env).await,
-        (Method::Post, "/v1/audio/transcriptions") => {
-            handle_audio_transcriptions(req, &env).await
-        }
-        (Method::Post, "/v1/audio/speech") => handle_audio_speech(req, &env).await,
-        _ => json_error(
-            404,
-            "not_found",
-            "routes: GET / (admin UI), GET /s (share page), GET /health, POST /v1/chat/completions, POST /v1/audio/transcriptions, POST /v1/audio/speech, /admin/api/*",
-        ),
-    }
+/// 版本号（前端注入用）。
+#[wasm_bindgen]
+pub fn version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }
 
 #[cfg(test)]
@@ -2332,32 +2301,4 @@ mod tests {
         );
     }
 
-    /// CORS 放行范围（v0.19.32）：只有公共 API /v1/* 开 `*`，管理面与页面同源。
-    /// 这条边界是安全线——管理面若误开 `*`，任意页面都能带着 x-admin-token 打管理接口。
-    #[test]
-    fn cors_scope_only_public_api() {
-        assert_eq!(super::cors_origin("/v1/chat/completions"), Some("*"));
-        assert_eq!(super::cors_origin("/v1/audio/speech"), Some("*"));
-        assert_eq!(super::cors_origin("/v1/audio/transcriptions"), Some("*"));
-        assert_eq!(super::cors_origin("/admin/api/channels"), None);
-        assert_eq!(super::cors_origin("/admin"), None);
-        assert_eq!(super::cors_origin("/"), None);
-        assert_eq!(super::cors_origin("/health"), None);
-        assert_eq!(super::cors_origin("/s"), None);
-    }
-
-    /// expose 列表必须覆盖前端依赖的六个诊断头——漏一个对应徽章就跨域失效。
-    #[test]
-    fn expose_headers_cover_diagnostics() {
-        for h in [
-            "x-gateway-model",
-            "x-gateway-attempts",
-            "x-gateway-channel",
-            "x-gateway-model-unavailable",
-            "x-gateway-degraded",
-            "x-gateway-version",
-        ] {
-            assert!(super::EXPOSE_HEADERS.contains(h), "expose 缺 {h}");
-        }
-    }
 }

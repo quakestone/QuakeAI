@@ -22,23 +22,22 @@
 //! 安全：配置 ADMIN_TOKEN（var 或 secret）后，所有 /admin/api/* 都要求
 //! header `x-admin-token` 匹配；未配置则只面向本地/内网使用（页面有提示）。
 
-use worker::*;
 use wasm_bindgen::prelude::*;
+use web_sys::*;
 use crate::channels::*;
-use crate::json_error;
-use crate::json_response;
+use crate::{Env, GwError, Result, binding, json_error, json_response};
 use crate::store::*;
 
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 资源账本不可用（Durable Object 绑定缺失/类未注册/storage 异常）。
 /// 以前这里直接 `?` 抛出，用户只看到裸的 500，完全不知道要绑 DO。
-fn store_unavailable(e: &worker::Error) -> Result<Response> {
+fn store_unavailable(e: &GwError) -> Result<web_sys::Response> {
     json_error(
         503,
         "store_unavailable",
         &format!(
-            "资源账本不可用：{e:?}。请确认 Worker 已绑定 Durable Object —— 变量名 RESOURCE_STORE、类名 ResourceStore（Dashboard: Settings → Bindings → Add → Durable Object；wrangler: 见 wrangler.toml）。"
+            "资源账本不可用（本地 localStorage 读写失败）：{e:?}。请确认浏览器未禁用站点存储，或尝试清除站点数据后重试。"
         ),
     )
 }
@@ -67,11 +66,11 @@ pub fn now_ms() -> f64 {
 ///
 /// 兜底：内部任何未预期错误都不再裸奔成 500 纯文本——统一转成带错误详情的
 /// JSON（排查 500 的第一现场：DO 绑定缺失、存储异常都会在这里现形）。
-pub async fn handle_admin(req: Request, env: &Env, sub: &str) -> Result<Response> {
-    match handle_admin_inner(req, env, sub).await {
+pub async fn handle_admin(method: &str, sub: &str, body: &str, admin_token: &str, env: &Env) -> Result<web_sys::Response> {
+    match handle_admin_inner(method, sub, body, admin_token, env).await {
         Ok(resp) => Ok(resp),
         Err(e) => {
-            worker::console_error!("admin internal error: {e:?}");
+            web_sys::console::error_1(&format!("admin internal error: {e:?}").into());
             json_error(
                 500,
                 "internal_error",
@@ -83,77 +82,54 @@ pub async fn handle_admin(req: Request, env: &Env, sub: &str) -> Result<Response
     }
 }
 
-async fn handle_admin_inner(req: Request, env: &Env, sub: &str) -> Result<Response> {
-    // 管理页本体：不强制 token（token 只保护 API），方便本地直接打开
-    if req.method() == Method::Get && (sub.is_empty() || sub == "/") {
-        // 构建时把版本号注入 HTML（替换全部 __BUILD_VERSION__ 占位，共 2 处）。
-        // 前端拿它与 /health 返回的版本比对，一眼识别"浏览器还在跑缓存旧页面"。
-        //注意：no_std 环境没有 str::replace_all，用 split + join 等价实现。
-        const MARK: &str = "__BUILD_VERSION__";
-        let page: String = include_str!("admin_ui.html").split(MARK).collect::<Vec<_>>().join(VERSION);
-        return html_response(&page);
-    }
-    if sub == "/health" {
-        return json_response(
-            200,
-            serde_json::json!({ "status": "ok", "admin": true, "gateway": "zhipu-wasm-gateway", "version": VERSION }),
-        );
-    }
+async fn handle_admin_inner(method: &str, sub: &str, body: &str, admin_token: &str, env: &Env) -> Result<web_sys::Response> {
     if !sub.starts_with("/api/") {
         return json_error(404, "not_found", "unknown admin route");
     }
 
-    // ---- API token 校验 ----
-    if let Ok(expected) = env.var("ADMIN_TOKEN") {
-        let expected = expected.to_string();
-        let supplied = req
-            .headers()
-            .get("x-admin-token")
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        if supplied != expected {
+    // ---- API token 校验（配置来自浏览器 localStorage）----
+    if let Some(expected) = binding(env, "ADMIN_TOKEN", None) {
+        if admin_token != expected {
             return json_error(401, "unauthorized", "ADMIN_TOKEN is set; send x-admin-token header");
         }
     }
 
     let api = &sub["/api".len()..];
-    let method = req.method();
-    match (&method, api) {
-        (Method::Get, "/channels") => api_list(env).await,
-        (Method::Post, "/channels") => api_create(req, env).await,
-        (Method::Post, "/seed") => api_seed(env).await,
-        (Method::Get, "/events") => api_events(env).await,
-        (Method::Get, "/usage") => api_usage(env).await,
-        (Method::Get, "/usage/export") => api_usage_export(env).await,
-        (Method::Get, "/diag") => api_diag(env).await,
+    match (method, api) {
+        ("GET", "/channels") => api_list(env).await,
+        ("POST", "/channels") => api_create(body, env).await,
+        ("POST", "/seed") => api_seed(env).await,
+        ("GET", "/events") => api_events(env).await,
+        ("GET", "/usage") => api_usage(env).await,
+        ("GET", "/usage/export") => api_usage_export(env).await,
+        ("GET", "/diag") => api_diag(env).await,
         // 按模型自检：单轮空历史探测「能不能用 + 到底谁回答」
-        (Method::Post, "/models/test") => api_test_model(req, env).await,
+        ("POST", "/models/test") => api_test_model(body, env).await,
         // skill 子系统：与模型独立的表达线（标题 + 提示词正文）
-        (Method::Get, "/skills") => api_list_skills(env).await,
-        (Method::Post, "/skills") => api_create_skill(req, env).await,
+        ("GET", "/skills") => api_list_skills(env).await,
+        ("POST", "/skills") => api_create_skill(body, env).await,
         _ => {
             // /channels/{id} 与 /channels/{id}/test
             if let Some(rest) = api.strip_prefix("/channels/") {
                 if let Some(id) = rest.strip_suffix("/test") {
-                    if method == Method::Post {
+                    if method == "POST" {
                         return api_test(env, id).await;
                     }
-                } else if method == Method::Put {
-                    return api_update(req, env, rest).await;
-                } else if method == Method::Delete {
+                } else if method == "PUT" {
+                    return api_update(body, env, rest).await;
+                } else if method == "DELETE" {
                     return api_delete(env, rest).await;
                 }
             }
             // /skills/{id}、/skills/{id}/use
             if let Some(rest) = api.strip_prefix("/skills/") {
                 if let Some(id) = rest.strip_suffix("/use") {
-                    if method == Method::Post {
+                    if method == "POST" {
                         return api_touch_skill(env, id).await;
                     }
-                } else if method == Method::Put {
-                    return api_update_skill(req, env, rest).await;
-                } else if method == Method::Delete {
+                } else if method == "PUT" {
+                    return api_update_skill(body, env, rest).await;
+                } else if method == "DELETE" {
                     return api_delete_skill(env, rest).await;
                 }
             }
@@ -217,16 +193,15 @@ async fn api_list(env: &Env) -> Result<Response> {
             })).collect::<Vec<_>>(),
             "store": store_state,
             "store_error": store_error,
-            "store_binding": { "variable": "RESOURCE_STORE", "class": "ResourceStore" },
+            "store_binding": { "type": "localStorage", "note": "浏览器本地持久化，已脱钩 Cloudflare" },
             "version": VERSION,
         }),
     )
 }
 
 /// 登记表单校验 + 落库。允许同 provider 多 key（多个渠道指向同一 base_url）。
-async fn api_create(mut req: Request, env: &Env) -> Result<Response> {
+async fn api_create(body: &str, env: &Env) -> Result<web_sys::Response> {
     // 空 body 视为 {}（走缺字段校验），不让 read 失败把整请求打成裸 500
-    let body = req.text().await.unwrap_or_default();
     let v: serde_json::Value = if body.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -329,8 +304,7 @@ async fn api_create(mut req: Request, env: &Env) -> Result<Response> {
 }
 
 /// 更新：按 JSON 字段覆盖；`api_key` 缺省/空/掩码占位 → 保持原 Key 不变（轮换语义）。
-async fn api_update(mut req: Request, env: &Env, id: &str) -> Result<Response> {
-    let body = req.text().await.unwrap_or_default();
+async fn api_update(body: &str, env: &Env, id: &str) -> Result<web_sys::Response> {
     let v: serde_json::Value = if body.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -446,8 +420,7 @@ async fn api_list_skills(env: &Env) -> Result<Response> {
 }
 
 /// POST /admin/api/skills —— 登记新 skill（title + prompt 必填）。
-async fn api_create_skill(mut req: Request, env: &Env) -> Result<Response> {
-    let body = req.text().await.unwrap_or_default();
+async fn api_create_skill(body: &str, env: &Env) -> Result<web_sys::Response> {
     let v: serde_json::Value = if body.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -536,8 +509,7 @@ async fn api_create_skill(mut req: Request, env: &Env) -> Result<Response> {
 }
 
 /// PUT /admin/api/skills/{id} —— 更新（title / prompt / enabled / used_count 按字段覆盖）。
-async fn api_update_skill(mut req: Request, env: &Env, id: &str) -> Result<Response> {
-    let body = req.text().await.unwrap_or_default();
+async fn api_update_skill(body: &str, env: &Env, id: &str) -> Result<web_sys::Response> {
     let v: serde_json::Value = if body.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -809,7 +781,7 @@ impl UsageAgg {
 /// 这样网关导出的表与官方账单导出可以并排 diff 直接对账：
 /// 官方按「每次调用一行」给，我们按「源 × 模型 × 日」聚合给，
 /// 对账时把官方 CSV 按 model+日期透视后与本表比对即可。
-async fn api_usage_export(env: &Env) -> Result<Response> {
+async fn api_usage_export(env: &Env) -> Result<web_sys::Response> {
     let records = load_usage(env).await;
     let mut rows: Vec<&UsageRecord> = records.iter().collect();
     rows.sort_by(|a, b| a.day.cmp(&b.day).then(a.model.cmp(&b.model)));
@@ -830,12 +802,15 @@ async fn api_usage_export(env: &Env) -> Result<Response> {
     // BOM：Excel 直接双击打开不乱码（官方导出同样带 BOM）
     let mut body = vec![0xEF, 0xBB, 0xBF];
     body.extend_from_slice(csv.as_bytes());
-    let mut resp = Response::from_bytes(body)?;
-    resp.headers_mut().set("Content-Type", "text/csv; charset=utf-8")?;
-    resp.headers_mut().set(
+    let mut body_bytes = body;
+    let resp = web_sys::Response::new_with_opt_u8_array(Some(&mut body_bytes))
+        .map_err(|e| GwError::msg(format!("build csv response: {e:?}")))?;
+    let hdrs = resp.headers();
+    let _ = hdrs.set("Content-Type", "text/csv; charset=utf-8");
+    let _ = hdrs.set(
         "Content-Disposition",
         "attachment; filename=\"gateway-usage-export.csv\"",
-    )?;
+    );
     Ok(resp)
 }
 
@@ -860,11 +835,11 @@ async fn api_diag(env: &Env) -> Result<Response> {
         serde_json::json!({
             "version": VERSION,
             "store": store,
-            "expected_binding": { "variable": "RESOURCE_STORE", "class": "ResourceStore" },
+            "expected_binding": { "type": "localStorage" },
             "env": {
-                "has_zhipu_api_key": env.var("ZHIPU_API_KEY").map(|k| !k.to_string().is_empty()).unwrap_or(false),
-                "has_admin_token": env.var("ADMIN_TOKEN").is_ok(),
-                "zhipu_base_url": env.var("ZHIPU_BASE_URL").map(|v| v.to_string()).unwrap_or_default(),
+                "has_zhipu_api_key": binding(env, "ZHIPU_API_KEY", None).map(|k| !k.is_empty()).unwrap_or(false),
+                "has_admin_token": binding(env, "ADMIN_TOKEN", None).is_some(),
+                "zhipu_base_url": binding(env, "ZHIPU_BASE_URL", Some(crate::DEFAULT_BASE_URL)).unwrap_or_default(),
             }
         }),
     )
@@ -894,7 +869,7 @@ async fn body_snippet(resp: &web_sys::Response) -> String {
 ///   - audio 渠道：GET {base}/models（上游支持列表时）
 /// 判定：2xx=healthy；401/403=链路通但 Key 无效；429=限流（60s 冷却）；其余=失败。
 /// 结果回写到渠道 health，并返回探测报告。
-async fn api_test(env: &Env, id: &str) -> Result<Response> {
+async fn api_test(env: &Env, id: &str) -> Result<web_sys::Response> {
     let mut list = match load_all_channels(env).await {
         Ok(l) => l,
         Err(e) => return store_unavailable(&e),
@@ -1028,8 +1003,7 @@ async fn probe_channel(ch: &Channel) -> (u16, u64, String) {
 ///   2. 真正回答的是不是它（上游自报 vs 请求的模型名）。
 ///
 /// POST /admin/api/models/test  {"model":"cohere/north-mini-code:free","channel":"可选，限定单个渠道"}
-async fn api_test_model(mut req: Request, env: &Env) -> Result<Response> {
-    let body = req.text().await.unwrap_or_default();
+async fn api_test_model(body: &str, env: &Env) -> Result<web_sys::Response> {
     let v: serde_json::Value = if body.trim().is_empty() {
         serde_json::json!({})
     } else {
@@ -1249,31 +1223,6 @@ async fn api_test_model(mut req: Request, env: &Env) -> Result<Response> {
 // 工具
 // ---------------------------------------------------------------------------
 
-pub fn html_response(body: &str) -> Result<Response> {
-    let headers = web_sys::Headers::new()
-        .map_err(|e| Error::RustError(format!("headers: {e:?}")))?;
-    headers
-        .set("Content-Type", "text/html; charset=utf-8")
-        .map_err(|e| Error::RustError(format!("set header: {e:?}")))?;
-    // 后台 HTML 必须禁缓存：页面骨架 + 内嵌 wasm 都编在这份 HTML 里，
-    // 浏览器一旦缓存就会一直跑旧代码（表现为"改了没生效""标签没回来"）。
-    headers
-        .set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        .map_err(|e| Error::RustError(format!("set cache-control: {e:?}")))?;
-    headers
-        .set("Pragma", "no-cache")
-        .map_err(|e| Error::RustError(format!("set pragma: {e:?}")))?;
-    // 带出版本与构建时间，浏览器/用户一眼能确认跑的是哪一版
-    headers
-        .set("X-Gateway-Version", VERSION)
-        .map_err(|e| Error::RustError(format!("set version: {e:?}")))?;
-    let init = web_sys::ResponseInit::new();
-    init.set_status(200);
-    init.set_headers(&headers);
-    web_sys::Response::new_with_opt_str_and_init(Some(body), &init)
-        .map(Response::from)
-        .map_err(|e| Error::RustError(format!("build response: {e:?}")))
-}
 
 /// 供 lib.rs 在 chat/audio 路由里更新渠道健康状态 + 记录事件。
 pub async fn report_success(env: &Env, id: &str, provider: &str, scope: &str, model: &str, attempts: &[String], latency_ms: u64) {
