@@ -13,6 +13,12 @@ const VALID_KEY = "test-key-local";
 const LOG = new URL("../mock-received.log", import.meta.url).pathname;
 
 const server = createServer((req, res) => {
+  // 浏览器 e2e：页面与 mock 不同源，WASM 侧 web_sys::fetch 直连需要 CORS 放行
+  // （预检 + 简单请求均覆盖；仅测试基建使用，不影响 Node 侧 curl 调用）。
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,x-gw-target,x-gw-features,x-admin-token,x-device-keys");
+  if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
   // 二进制安全：Buffer 累积，latin1 保持多字节 1:1（multipart 分隔/头为 ASCII）
   const chunks = [];
   req.on("data", (c) => chunks.push(c));

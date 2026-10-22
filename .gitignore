@@ -2,9 +2,8 @@
 /target
 /engine/target
 /build/*
-!/build/index.js
-!/build/index_bg.wasm
 !/build/index.html
+!/build/assets/
 !/build/sw.js
 !/build/manifest.webmanifest
 !/build/icon.svg

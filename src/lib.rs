@@ -348,7 +348,9 @@ async fn fetch_channel(
     // 转发约定：网关把真实上游地址放在 x-gw-target 头，原样转交 method/headers/body，
     // 由用户的转发服务去真正请求上游（转发服务需自行处理 CORS / 鉴权头透传）。
     let real_url = channel.url(path);
-    let proxy = binding(env, "GW_UPSTREAM_PROXY", None)
+    // 键名与 UI/文档契约一致（localStorage gw_upstream_proxy）；旧版曾误用大写
+    // GW_UPSTREAM_PROXY，导致用户在设置页填写的代理从不生效（直连被 CORS 拦）。
+    let proxy = binding(env, "gw_upstream_proxy", None)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let (target_url, forward_target) = match &proxy {

@@ -1,13 +1,20 @@
 /* QuakeAI 网关 · 纯静态 PWA Service Worker
  * 职责：预缓存应用壳（HTML / WASM / JS / 清单 / 图标），实现离线开壳。
- * 注意：网关数据请求（/v1 /admin /health）由页面内 window.fetch 拦截到
- * 浏览器 WASM，根本不会走到网络 / SW，这里无需也不应拦截它们。 */
-const CACHE = "quakeai-gw-v1";
+ * 注意：网关数据请求（/v1 /admin /health）由页面内适配层直调浏览器 WASM，
+ * 根本不会走到网络 / SW，这里无需也不应拦截它们。 */
+const CACHE = "quakeai-gw-v2";
 const PRECACHE = [
   "./",
   "./index.html",
-  "./build/index.js",
-  "./build/index_bg.wasm",
+  "./assets/css/tokens.css",
+  "./assets/css/app.css",
+  "./assets/css/gw.css",
+  "./assets/js/store.js",
+  "./assets/js/adapters.js",
+  "./assets/js/components.js",
+  "./assets/js/app.js",
+  "./assets/wasm/index.js",
+  "./assets/wasm/index_bg.wasm",
   "./manifest.webmanifest",
   "./icon.svg",
 ];

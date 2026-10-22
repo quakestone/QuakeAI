@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8fa">
+  <meta name="description" content="QuakeAI — 免费资源 AI 智能聚合网关 · 纯浏览器 WASM 工作台">
+  <title>QuakeAI · 智能网关工作台</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <link rel="stylesheet" href="./assets/css/tokens.css">
+  <link rel="stylesheet" href="./assets/css/app.css">
+  <link rel="stylesheet" href="./assets/css/gw.css">
+  <script>window.__BUILD_VERSION__="__BUILD_VERSION__";</script>
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <aside class="sidebar" id="sidebar" aria-label="主导航">
+      <div class="brand-row">
+        <div class="brand-mark">Q</div><span class="brand-name">Quake<span class="brand-dot">AI</span></span>
+        <button class="icon-btn mobile-only" id="closeSidebar" aria-label="关闭导航">×</button>
+      </div>
+      <button class="primary-btn new-chat" id="newChat"><span>＋</span> 新建对话 <kbd>⌘ K</kbd></button>
+      <label class="search-box"><span>⌕</span><input id="searchChats" type="search" placeholder="搜索对话"></label>
+      <div class="nav-section">
+        <div class="section-label">工作空间</div>
+        <button class="nav-item active" data-view="home"><span class="nav-icon">◫</span> 智能首页</button>
+        <button class="nav-item" data-view="chat"><span class="nav-icon">◌</span> AI 对话</button>
+      </div>
+      <div class="history-head"><span class="section-label">最近对话</span><button class="tiny-icon" id="clearSearch" title="清除搜索">···</button></div>
+      <div class="conversation-list" id="conversationList"></div>
+      <div class="sidebar-bottom">
+        <div class="gw-side-status" id="gwSideStatus">
+          <span class="status-dot" id="gwSideDot"></span>
+          <span class="gw-side-status-text" id="gwSideStatusText">网关启动中…</span>
+        </div>
+        <button class="nav-item" id="themeToggle"><span class="nav-icon">◐</span> 切换外观 <span class="push-right">⌘ J</span></button>
+      </div>
+    </aside>
+    <div class="sidebar-scrim" id="sidebarScrim"></div>
+    <main class="main-area">
+      <header class="topbar">
+        <div class="topbar-left"><button class="icon-btn mobile-only" id="openSidebar" aria-label="打开导航">☰</button><span class="breadcrumb" id="breadcrumb">智能首页</span></div>
+        <div class="topbar-actions"><span class="status-dot" id="gwTopDot"></span><span class="status-label" id="gwTopLabel">网关启动中…</span><button class="icon-btn" id="openJarvis" title="打开语音助手">◉</button></div>
+      </header>
+      <div class="view-host" id="viewHost">
+        <section class="view home-view" id="homeView">
+          <div class="welcome-row"><div><div class="eyebrow" id="homeEyebrow">QUAKEAI GATEWAY</div><h1>你好，今天想完成什么？</h1><p class="subhead">聚合免费模型资源，从一个问题开始，剩下的交给网关。</p></div><div class="date-chip" id="dateChip">今天 · 工作台</div></div>
+          <div class="home-composer card">
+            <div class="composer-top"><span class="sparkle">✳</span><textarea id="homePrompt" rows="2" placeholder="问任何问题，或描述你想完成的任务…"></textarea></div>
+            <div class="composer-bottom"><div class="composer-tools"><button class="soft-btn" id="homeModelBtn">◈ <span id="homeModelName">自动选择</span></button></div><button class="send-btn" id="homeSend" aria-label="发送">↑</button></div>
+          </div>
+          <div class="quick-grid">
+            <button class="quick-card" data-prompt="帮我把一个复杂目标拆成今天可以执行的步骤。"><span class="quick-symbol violet">↗</span><strong>规划与执行</strong><span>把目标拆解成可执行步骤</span></button>
+            <button class="quick-card" data-prompt="请帮我分析这段代码，找出风险并给出可落地的修复方案。"><span class="quick-symbol blue">{ }</span><strong>编程与调试</strong><span>分析代码、定位问题、生成方案</span></button>
+            <button class="quick-card" data-prompt="帮我总结最近的想法，并整理成一份清晰的项目说明。"><span class="quick-symbol amber">▤</span><strong>整理思路</strong><span>把零散信息变成清晰文档</span></button>
+            <button class="quick-card" data-prompt="根据我的长期目标，帮我安排一个轻量、可持续的学习计划。"><span class="quick-symbol green">⌁</span><strong>学习与成长</strong><span>制定计划，持续复盘和改进</span></button>
+          </div>
+          <div class="section-heading"><div><h2>网关状态</h2><p>本机 WASM 网关的真实运行数据。</p></div><button class="text-btn" id="refreshHealth">刷新状态 ↗</button></div>
+          <div class="insight-grid" id="healthGrid"></div>
+          <div class="section-heading world-heading"><div><h2>从这里继续</h2><p>最近打开的对话</p></div><button class="text-btn" data-view="chat">全部对话 →</button></div>
+          <div class="continue-list" id="homeRecent"></div>
+          <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="buildVersion"></span></span></footer>
+        </section>
+        <section class="view chat-view hidden" id="chatView">
+          <div class="chat-heading"><div><div class="eyebrow">CONVERSATION</div><h1 id="chatTitle">新对话</h1></div><div class="chat-head-actions"><button class="soft-btn" id="chatModelBtn">◈ <span id="chatModelName">自动选择</span></button><button class="soft-btn" id="exportChat">↧ 导出</button><button class="icon-btn" id="chatMore" title="对话选项">···</button></div></div>
+          <div class="messages" id="messages" aria-live="polite"></div>
+          <div class="chat-composer-wrap"><div class="chat-composer card"><textarea id="chatPrompt" rows="1" placeholder="给 QuakeAI 发送消息…"></textarea><div class="composer-bottom"><div class="composer-tools"><button class="soft-btn" id="chatStop" hidden>■ 停止</button></div><div class="send-cluster"><span class="composer-hint">Enter 发送 · Shift+Enter 换行</span><button class="send-btn" id="chatSend" aria-label="发送">↑</button></div></div></div><div class="disclaimer">AI 可能会出错。重要信息请核实。</div></div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <div class="modal-backdrop hidden" id="modalBackdrop"><section class="modal card" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle">设置</h2><button class="icon-btn" id="closeModal" aria-label="关闭">×</button></div><div id="modalBody"></div><div class="modal-actions"><button class="soft-btn" id="cancelModal">取消</button><button class="primary-btn" id="saveModal">保存</button></div></section></div>
+  <div class="jarvis-overlay hidden" id="jarvisOverlay" role="dialog" aria-modal="true" aria-label="语音助手"><div class="jarvis-backdrop" id="jarvisBackdrop"></div><section class="jarvis-panel"><div class="jarvis-top"><div class="jarvis-brand"><div class="brand-mark">Q</div><div><strong>语音助手</strong><span>说一句话，或直接输入</span></div></div><button class="icon-btn" id="closeJarvis" aria-label="关闭语音助手">×</button></div><div class="jarvis-center"><div class="orb-wrap"><div class="orb-ring ring-one"></div><div class="orb-ring ring-two"></div><button class="jarvis-orb" id="jarvisMic" aria-label="开始语音输入"><span>◉</span></button></div><h2 id="jarvisState">我在听</h2><p id="jarvisHint">点击圆形按钮开始语音输入，或直接输入文字。</p><div class="jarvis-transcript" id="jarvisTranscript">你好，我是 QuakeAI 语音助手。今天有什么可以帮你？</div></div><div class="jarvis-input-row"><input id="jarvisText" placeholder="发送消息…"><button class="send-btn" id="jarvisSend">↑</button></div><div class="jarvis-foot"><span><i class="mini-dot green-dot"></i> 网关已接入</span><span>语音识别取决于浏览器支持</span></div></section></div>
+  <script src="./assets/js/store.js"></script>
+  <script src="./assets/js/adapters.js"></script>
+  <script src="./assets/js/components.js"></script>
+  <script src="./assets/js/app.js"></script>
+</body>
+</html>

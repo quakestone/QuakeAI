@@ -1,0 +1,76 @@
+/* ============================================================
+   QuakeAI 设计令牌（基座：Clarity AI Chat UI Kit tokens.css）
+   - 保留 Kit 全部令牌名与取值，app.css 零改动直接复用
+   - 品牌化：--accent 由 Kit 紫蓝派生为 QuakeAI 品牌色
+   - 管理面扩展令牌集中定义在本文件尾部，不散落到组件
+   ============================================================ */
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --surface: #fff;
+  --surface-2: #f1f3f6;
+  --surface-3: #e9edf2;
+  --text: #20242c;
+  --muted: #747b88;
+  --subtle: #9ba2ad;
+  --line: #e6e9ee;
+  --accent: #4b61d1;
+  --accent-hover: #3d52bd;
+  --accent-soft: #edf0ff;
+  --green: #249b72;
+  --shadow: 0 8px 30px rgba(25, 35, 65, .045);
+  --radius: 18px;
+  --radius-sm: 12px;
+  --sidebar-width: 256px;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15171b;
+  --surface: #1d2026;
+  --surface-2: #252932;
+  --surface-3: #303540;
+  --text: #eef0f4;
+  --muted: #a0a7b4;
+  --subtle: #727b89;
+  --line: #303540;
+  --accent: #8795ff;
+  --accent-hover: #a2acff;
+  --accent-soft: #292e4d;
+  --green: #4fc49b;
+  --shadow: 0 8px 30px rgba(0, 0, 0, .16);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); }
+body { font-size: 14px; line-height: 1.5; }
+button, input, textarea { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); }
+.hidden { display: none !important; }
+
+/* ============================================================
+   QuakeAI 管理面扩展令牌（新增但集中定义，不散落）
+   健康三态色（healthy/degraded/unknown）——克制使用红绿，
+   仅在健康徽标、状态点、错误语义处出现。
+   ============================================================ */
+:root {
+  --ok: #249b72;
+  --warn: #b26a00;
+  --bad: #cf3a3a;
+  --code-bg: #f1f3f6;
+  --code-text: #3d4450;
+  --row-hover: rgba(75, 97, 209, .06);
+  --stream-caret: var(--accent);
+}
+[data-theme="dark"] {
+  --ok: #4fc49b;
+  --warn: #e0a33c;
+  --bad: #f26d6d;
+  --code-bg: #12151a;
+  --code-text: #c6cdd8;
+  --row-hover: rgba(135, 149, 255, .10);
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}

@@ -1,0 +1,84 @@
+/* ============================================================
+   QuakeAI 业务组件扩展（gw.css）
+   只放「网关业务专用」组件：健康徽标、网关状态卡、模型选择器、
+   流式消息增强、代码块。Kit 通用组件一律用 app.css，不在此重复。
+   ============================================================ */
+
+/* hidden 属性必须战胜 Kit 的 display:inline-flex（UA 样式优先级低于作者样式，
+   不带 !important 时 .soft-btn[hidden] 仍会显示——流式停止按钮切不回来）。 */
+[hidden] { display: none !important; }
+
+/* ---------- 品牌行（Kit .brand-row 之上仅补字标细节） ---------- */
+.brand-name { letter-spacing: -.01em; }
+
+/* ---------- 网关侧栏状态 ---------- */
+.gw-side-status {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; margin: 4px 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px; color: var(--muted);
+}
+.gw-side-status .status-dot { flex: none; }
+.gw-side-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 健康三态徽标 ---------- */
+.hb { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.hb::before { content: ""; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--subtle); }
+.hb.healthy::before { background: var(--ok); }
+.hb.degraded::before { background: var(--warn); }
+.hb.unknown::before { background: var(--subtle); }
+.hb.bad::before { background: var(--bad); }
+
+/* ---------- 首页网关状态卡（insight-card 的业务填充） ---------- */
+.gw-stat-row { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 6px; }
+.gw-stat-row strong { font-size: 26px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+.gw-stat-row span { font-size: 12px; color: var(--muted); }
+.gw-stat-list { display: grid; gap: 7px; margin-top: 4px; }
+.gw-stat-list .gw-stat-row { margin: 0; }
+.gw-stat-list strong { font-size: 15px; }
+.gw-cap-list { display: grid; gap: 8px; }
+.gw-cap-list > div { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.gw-cap-list .hb { margin-left: auto; }
+
+/* ---------- 模型选择器 ---------- */
+.gw-model-list { display: grid; gap: 6px; max-height: 46vh; overflow: auto; margin: 4px 0 8px; }
+.gw-model-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); text-align: left; font-size: 13px;
+}
+.gw-model-item:hover { border-color: var(--accent); background: var(--row-hover); }
+.gw-model-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.gw-model-item .gw-model-name { font-weight: 600; }
+.gw-model-item .gw-model-ch { margin-left: auto; font-size: 12px; color: var(--muted); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gw-model-item .gw-model-tick { color: var(--accent); font-weight: 700; }
+.gw-model-empty { padding: 18px 8px; text-align: center; color: var(--muted); font-size: 13px; }
+
+/* ---------- 流式消息 ---------- */
+.message.streaming .message-text::after {
+  content: ""; display: inline-block; width: .55em; height: 1em;
+  margin-left: 2px; vertical-align: text-bottom;
+  background: var(--stream-caret); border-radius: 2px;
+  animation: gw-caret 1s steps(2) infinite;
+}
+@keyframes gw-caret { 50% { opacity: 0; } }
+.message-text.stream-plain { white-space: pre-wrap; }
+.msg-meta { margin-top: 6px; font-size: 11px; color: var(--subtle); display: flex; flex-wrap: wrap; gap: 10px; }
+.msg-meta .hb { font-size: 11px; }
+.message.error .message-text { color: var(--bad); }
+
+/* ---------- 代码块（接入文档 / curl 示例，B4 用；壳层先备） ---------- */
+.gw-code {
+  background: var(--code-bg); color: var(--code-text);
+  border-radius: var(--radius-sm); padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.6; overflow: auto; white-space: pre;
+}
+
+/* ---------- 轻提示状态色（components.toast 的 kind） ---------- */
+.toast-ok { border-color: var(--ok); color: var(--ok); }
+.toast-err { border-color: var(--bad); color: var(--bad); }
+
+/* ---------- 空态 ---------- */
+.gw-empty-hint { color: var(--muted); font-size: 13px; padding: 14px 4px; }
