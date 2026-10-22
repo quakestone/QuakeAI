@@ -38,6 +38,8 @@
     streaming: false,
     aborter: null,
     modalSave: null,
+    modalReturn: null,       // 浮层打开前的焦点元素（关闭时还原，a11y）
+    jarvisReturn: null,      // 同上：Jarvis 浮层
     attachments: [],         // 输入区附件实例（含 file/dataUrl，瞬态）
     editCtx: null,           // 修改态 { convoId, idx }
     streamGen: 0,            // 流代号：新会话/新发送抢占时，旧流 finally 只落库不碰 UI
@@ -167,7 +169,11 @@
     $("#workflowView").classList.toggle("hidden", view !== "workflow");
     $("#upstreamView").classList.toggle("hidden", view !== "upstream");
     $("#breadcrumb").textContent = VIEW_NAMES[view] || "工作台";
-    $$(".nav-item[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
+    $$(".nav-item[data-view]").forEach(b => {
+      b.classList.toggle("active", b.dataset.view === view);
+      if (b.dataset.view === view) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
     if (view === "chat") renderMessages();
     if (view === "providers") Providers.load();   // 每次进入拉最新账本（load 有 in-flight 去重）
     if (view === "prompts") Prompts.load();       // 每次进入拉最新账本（含使用计数）
@@ -629,16 +635,32 @@
   }
 
   /* ================= 弹层 ================= */
+  // 焦点管理（a11y）：打开时焦点移入浮层、关闭时还原到触发元素——
+  // 原生 <dialog>（showModal）自带焦点圈闭，这里只管两个自定义容器。
+  const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  function overlayFocusIn(el) {
+    const first = el.querySelector(FOCUSABLE);
+    if (first) first.focus();
+    else { el.tabIndex = -1; el.focus(); }
+  }
   function openModal(title, html, onSave, saveLabel) {
     $("#modalTitle").textContent = title;
     $("#modalBody").innerHTML = html;
     state.modalSave = onSave;
+    state.modalReturn = document.activeElement;
     $("#saveModal").textContent = saveLabel || "保存";
     $("#saveModal").hidden = !onSave;
     $("#cancelModal").textContent = onSave ? "取消" : "关闭";
     $("#modalBackdrop").classList.remove("hidden");
+    overlayFocusIn($("#modalBackdrop"));
   }
-  function closeModal() { $("#modalBackdrop").classList.add("hidden"); state.modalSave = null; }
+  function closeModal() {
+    $("#modalBackdrop").classList.add("hidden");
+    state.modalSave = null;
+    const ret = state.modalReturn;
+    if (ret && ret.isConnected) { try { ret.focus(); } catch (e) {} }
+    state.modalReturn = null;
+  }
 
   /* ================= 侧栏 / 语音助手（Jarvis 浮层：F22 STT 链 + F21 播报） ================= */
   function closeSidebar() { $("#sidebar").classList.remove("open"); $("#sidebarScrim").classList.remove("show"); }
@@ -649,10 +671,17 @@
     $("#jarvisHint").textContent = cfg.sttMode === "gateway"
       ? "网关转写模式：点击麦克风录音，松手后上传转写。也可直接输入文字。"
       : "点击圆形按钮开始语音输入（浏览器实时识别），或直接输入文字。";
+    state.jarvisReturn = document.activeElement;
     $("#jarvisOverlay").classList.remove("hidden");
     $("#jarvisText").focus();
   }
-  function closeJarvis() { stopRecognition(); Voice.ttsStopAll(); $("#jarvisOverlay").classList.add("hidden"); }
+  function closeJarvis() {
+    stopRecognition(); Voice.ttsStopAll();
+    $("#jarvisOverlay").classList.add("hidden");
+    const ret = state.jarvisReturn;
+    if (ret && ret.isConnected) { try { ret.focus(); } catch (e) {} }
+    state.jarvisReturn = null;
+  }
   function stopRecognition() {
     Voice.VoiceInput.abort("jarvis");
     state.micBusy = false;
@@ -738,7 +767,15 @@
   }
 
   /* ================= 主题 ================= */
-  function applyTheme(v) { document.documentElement.dataset.theme = v === "dark" ? "dark" : "light"; }
+  // 同步三处：html data-theme（CSS 变量切换）/ theme-color meta（浏览器 UI 色，
+  // 安装态 PWA  splash 之外唯一可控处）/ 无持久化副作用（写盘在 themeToggle）。
+  const THEME_COLORS = { light: "#f7f8fa", dark: "#15171b" };
+  function applyTheme(v) {
+    const dark = v === "dark";
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    const meta = document.getElementById("metaTheme");
+    if (meta) meta.content = THEME_COLORS[dark ? "dark" : "light"];
+  }
 
   /* ================= 跨模块查询（工作流页「当前会话记忆」用） ================= */
   // refreshGateway 一并导出：测试/调试可在渠道账本被外部改动后手动触发模型清单刷新

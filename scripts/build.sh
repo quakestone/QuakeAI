@@ -47,6 +47,7 @@ echo "== 复制 PWA 资产（sw.js / manifest / 图标）=="
 cp -f src/sw.js build/sw.js
 cp -f src/manifest.webmanifest build/manifest.webmanifest
 cp -f src/icon.svg build/icon.svg
+cp -f src/apple-touch-icon.png build/apple-touch-icon.png
 
 echo "== 复制内置通道清单（服务商页「一键导入」数据源）=="
 # 源在仓库根（历史位置不变）；页面经相对路径 ./gateway-channels.json 拉取，

@@ -193,6 +193,44 @@
 - 探测延迟取页源同源（trace/health 都打当前站点），不含上游 API 真实延迟；四态反映的是「到本站边缘/主机的可达性」。
 - PWA 壳体固化/性能/三轮审查/删旧 UI/部署交付 → B5–B8。
 
+## B5 PWA / 深浅色 / 无障碍（F30 + 打磨项）✅（门禁 G5 通过 34/34）
+
+### 交付物
+
+| 项 | 文件 | 说明 |
+|---|---|---|
+| SW 注册 | `src/ui/index.html` | body 末尾 inline 注册（`./sw.js` 相对路径，GitHub Pages 子路径 scope 自动收敛；load 事件后注册；失败一律静默——SW 是增强不是依赖） |
+| PWA 元信息 | `src/ui/index.html` + `src/apple-touch-icon.png` + `scripts/build.sh` | iOS standalone：`apple-mobile-web-app-capable` / `apple-mobile-web-app-status-bar-style` / `apple-mobile-web-app-title` / apple-touch-icon（PIL 按 icon.svg 同坐标复刻的 180 PNG，4x 超采样）；manifest 补 PNG icons 条目、theme/background 色对齐默认浅色；build.sh 拷贝 PNG |
+| 主题色同步 | `app.js` + `index.html` | 单一动态 `theme-color` meta（id=metaTheme），`applyTheme` 同步浏览器 UI 色（浅 `#f7f8fa` / 深 `#15171b`） |
+| 系统深浅色 | `store.js` | `gw_theme` 未设置时跟随 `prefers-color-scheme`（**不落盘**——用户手动切换后才写入，之后以用户为准；持久化格式不变，旧数据无损） |
+| 焦点管理 | `app.js` | modal/Jarvis 自定义浮层：打开焦点移入（首个可聚焦元素）、关闭还原到触发元素；`modalReturn`/`jarvisReturn` 状态位 |
+| aria 补强 | `app.js` | 激活导航项 `aria-current="page"` |
+| 响应式修复 | `app.css` | **矮视口 sidebar 溢出修复**（见问题 1）：会话列表 `min-height:60→0`（flex:1 吸收 deficit）+ 两档高度 compaction（≤740px / ≤660px） |
+| 测试 | `scripts/g5-verify.py` + `scripts/test-ui-g5.sh` | 一键：构建 → 子路径托管 → Playwright（34 断言，A–G 七段；SW 需真实注册，context `service_workers="allow"`） |
+
+### 门禁 G5 实测结果（34/34 PASS）
+
+- **A Service Worker 与离线开壳（F30，6 断言）**：注册成功 + 页面受控（controller 非空）+ scope 收敛到 `/QuakeAI/`；预缓存 25 项（从 sw.js 解析，随源漂移）全部落 cache；**断网 reload 后应用壳可开**——WASM 网关从缓存装载就绪、壳渲染、切视图正常、`health()` 本地可调（网关数据请求本就走浏览器内 WASM，从不经过网络/SW）。
+- **B manifest 与 iOS standalone（6 断言）**：manifest 可 fetch 且字段齐全 + 相对路径（子路径兼容）；PNG 图标 200 + manifest icons 含 PNG 条目；apple metas 在位；theme-color 初始浅色值。
+- **C 深色主题（8 断言）**：默认 light；toggle → data-theme=dark + `gw_theme` 持久化 + computed 背景色真实变化 + theme-color meta 同步；刷新保持；再 toggle 回 light。含**矮屏守卫**（见问题 1）。
+- **D 系统深浅色首次跟随（3 断言）**：独立 context `color_scheme=dark` 首访 data-theme=dark 且 `gw_theme` 不落盘；手动切换后落盘 light（用户优先）。
+- **E prefers-reduced-motion（2 断言）**：reduce 下 `.primary-btn` 过渡时长 <1ms；对照非 reduce 环境 >0.1s（证明断言靶子有效）。
+- **F 无障碍（6 断言）**：Jarvis 打开焦点入输入框、Esc 关闭、焦点还原到 `#openJarvis`；modal 打开焦点移入浮层内、Esc 关闭；激活导航 aria-current；jarvis aria-modal + sidebar aria-label。
+- **G 零错误**：A–F 控制台/页面零错误（探测路径 404 除外）。**回归：G0 28/28、G1 56/56、G2 45/45、G3 53/53、G4 49/49 不回退。**
+
+### 过程中发现并修复的问题
+
+1. **矮视口 sidebar 溢出，主题切换按钮被挤出视口（真 bug，720p 笔记本必现）**：sidebar 是 fixed flex 列，各分区 min-content 之和 731px > 720px 视口，`.conversation-list` 的 `min-height:60px` 不肯再缩 → `.sidebar-bottom`（网关状态 + 主题切换）整体出视口 11px。修法：列表 `min-height:0`（flex:1 本就可吸收 deficit）+ 两档高度 compaction 媒体查询（≤740px 收紧间距、≤660px 再缩 nav-icon 至 13px）。修复后 720/640/600px 三档高度验证按钮均入视；G5-C 加回归守卫断言。
+2. **SW 自 B0 起从未注册（F30 核心缺失）**：`src/sw.js` 与预缓存清单一直存在且在 B1–B4 持续维护，但 index.html 没有注册代码——离线开壳实际不可用。补 load 事件后的相对路径注册（失败静默）。G5-A 的断网 reload 断言即守门测试。
+3. **theme-color 与 manifest 色不一致（细节）**：meta 写死浅色 `#f7f8fa`、manifest 是深色 `#0b0e14`（旧 UI 遗产）。统一为「默认浅色 + JS 动态同步」，manifest 对齐浅色。
+4. **G5 测试口径两处修正（非产品缺陷）**：① 预缓存断言最初拼出 `/QuakeAI./index.html`（忘剥 `./` 前缀）——全量误报 missing；② F 段点 `#chatModelBtn` 时页面停在 home 视图（按钮在 chat 视图内、隐藏态）——先切视图再点。
+
+### 已知限制（后续批次处理）
+
+- SW 更新策略是「缓存优先 + 后台更新」：新版本发布后需二次 reload 才全量生效（activate 时清旧 cache + skipWaiting，首次 reload 即用新壳；静态资源后台静默更新）。
+- iOS Safari 的 PWA 安装引导（"添加到主屏幕"）无标准 API，未做自定义引导浮层；manifest + apple metas 已就位，系统 Share 菜单可用。
+- 真机安装/跨浏览器（iOS Safari standalone）属 §8.7 手动项，留待 B6/B7 人工验收轮处理。
+
 ## 复现命令
 
 ```bash
@@ -202,4 +240,5 @@ bash scripts/test-ui-g1.sh     # G1 一键实测（B1 对话全量 56 断言）
 bash scripts/test-ui-g2.sh     # G2 一键实测（B2 服务商与模型 45 断言）
 bash scripts/test-ui-g3.sh     # G3 一键实测（B3 提示词+语音多媒体+工作流 53 断言）
 bash scripts/test-ui-g4.sh     # G4 一键实测（B4 上游/接入/鉴权/本机调试/网络监视 49 断言）
+bash scripts/test-ui-g5.sh     # G5 一键实测（B5 PWA/深浅色/无障碍 34 断言）
 ```

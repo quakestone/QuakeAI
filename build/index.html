@@ -3,11 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#f7f8fa">
+  <!-- 浏览器 UI 色随应用主题走（JS applyTheme 同步 id 引用；初始=默认浅色） -->
+  <meta name="theme-color" id="metaTheme" content="#f7f8fa">
   <meta name="description" content="QuakeAI — 免费资源 AI 智能聚合网关 · 纯浏览器 WASM 工作台">
   <title>QuakeAI · 智能网关工作台</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <!-- iOS 主屏 standalone（Safari 不认 manifest 的 display，须显式声明） -->
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="QuakeAI">
   <link rel="stylesheet" href="./assets/css/tokens.css">
   <link rel="stylesheet" href="./assets/css/app.css">
   <link rel="stylesheet" href="./assets/css/gw.css">
@@ -310,5 +316,16 @@ curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm
   <script src="./assets/js/upstream.js"></script>
   <script src="./assets/js/netmon.js"></script>
   <script src="./assets/js/app.js"></script>
+  <script>
+    /* F30 Service Worker 注册（离线开壳）：
+       相对路径注册，GitHub Pages 子路径（/QuakeAI/）下 scope 自动收敛到本站目录；
+       注册/更新失败一律静默（http 本地调试、隐私模式、旧浏览器都不弹错）——
+       SW 是增强不是依赖，页面功能不因它缺席而受损。 */
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").catch(() => {});
+      });
+    }
+  </script>
 </body>
 </html>

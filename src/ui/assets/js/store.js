@@ -32,7 +32,13 @@
 
   /* ---------- 主题：gw_theme（与旧 UI 同键） ---------- */
   const theme = {
-    get() { return config.get("gw_theme", "light"); },
+    get() {
+      const v = config.get("gw_theme", "");
+      if (v === "dark" || v === "light") return v;
+      // 未设置过：跟随系统偏好（不落盘——用户手动切换后才写入，之后以用户为准）
+      try { return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; }
+      catch (e) { return "light"; }
+    },
     set(v) { config.set("gw_theme", v === "dark" ? "dark" : "light"); },
   };
 
