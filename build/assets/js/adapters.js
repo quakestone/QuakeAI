@@ -18,6 +18,25 @@
     try { return decodeURIComponent(v); } catch (e) { return v; }
   }
 
+  /* 设备 Key 请求头（与旧 UI deviceKeysHeader 同口径）：
+     存储态是扁平 {provider: key}（gw_device_keys），但网关侧 DeviceKeys 结构体
+     期望 {id, keys} 包装——早期直接发扁平 map，Rust 解析出空 keys 被静默忽略，
+     设备 Key 端到端不生效。id 用持久化的 gw_device_id（随机 UUID，只存本浏览器）。 */
+  function deviceKeysHeader() {
+    let ks = {};
+    try { ks = JSON.parse(config.get("gw_device_keys", "") || "{}") || {}; } catch (e) { ks = {}; }
+    const clean = Object.fromEntries(Object.entries(ks).filter(([, v]) => v && String(v).trim()));
+    if (!Object.keys(clean).length) return "";
+    let id = config.get("gw_device_id", "");
+    if (!id) {
+      id = (global.crypto && global.crypto.randomUUID)
+        ? global.crypto.randomUUID()
+        : "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+      config.set("gw_device_id", id);
+    }
+    return JSON.stringify({ id, keys: clean });
+  }
+
   /* 网关自定义请求头（与旧 UI 口径一致，键名不变）：
      x-admin-token 管理面软锁 / x-device-keys 本设备 Key 覆盖 /
      x-gw-features 系统级能力注入（B1 起由 skills 三流填充）。 */
@@ -25,7 +44,7 @@
     const h = Object.assign({}, extra || {});
     const token = config.get("gw_admin_token", "");
     if (token) h["x-admin-token"] = token;
-    const dk = config.get("gw_device_keys", "");
+    const dk = deviceKeysHeader();
     if (dk) h["x-device-keys"] = dk;
     return h;
   }

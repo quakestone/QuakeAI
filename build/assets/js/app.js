@@ -21,10 +21,12 @@
   const Prompts = window.QuakePrompts;
   const Voice = window.QuakeVoice;
   const Workflow = window.QuakeWorkflow;
+  const Upstream = window.QuakeUpstream;
+  const NetMon = window.QuakeNetMon;
   const Store = window.QuakeStore;
   const dbg = (...a) => Magic.dbg(...a);
 
-  const VIEW_NAMES = { home: "智能首页", chat: "AI 对话", providers: "服务商", prompts: "提示词", voice: "语音与多媒体", workflow: "工作流" };
+  const VIEW_NAMES = { home: "智能首页", chat: "AI 对话", providers: "服务商", prompts: "提示词", voice: "语音与多媒体", workflow: "工作流", upstream: "上游与接入" };
   const state = {
     view: "home",
     currentId: null,
@@ -163,6 +165,7 @@
     $("#promptsView").classList.toggle("hidden", view !== "prompts");
     $("#voiceView").classList.toggle("hidden", view !== "voice");
     $("#workflowView").classList.toggle("hidden", view !== "workflow");
+    $("#upstreamView").classList.toggle("hidden", view !== "upstream");
     $("#breadcrumb").textContent = VIEW_NAMES[view] || "工作台";
     $$(".nav-item[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
     if (view === "chat") renderMessages();
@@ -170,6 +173,7 @@
     if (view === "prompts") Prompts.load();       // 每次进入拉最新账本（含使用计数）
     if (view === "voice") Voice.load();           // 链路状态 + 能力模型下拉刷新
     if (view === "workflow") Workflow.refresh();  // 记忆展示 + 参数回填
+    if (view === "upstream") Upstream.load();     // 代理/鉴权/设备 Key 状态 + 行渲染
     closeSidebar();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -450,6 +454,9 @@
       } else {
         asst.error = "请求失败：" + (e && e.message ? e.message : String(e));
         stream.setError(asst.error);
+        // F25：代理未配时浏览器直连上游必被 CORS 拦截——给一次明确引导
+        // （已配代理仍失败则不唠叨，错误信息本身已足够）
+        Upstream.hintIfProxyMissing();
       }
     } finally {
       state.streaming = false;
@@ -743,19 +750,24 @@
     applyTheme(Store.theme.get());
     $("#dateChip").textContent = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date());
     $("#buildVersion").textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
-    ["#pvBuildVersion", "#prBuildVersion", "#vcBuildVersion", "#wfBuildVersion"].forEach(sel => {
+    ["#pvBuildVersion", "#prBuildVersion", "#vcBuildVersion", "#wfBuildVersion", "#upBuildVersion"].forEach(sel => {
       const el = $(sel);
       if (el) el.textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
     });
 
     // 服务商页：渠道账本变更后联动刷新（模型清单 / 顶栏 / 侧栏状态）
-    Providers.init(() => { refreshGateway(); });
+    // + 上游页「本设备 Key」行按 provider 重建
+    Providers.init(() => { refreshGateway(); if (global.QuakeUpstream) QuakeUpstream.load(); });
     // 提示词页：账本变更后联动刷新对话页三流条（默认流 chips / 手选态）
     Prompts.init(() => { renderSkillsBar(); });
     // 语音页：链路状态 + 能力模型下拉（内部自装载 channels）
     Voice.init();
     // 工作流页：参数持久化 + 格式实时生效 + chat 完成钩子由 app.js 调用
     Workflow.init();
+    // 上游与接入页：代理 / 鉴权 / 本设备 Key / 部署自检
+    Upstream.init();
+    // 网络监视（F29）：全局状态条 + 心跳 + online/offline
+    NetMon.start();
 
     Store.loadConversations().then(convos => {
       state.conversations = convos;

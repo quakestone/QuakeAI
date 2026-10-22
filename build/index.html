@@ -30,6 +30,7 @@
         <button class="nav-item" data-view="prompts"><span class="nav-icon">✦</span> 提示词</button>
         <button class="nav-item" data-view="voice"><span class="nav-icon">◉</span> 语音与多媒体</button>
         <button class="nav-item" data-view="workflow"><span class="nav-icon">◈</span> 工作流</button>
+        <button class="nav-item" data-view="upstream"><span class="nav-icon">⇱</span> 上游与接入</button>
       </div>
       <div class="history-head"><span class="section-label">最近对话</span><button class="tiny-icon" id="clearSearch" title="清除搜索">···</button></div>
       <div class="conversation-list" id="conversationList"></div>
@@ -234,9 +235,56 @@
           </article>
           <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="wfBuildVersion"></span></span></footer>
         </section>
+        <section class="view upstream-view hidden" id="upstreamView">
+          <div class="prov-heading">
+            <div><div class="eyebrow">UPSTREAM &amp; ACCESS</div><h1>上游与接入</h1><p class="subhead">纯静态部署脱钩 Cloudflare 后：转发代理、OpenAI 兼容接入、管理面软锁、本设备 Key 与部署自检——全部只存本机。</p></div>
+            <div class="prov-actions">
+              <button class="soft-btn" id="upDiagRun" title="GET /diag：本地 WASM 网关自检快照">部署自检 ↗</button>
+            </div>
+          </div>
+          <div class="up-grid">
+            <article class="card up-card">
+              <h3>⇱ 上游转发代理 <span class="cap-badge" id="upProxyBadge">F25</span></h3>
+              <p class="up-sub">浏览器直连智谱等上游会被 CORS 拦截。填写你自己的转发服务地址（Worker / 服务器均可），网关把真实上游地址放在 <code>x-gw-target</code> 头、原样转交 method / headers / body。<b>留空 = 直连</b>（将被 CORS 拦截，对话不可用）。</p>
+              <div class="up-row"><input id="upProxy" type="url" placeholder="https://your-proxy.example.com/gateway（留空 = 直连）" autocomplete="off" spellcheck="false"></div>
+              <div class="up-actions"><button class="primary-btn" id="upProxySave">保存转发地址</button><span class="up-hint" id="upProxyHint"></span></div>
+              <p class="up-state" id="upProxyState"></p>
+            </article>
+            <article class="card up-card">
+              <h3>⌘ 管理面鉴权 <span class="cap-badge">F27</span></h3>
+              <p class="up-sub">纯客户端应用无服务端密钥：口令只存本浏览器 localStorage（键 <code>gw_admin_token</code>），给 <code>/admin/api/*</code> 请求带 <code>x-admin-token</code> 头做一层<b>本地软锁</b>——网关侧强制校验，配了不带头即 401。<b>留空 = 不鉴权</b>。</p>
+              <div class="up-row"><input id="upToken" type="password" placeholder="留空 = 未配置鉴权" autocomplete="off"></div>
+              <div class="up-actions"><button class="primary-btn" id="upTokenSave">保存口令</button><span class="up-hint" id="upTokenHint"></span></div>
+              <p class="up-state" id="upTokenState"></p>
+            </article>
+            <article class="card up-card up-card-wide">
+              <h3>⌸ 接入方式 <span class="cap-badge">F26</span> · OpenAI 兼容端点</h3>
+              <p class="up-sub">任何 OpenAI 兼容客户端都能直接接本网关（Base URL 即本站地址）：</p>
+              <pre class="up-code">curl &lt;gateway&gt;/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"glm-4-flash","stream":true,"messages":[{"role":"user","content":"你好"}]}'
+
+# 音频 multipart 上传（同端点，任意二进制）
+curl &lt;gateway&gt;/v1/audio/transcriptions -F 'file=@sample.wav' -F 'model=glm-asr-2512'</pre>
+              <p class="up-sub">响应头 <code>x-gateway-channel</code> / <code>x-gateway-attempts</code> 可观测命中渠道与降权链（如 <code>ch-a=HTTP429;ch-b=ok</code>）。自定义头约定：<code>x-gw-target</code>（代理转发）、<code>x-gw-features</code>（系统级能力）、<code>x-device-keys</code>（本设备 Key）、<code>x-admin-token</code>（管理面软锁）。</p>
+            </article>
+            <article class="card up-card up-card-wide">
+              <h3>🔑 本设备 Key <span class="cap-badge">F19</span> · 浏览器级</h3>
+              <p class="up-sub">多人共用一个网关时，不想用别人登记的共享 Key：在这里按 provider 录入本设备自己的 Key。只随本浏览器请求生效（<code>x-device-keys</code> 头），<b>不写入共享账本</b>；仅当对应渠道没登记共享 Key 时才会用这里的。留空保存 = 清除。</p>
+              <div class="dk-rows" id="upDevKeyRows"></div>
+            </article>
+            <article class="card up-card up-card-wide">
+              <h3>◈ 部署自检 <span class="cap-badge">F28</span> · GET /diag</h3>
+              <p class="up-sub">本地 WASM 网关的自检快照（渠道账本 / skill 计数 / 事件 / 存储态）。点右上角「部署自检 ↗」或下方按钮刷新。</p>
+              <pre class="up-diag" id="upDiagBody">（未运行——点「部署自检」）</pre>
+            </article>
+          </div>
+          <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="upBuildVersion"></span></span></footer>
+        </section>
       </div>
     </main>
   </div>
+  <div class="net-bar" id="net-bar" data-st="idle" role="status" aria-label="网络状态" title="点击重新检测网络（落到哪个边缘、延迟多少）"><span class="nb-led"></span><span class="nb-txt" id="nb-txt">检测中…</span></div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <dialog class="gw-dialog" id="debug-dlg" aria-label="调试日志"><div class="dlg-head"><h3>调试日志</h3><div class="dlg-head-actions"><button class="soft-btn" id="dbg-clear">清空</button><button class="soft-btn" id="dbg-copy">复制</button><button class="icon-btn" id="dbg-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="dbg-body"></pre><p class="dlg-foot">魔法指令 <code>/debug on</code> 开启 · <code>/debug off</code> 关闭。iOS 主屏 PWA 无 F12，用此面板；桌面端也可按 F12 看 DevTools。</p></dialog>
   <dialog class="gw-dialog" id="console-dlg" aria-label="控制台状态"><div class="dlg-head"><h3>控制台状态</h3><div class="dlg-head-actions"><button class="soft-btn" id="console-copy">复制</button><button class="icon-btn" id="console-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="console-body"></pre><p class="dlg-foot">魔法指令 <code>/console: zsj</code> 开启 · <code>/console: off</code> 关闭。只读状态速览，不影响聊天。</p></dialog>
@@ -259,6 +307,8 @@
   <script src="./assets/js/prompts.js"></script>
   <script src="./assets/js/voice.js"></script>
   <script src="./assets/js/workflow.js"></script>
+  <script src="./assets/js/upstream.js"></script>
+  <script src="./assets/js/netmon.js"></script>
   <script src="./assets/js/app.js"></script>
 </body>
 </html>

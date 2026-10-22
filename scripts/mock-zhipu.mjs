@@ -27,6 +27,9 @@ const server = createServer((req, res) => {
     const isFail = req.url?.startsWith("/fail/");
     const isFlakyEmpty = req.url?.startsWith("/flaky-empty/");
     const isFlaky = req.url?.startsWith("/flaky/");
+    // B4：模拟用户自建「上游转发服务」——配了 gw_upstream_proxy 后，网关把请求
+    // 发到这里、真实上游地址放在 x-gw-target 头。与 /chat/completions 同一处理器。
+    const isProxy = req.url?.startsWith("/proxy");
     appendFileSync(
       LOG,
       JSON.stringify({
@@ -36,10 +39,14 @@ const server = createServer((req, res) => {
         authorization: req.headers["authorization"] ?? null,
         contentType: req.headers["content-type"] ?? null,
         bodyLength: body.length,
+        // B4：x-gw-target —— 配代理后网关转交的真实上游地址（断言代理链路用）
+        gwTarget: req.headers["x-gw-target"] ?? null,
+        proxyReceived: isProxy || undefined,
         // v0.19.25 测试基建：chat 请求摘要——验证网关侧系统级流参数注入
         // （thinking / web_search tools）与三流 system 消息合并。
         // B1 增补：x-gw-features 头 + 消息清单（ctx 边界 / 附件 parts 验证用）。
-        chatDigest: (req.url?.includes("/chat/completions") ? (() => {
+        // B4 增补：/proxy 路径（配了 gw_upstream_proxy 的上游转发）同样摘要素引。
+        chatDigest: ((req.url?.includes("/chat/completions") || isProxy) ? (() => {
           try {
             // body 以 latin1 累积（二进制安全），解析前按 utf8 解码回原文——
             // 否则中文成 mojibake，system 提示词等断言无法匹配。
@@ -82,7 +89,7 @@ const server = createServer((req, res) => {
     }
 
     if (req.url === "/chat/completions" && req.method === "POST" ||
-        isFlaky || isFlakyEmpty) {
+        isFlaky || isFlakyEmpty || isProxy) {
       const auth = req.headers["authorization"];
       // 智谱 v4 端点两种鉴权都接受（模拟真实行为）：
       //   1. 原始 API Key（Bearer {id}.{secret}）

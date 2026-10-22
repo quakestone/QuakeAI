@@ -22,6 +22,8 @@ const PRECACHE = [
   "./assets/js/prompts.js",
   "./assets/js/voice.js",
   "./assets/js/workflow.js",
+  "./assets/js/upstream.js",
+  "./assets/js/netmon.js",
   "./assets/js/app.js",
   "./gateway-channels.json",
   "./assets/wasm/index.js",

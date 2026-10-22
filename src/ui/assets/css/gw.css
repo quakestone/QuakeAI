@@ -461,3 +461,69 @@ dialog#skill-dlg textarea:focus-visible { border-color: var(--accent); outline: 
 }
 
 
+
+/* ---------- B4 上游与接入页 ---------- */
+.up-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.up-card { display: grid; gap: 10px; padding: 16px; align-content: start; }
+.up-card-wide { grid-column: 1 / -1; }
+.up-card h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.up-card .up-sub { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.7; }
+.up-card .up-sub code, .up-state code {
+  font-size: 11px; padding: 1px 5px; border-radius: 5px;
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.up-row input {
+  width: 100%; padding: 9px 11px; font-size: 13px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+}
+.up-row input:focus-visible { border-color: var(--accent); outline: none; }
+.up-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.up-hint { font-size: 12px; color: var(--muted); }
+.up-state { font-size: 12px; margin: 0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.up-state .green-dot { background: var(--ok); }
+.up-state .gray-dot { background: var(--muted); }
+.up-code, .up-diag {
+  font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 12px; color: var(--text); margin: 0; max-height: 320px; overflow: auto;
+}
+/* 本设备 Key 行 */
+.dk-rows { display: grid; gap: 8px; }
+.dk-row {
+  display: grid; grid-template-columns: minmax(90px, 1fr) minmax(120px, 1.2fr) minmax(120px, 1.4fr) auto auto;
+  gap: 8px; align-items: center;
+}
+.dk-prov { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-st { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dk-st.on { color: var(--ok); }
+.dk-in {
+  width: 100%; padding: 7px 9px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+}
+.dk-in:focus-visible { border-color: var(--accent); outline: none; }
+
+/* ---------- B4 网络监视状态条（全局底部居中） ---------- */
+.net-bar {
+  position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 7px; z-index: 60;
+  padding: 5px 13px; border-radius: 999px; cursor: pointer;
+  font-size: 11px; color: var(--muted);
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, .10);
+  transition: opacity .2s;
+}
+.net-bar .nb-led { width: 7px; height: 7px; border-radius: 50%; background: #999; flex: none; transition: background .2s; }
+.net-bar[data-st="ok"] .nb-led { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+.net-bar[data-st="slow"] .nb-led { background: var(--warn); box-shadow: 0 0 5px var(--warn); }
+.net-bar[data-st="bad"] .nb-led { background: var(--bad); box-shadow: 0 0 5px var(--bad); }
+.net-bar[data-st="offline"] .nb-led { background: #888; }
+.net-bar[data-st="bad"] .nb-txt, .net-bar[data-st="offline"] .nb-txt { color: var(--warn); }
+
+/* ---------- B4 响应式 ---------- */
+@media (max-width: 760px) {
+  .up-grid { grid-template-columns: 1fr; }
+  .dk-row { grid-template-columns: 1fr 1fr; }
+  .dk-row .dk-in { grid-column: 1 / -1; }
+}

@@ -155,12 +155,51 @@
 - 上游/接入/鉴权/本机调试 → B4；PWA/性能/三轮审查/删旧 UI/部署 → B5–B8。
 - 旧 UI（`src/admin_ui.html`）仍在 main/gh-pages 线上运行，本分支验收后（B7）才删除。
 
+## B4 上游/接入/鉴权/本机调试（F25–F29 + F19）✅（门禁 G4 通过 49/49）
+
+### 交付物
+
+| 项 | 文件 | 说明 |
+|---|---|---|
+| 上游接入模块 | `src/ui/assets/js/upstream.js` | `QuakeUpstream`：F25 代理地址填写/校验（http(s) 前缀）/状态展示/`hintIfProxyMissing` 发送失败引导；F27 管理口令（`gw_admin_token`，掩码回显）；F19 本设备 Key 行（provider 来自渠道账本，掩码回显+掩码拦截，留空保存=清除）；F28 部署自检（`GET /diag` JSON 渲染） |
+| 网络监视模块 | `src/ui/assets/js/netmon.js` | `QuakeNetMon`：F29 四态（ok ≤300ms / slow ≤800ms / bad >800ms / offline）固定底部胶囊条；插件链 trace（colo/loc/协议解析）→ health 计时兜底；首屏 3s boot + 60s 心跳（rIC 空闲调度两段式）+ online/offline 事件；1s 探测硬超时；`gw_net_last` 持久化缓存展示；bad/offline 停心跳；点击手动重探 |
+| 视图 | `src/ui/index.html` | 导航加「上游与接入」；`#upstreamView`（自检按钮+代理/鉴权两卡+接入 curl 文档卡+设备 Key 行+diag JSON）；全局 `#net-bar`（四态 LED + 文本） |
+| 样式 | `gw.css` | up-grid/up-card/up-row/up-hint/up-state/up-code/up-diag、dk-rows/dk-row 五列网格、`.net-bar` 固定底部胶囊（四态 LED：ok/slow/bad/offline）、760px 响应式 |
+| 壳接线 | `app.js` | `VIEW_NAMES` 加 upstream；setView 装配 `Upstream.load()`；init 装配 `NetMon.start()`；首页网关能力卡三态灯（代理/设备 Key/口令）；`sendWith` catch 非 Abort 分支接 `hintIfProxyMissing`；Providers 回调合并防覆盖 |
+| 适配层修复 | `adapters.js` | **x-device-keys 头格式修正**（见问题 1）：存储态扁平 `{provider:key}` 发送前包装为网关期望的 `{id,keys}`（`gw_device_id` 持久化随机 UUID） |
+| SW | `src/sw.js` | 预缓存补 upstream.js / netmon.js |
+| mock | `scripts/mock-zhipu.mjs` | `/proxy` 路由复用 chat 处理器（模拟用户自建转发服务）；日志记 `gwTarget`/`proxyReceived`；`/proxy` 请求同样摘要素引；CORS 放行四类自定义头 |
+| 测试 | `scripts/g4-verify.py` + `scripts/test-ui-g4.sh` | 一键：构建 → 子路径托管 → mock → Playwright（49 断言，A–G 七段） |
+
+### 门禁 G4 实测结果（49/49 PASS）
+
+- **A 上游转发代理（F25，12 断言）**：代理地址保存 → `gw_upstream_proxy` 持久化 + 「已配置」状态 + x-gw-target 约定提示 + 首页能力卡联动；配代理后对话经 mock `/proxy` 真实转发、`x-gw-target` = 真实上游地址（`http://127.0.0.1:8788/chat/completions`）、请求体带对模型与提问、回答含 ANSWER_MARK（**海外渠道经代理可用**）；清空恢复直连态 + `hintIfProxyMissing` 引导返回 true。
+- **B 接入方式（F26，5 断言）**：curl 示例含 `/v1/chat/completions` 与 `/v1/audio/transcriptions`；观测头 `x-gateway-channel`/`x-gateway-attempts` 与四类自定义头（x-gw-target/x-gw-features/x-device-keys/x-admin-token）约定齐全。
+- **C 管理面鉴权软锁（F27，8 断言）**：口令持久化 + 掩码展示；**裸 WASM 实例端到端**——缺 `x-admin-token` → 401、错误口令 → 401、正确口令 → 200（软锁生效且放行）；适配层自动带头不影响 UI 侧管理请求；清空后无头请求恢复 200（软锁释放）。
+- **D 本设备 Key（F19，11 断言）**：provider 行来自渠道账本；录入 → `gw_device_keys` JSON 持久化 + 「已登记」状态；掩码拦截（不写入 + toast）；**端到端**——无共享 Key 的音频渠道 + 本设备 Key → STT 转写成功且 mock 上游收到 `Bearer <设备 Key>`（证明 `x-device-keys` 被 WASM 真实消费）；清除后 JSON 与行状态同步回落。
+- **E 部署自检（F28，3 断言）**：`/diag` JSON 渲染（version/store/expected_binding/env 四段齐全）；store 态 ok 且渠道数 ≥2；env 如实反映未配管理口令。
+- **F 网络监视四态（F29，7 断言）**：net-bar 固定底部常驻；route 拦截 `/cdn-cgi/trace` → ok 态（延迟 ms + 协议 + 国家中文名）+ 手动探测结论 toast + `gw_net_last` 持久化；offline 事件 → offline 态 + 缓存快照展示（含国家）；online 事件恢复 ok。
+- **G 零错误（3 断言）**：boot 探测链式兜底真实发生（trace 404 → health 兜底，设计内行为）；无非探测路径资源 404；控制台/页面零错误。**回归：G0 28/28、G1 56/56、G2 45/45、G3 53/53 不回退。**
+
+### 过程中发现并修复的问题
+
+1. **x-device-keys 头格式不匹配（真 bug，端到端失效）**：adapters.js 最初把 localStorage 里的扁平 `{provider: key}` 原样作头发给网关，而网关侧 `DeviceKeys` 结构体期望 `{id, keys}` 包装——Rust 解析出空 keys 被静默忽略，设备 Key 端到端从不生效。修法：移植旧 UI 的 `deviceKeysHeader()`（过滤空值 + `gw_device_id` 持久化随机 UUID 包装）；G4-D 端到端断言（mock 上游实收 `Bearer <设备 Key>`）即为该修复的守门测试。
+2. **net-bar 点击重探缺失（产品缺陷）**：netmon.js 标题承诺「点击重新检测网络」但 start() 未绑定点击处理。补上 `probe("manual")`（手动探测才给结论 toast，与设计注释一致）。
+3. **netmon 探测 404 污染零错误断言（测试口径）**：静态托管下 `/cdn-cgi/trace` 与 `/health` 必然 404——这是插件①→② 链式兜底的设计内行为（探测失败静默降级），但 Chromium 会记 console error，G1 首跑因此 55/56。修法：四个门禁统一按 `m.location.url` 精确过滤探测路径 404；G4 另加双轨 404 记账（探测路径 404 必须发生=兜底链真实跑了；其他任何 404 都算缺陷），过滤不放宽为白名单。
+
+### 已知限制（后续批次处理）
+
+- 网关侧聊天渠道仍须自带共享 Key 才进候选池（`load_channels` 先过滤后应用设备 Key）——设备 Key 的端到端生效面目前是音频渠道；这是既有 Rust 行为，B4 只修 UI 适配层。
+- 探测延迟取页源同源（trace/health 都打当前站点），不含上游 API 真实延迟；四态反映的是「到本站边缘/主机的可达性」。
+- PWA 壳体固化/性能/三轮审查/删旧 UI/部署交付 → B5–B8。
+
 ## 复现命令
 
 ```bash
 bash scripts/build.sh          # 构建
-bash scripts/test-ui-g0.sh     # G0 一键实测（28 断言）
+bash scripts/test-ui-g0.sh     # G0 一键实测（脚手架 28 断言）
 bash scripts/test-ui-g1.sh     # G1 一键实测（B1 对话全量 56 断言）
 bash scripts/test-ui-g2.sh     # G2 一键实测（B2 服务商与模型 45 断言）
 bash scripts/test-ui-g3.sh     # G3 一键实测（B3 提示词+语音多媒体+工作流 53 断言）
+bash scripts/test-ui-g4.sh     # G4 一键实测（B4 上游/接入/鉴权/本机调试/网络监视 49 断言）
 ```

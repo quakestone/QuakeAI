@@ -97,7 +97,11 @@ with sync_playwright() as p:
     page = ctx.new_page()
     errors = []
     page.on("pageerror", lambda e: errors.append(str(e)))
-    page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+    # netmon 探测路径（/cdn-cgi/trace、/health）在静态托管下必然 404——插件①→②
+    # 链式兜底的设计内行为（探测失败静默降级），不算应用错误
+    page.on("console", lambda m: errors.append(m.text)
+            if m.type == "error" and not ((m.location or {}).get("url") or "").endswith(("/cdn-cgi/trace", "/health"))
+            else None)
     # 分享走确定性路径：屏蔽 navigator.share，强制落级到应用内分享对话框
     page.add_init_script("() => { try { Object.defineProperty(navigator, 'share', { value: undefined }); } catch (e) {} }")
 
