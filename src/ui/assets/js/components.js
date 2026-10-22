@@ -91,7 +91,7 @@
     const avatar = role === "assistant" ? BRAND_AVATAR : "Q", label = role === "assistant" ? "QuakeAI" : "你";
     const attRow = (atts && atts.length) ? '<div class="att-row">' + attachChips(atts) + "</div>" : "";
     const actions = role === "assistant"
-      ? '<button data-action="copy">复制</button><button data-action="share">分享</button>' + (retry ? '<button data-action="retry">重新生成</button>' : "")
+      ? '<button data-action="copy">复制</button><button data-action="share">分享</button><button data-action="speak" title="按 TTS 递降链播报这条回答">播音</button>' + (retry ? '<button data-action="retry">重新生成</button>' : "")
       : '<button data-action="copy">复制</button><button data-action="edit">修改</button><button data-action="retry">重试</button>';
     el.innerHTML =
       '<div class="message-avatar">' + avatar + '</div>' +

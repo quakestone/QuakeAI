@@ -27,6 +27,9 @@
         <button class="nav-item active" data-view="home"><span class="nav-icon">◫</span> 智能首页</button>
         <button class="nav-item" data-view="chat"><span class="nav-icon">◌</span> AI 对话</button>
         <button class="nav-item" data-view="providers"><span class="nav-icon">▤</span> 服务商</button>
+        <button class="nav-item" data-view="prompts"><span class="nav-icon">✦</span> 提示词</button>
+        <button class="nav-item" data-view="voice"><span class="nav-icon">◉</span> 语音与多媒体</button>
+        <button class="nav-item" data-view="workflow"><span class="nav-icon">◈</span> 工作流</button>
       </div>
       <div class="history-head"><span class="section-label">最近对话</span><button class="tiny-icon" id="clearSearch" title="清除搜索">···</button></div>
       <div class="conversation-list" id="conversationList"></div>
@@ -112,8 +115,124 @@
           <div class="section-heading"><div><h2>用量与对账</h2><p>本机网关记录的请求 / token / 成本估算。</p></div><button class="text-btn" id="pvUsageExport">导出 CSV ↗</button></div>
           <div class="usage-cards" id="usageCards"></div>
           <div class="usage-tables" id="usageTables"></div>
-          <div class="usage-pager hidden" id="usagePager"><button class="soft-btn" id="usagePrev">‹ 上一页</button><span id="usagePageN"></span><button class="soft-btn" id="usageNext">下一页 ›</button></div>
+          <div class="usage-pager" id="usagePager" hidden><button class="soft-btn" id="usagePrev">‹ 上一页</button><span id="usagePageN"></span><button class="soft-btn" id="usageNext">下一页 ›</button></div>
           <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="pvBuildVersion"></span></span></footer>
+        </section>
+        <section class="view prompts-view hidden" id="promptsView">
+          <div class="prov-heading">
+            <div><div class="eyebrow">PROMPTS</div><h1>提示词</h1><p class="subhead">SKILL 独立表达线：只登记「标题 + 提示词」，发送时作为 system 消息注入——与选哪个模型无关。</p></div>
+            <div class="prov-actions">
+              <button class="primary-btn" id="prAdd">＋ 新建提示词</button>
+              <button class="soft-btn" id="prRefresh">刷新 ↗</button>
+            </div>
+          </div>
+          <div class="prov-summary" id="prSummary"></div>
+          <div class="sk-catbar" id="prCatBar"></div>
+          <div class="sk-rows" id="prRows"></div>
+          <div class="usage-pager" id="prPager" hidden><button class="soft-btn" id="prPrev">‹ 上一页</button><span id="prPageN"></span><button class="soft-btn" id="prNext">下一页 ›</button></div>
+          <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="prBuildVersion"></span></span></footer>
+        </section>
+        <section class="view voice-view hidden" id="voiceView">
+          <div class="prov-heading">
+            <div><div class="eyebrow">VOICE &amp; MEDIA</div><h1>语音与多媒体</h1><p class="subhead">TTS 播报递降链、STT 转写递降链、音频/视觉/视频模型映射——全部只存本机。</p></div>
+            <div class="prov-actions">
+              <button class="soft-btn" id="vcTestTts" title="按当前 TTS 链播放一句测试文本，逐层输出结果">测试播报</button>
+              <button class="soft-btn" id="vcTestStt" title="录 3 秒音频按当前 STT 链转写，输出结果">测试转写</button>
+              <button class="soft-btn" id="vcRefresh">刷新 ↗</button>
+            </div>
+          </div>
+          <div class="vc-grid">
+            <article class="card vc-card">
+              <h3>◉ 语音链路状态</h3>
+              <p class="vc-sub">按当前模式组合的递降顺序；任一层失败自动降到下一层。</p>
+              <div class="vc-chain" id="vcChainStatus">加载中…</div>
+            </article>
+            <article class="card vc-card">
+              <h3>🎧 音频模型</h3>
+              <p class="vc-sub">转写（STT）与播音（TTS）各选一个模型，留空 = 网关按能力自动选路。</p>
+              <div class="vc-row"><label for="vc-stt-model">转写 STT</label><select id="vc-stt-model"><option value="">自动</option></select></div>
+              <div class="vc-row"><label for="vc-tts-model">播音 TTS</label><select id="vc-tts-model"><option value="">自动</option></select></div>
+            </article>
+            <article class="card vc-card">
+              <h3>🖼 图片视频模型</h3>
+              <p class="vc-sub">视觉与视频各选一个模型；带图片/视频的消息固定走该模型。</p>
+              <div class="vc-row"><label for="vc-vision-model">视觉</label><select id="vc-vision-model"><option value="">自动</option></select></div>
+              <div class="vc-row"><label for="vc-video-model">视频</label><select id="vc-video-model"><option value="">跟随视觉</option></select></div>
+              <div class="vc-row"><label for="vc-mm-scope">范围</label><select id="vc-mm-scope"><option value="attach">仅带附件的消息</option><option value="always">所有消息</option></select></div>
+            </article>
+          </div>
+          <div class="vc-grid">
+            <article class="card vc-card">
+              <h3>🔊 TTS 播报（F21）</h3>
+              <div class="vc-row"><label for="vc-tts-mode">播报模式</label><select id="vc-tts-mode">
+                <option value="auto">自动（网关 → 自定义端点 → 浏览器语音）</option>
+                <option value="gateway">仅网关（失败不降级）</option>
+                <option value="custom">自定义端点（OpenAI 兼容）</option>
+                <option value="browser">仅浏览器语音（离线可用）</option>
+              </select></div>
+              <div class="vc-row"><label for="vc-custom-url">自定义端点</label><input id="vc-custom-url" type="text" placeholder="https://…/v1/audio/speech（custom 模式用）" autocomplete="off"></div>
+              <div class="vc-row"><label for="vc-custom-key">端点 Key</label><input id="vc-custom-key" type="password" placeholder="可选（Bearer）" autocomplete="off"></div>
+              <div class="vc-row"><label for="vc-custom-model">端点模型</label><input id="vc-custom-model" type="text" placeholder="可选" autocomplete="off"></div>
+              <div class="vc-row"><label for="vc-custom-voice">端点音色</label><input id="vc-custom-voice" type="text" placeholder="可选" autocomplete="off"></div>
+              <div class="vc-row"><label for="vc-browser-voice">浏览器音色</label><select id="vc-browser-voice"><option value="">自动（优选中文）</option></select></div>
+              <div class="vc-row vc-rate"><label for="vc-rate">语速</label><input id="vc-rate" type="range" min="0.6" max="1.6" step="0.05" value="1.05"><output id="vc-rate-v">1.05</output></div>
+            </article>
+            <article class="card vc-card">
+              <h3>🎙 STT 转写（F22）</h3>
+              <div class="vc-row"><label for="vc-stt-mode">转写模式</label><select id="vc-stt-mode">
+                <option value="auto">自动（浏览器实时识别 → 网关转写兜底）</option>
+                <option value="gateway">仅网关（录音上传转写）</option>
+                <option value="browser">仅浏览器实时识别</option>
+              </select></div>
+              <p class="vc-sub">浏览器 SpeechRecognition 零上传、真实时文字流；不可用（Firefox/Safari）或强制网关模式时，走 MediaRecorder 录音 + 网关 /v1/audio/transcriptions。两个消费者绝不并发。</p>
+            </article>
+          </div>
+          <div class="vc-foot">
+            <button class="primary-btn" id="vcSave">保存语音与多媒体设置</button>
+            <span class="vc-hint" id="vcHint"></span>
+          </div>
+          <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="vcBuildVersion"></span></span></footer>
+        </section>
+        <section class="view workflow-view hidden" id="workflowView">
+          <div class="prov-heading">
+            <div><div class="eyebrow">WORKFLOW</div><h1>工作流</h1><p class="subhead">每次回答结束后本地执行：用量记账、LLM 总结标题、会话记忆压缩、附件显示规格——服务端零存储。</p></div>
+            <div class="prov-actions">
+              <button class="primary-btn" id="wfSave">保存工作流设置</button>
+              <button class="soft-btn" id="wfRefresh">刷新 ↗</button>
+            </div>
+          </div>
+          <article class="card wf-card">
+            <h3>⚙ 开关</h3>
+            <label class="wf-toggle"><input type="checkbox" id="wf-on-usage"> token 流用量统计（消息元信息 + 会话累计）</label>
+            <label class="wf-toggle"><input type="checkbox" id="wf-on-title"> LLM 总结历史标题（失败保留首条截断兜底，不覆盖手动命名）</label>
+            <label class="wf-toggle"><input type="checkbox" id="wf-on-memory"> 会话记忆更新（token 超阈时 LLM 压缩，保留最近若干条）</label>
+            <div class="wf-nums">
+              <span class="wf-num">软阈 tokens<input id="wf-mem-maxtok" type="number" min="256" max="32000" value="4000"></span>
+              <span class="wf-num">硬上限 tokens<input id="wf-mem-hard" type="number" min="512" max="64000" value="16000"></span>
+              <span class="wf-num">最近保留条数<input id="wf-mem-keep" type="number" min="2" max="40" value="8"></span>
+            </div>
+            <label class="wf-toggle"><input type="checkbox" id="wf-on-format"> 附件显示规格（缩略图 / 视频容器）</label>
+          </article>
+          <article class="card wf-card">
+            <h3>🎛 附件显示规格</h3>
+            <p class="wf-sub">缩略图边长与视频容器尺寸，保存后立即生效（CSS 变量实时下发）。</p>
+            <div class="wf-nums">
+              <span class="wf-num">缩略图边长 px<input id="wf-thumb" type="number" min="48" max="200" value="96"></span>
+              <span class="wf-num">视频容器宽 px<input id="wf-vw" type="number" min="120" max="640" value="260"></span>
+              <span class="wf-num">视频最大高 px<input id="wf-vh" type="number" min="90" max="640" value="190"></span>
+            </div>
+          </article>
+          <article class="card wf-card">
+            <h3>◈ 标题 / 记忆模型</h3>
+            <p class="wf-sub">LLM 总结标题与记忆压缩所用的模型；留空 = 自动（网关选路）。调用走网关自身、计入用量账本。</p>
+            <div class="vc-row"><label for="wf-model-sel">模型</label><select id="wf-model-sel"><option value="">自动（网关选路）</option></select></div>
+          </article>
+          <article class="card wf-card">
+            <h3>🧠 当前会话记忆</h3>
+            <p class="wf-sub">压缩后的长期记忆（偏好 / 背景 / 待办），下次超阈时作为上文一起送入。</p>
+            <pre class="wf-mem" id="wf-mem-view">（无）</pre>
+          </article>
+          <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="wfBuildVersion"></span></span></footer>
         </section>
       </div>
     </main>
@@ -122,6 +241,7 @@
   <dialog class="gw-dialog" id="debug-dlg" aria-label="调试日志"><div class="dlg-head"><h3>调试日志</h3><div class="dlg-head-actions"><button class="soft-btn" id="dbg-clear">清空</button><button class="soft-btn" id="dbg-copy">复制</button><button class="icon-btn" id="dbg-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="dbg-body"></pre><p class="dlg-foot">魔法指令 <code>/debug on</code> 开启 · <code>/debug off</code> 关闭。iOS 主屏 PWA 无 F12，用此面板；桌面端也可按 F12 看 DevTools。</p></dialog>
   <dialog class="gw-dialog" id="console-dlg" aria-label="控制台状态"><div class="dlg-head"><h3>控制台状态</h3><div class="dlg-head-actions"><button class="soft-btn" id="console-copy">复制</button><button class="icon-btn" id="console-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="console-body"></pre><p class="dlg-foot">魔法指令 <code>/console: zsj</code> 开启 · <code>/console: off</code> 关闭。只读状态速览，不影响聊天。</p></dialog>
   <dialog class="gw-dialog gw-dialog-wide" id="channel-dlg" aria-label="服务商登记"><div class="dlg-head"><h3 id="chDlgTitle">添加服务商</h3><div class="dlg-head-actions"><button class="icon-btn" id="ch-close" aria-label="关闭">×</button></div></div><div class="dlg-body ch-form"><div class="ch-form-grid"><div><label for="ch-provider">Provider *</label><input id="ch-provider" placeholder="zhipu / siliconflow / openrouter…" autocomplete="off"></div><div><label for="ch-name">名称 *</label><input id="ch-name" placeholder="显示用名称" autocomplete="off"></div><div class="full"><label for="ch-base">Base URL *</label><input id="ch-base" placeholder="https://…" autocomplete="off"></div><div><label for="ch-kind">类型</label><select id="ch-kind"><option value="chat">chat（对话）</option><option value="audio">audio（转写）</option></select></div><div><label for="ch-tier">档位</label><select id="ch-tier"><option>T1</option><option>T2</option><option>T3</option></select></div><div><label for="ch-priority">优先级（大者优先）</label><input id="ch-priority" type="number" value="50"></div><div><label for="ch-enabled">状态</label><select id="ch-enabled"><option value="1">启用</option><option value="0">停用</option></select></div><div class="full" id="ch-key-wrap"><label for="ch-key">API Key</label><input id="ch-key" type="password" placeholder="sk-…（暂不登记可留空）" autocomplete="off"><p class="ch-hint" id="ch-key-hint" hidden>编辑态不显示原 Key；轮换请用渠道卡「换 Key」。</p><p class="ch-hint" id="ch-zhipu-hint" hidden>智谱系：Key 为 {id}.{secret} 两段式时，网关自动生成短期 JWT。</p></div><div class="full"><label for="ch-models">模型列表（逗号分隔，与下方精细配置同步）</label><input id="ch-models" placeholder="glm-4-flash, glm-4-plus" autocomplete="off"></div><div class="full"><label>模型精细配置（能力 / 次要能力 / 优先级 / 启停）</label><div class="mm-rows" id="ch-meta-rows"></div><button class="soft-btn" id="ch-meta-add" type="button">＋ 添加一行</button></div><div class="full"><label for="ch-note">备注</label><input id="ch-note" placeholder="免费额度 / 用途说明（可选）" autocomplete="off"></div></div></div><div class="dlg-foot"><span class="dlg-err" id="ch-dlg-err"></span><div class="dlg-foot-actions"><button class="soft-btn" id="ch-cancel">取消</button><button class="primary-btn" id="ch-save">保存</button></div></div></dialog>
+  <dialog class="gw-dialog gw-dialog-wide" id="skill-dlg" aria-label="提示词编辑"><div class="dlg-head"><h3 id="skDlgTitle">新建提示词</h3><div class="dlg-head-actions"><button class="icon-btn" id="sk-close" aria-label="关闭">×</button></div></div><div class="dlg-body ch-form"><div class="ch-form-grid"><div class="full"><label for="sk-title">标题 *</label><input id="sk-title" placeholder="例如：周报生成器" autocomplete="off"></div><div><label for="sk-category">分类</label><select id="sk-category"><option>日常应用</option><option>专业场景</option><option>笔记整理</option><option>模型整理</option></select></div><div><label for="sk-tier">层级</label><select id="sk-tier"><option value="normal">普通（列表管理）</option><option value="system">系统级（图标开关，不进列表）</option></select></div><div><label for="sk-enabled">状态</label><select id="sk-enabled"><option value="1">启用</option><option value="0">停用</option></select></div><div class="full"><label for="sk-summary">简介（≤30 字，留空自动从正文截取）</label><input id="sk-summary" autocomplete="off"></div><div class="full"><label for="sk-prompt">提示词正文 *（作为 system 消息注入，单条 ≤100KB）</label><textarea id="sk-prompt" rows="12" placeholder="角色、任务、约束、输出格式……"></textarea></div></div></div><div class="dlg-foot"><span class="dlg-err" id="sk-dlg-err"></span><div class="dlg-foot-actions"><button class="soft-btn" id="sk-cancel">取消</button><button class="primary-btn" id="sk-save">保存</button></div></div></dialog>
   <dialog class="gw-dialog" id="key-dlg" aria-label="轮换 Key"><div class="dlg-head"><h3>轮换 API Key</h3><div class="dlg-head-actions"><button class="icon-btn" id="key-close" aria-label="关闭">×</button></div></div><div class="dlg-body"><p class="dlg-label">当前 Key（掩码）</p><p class="key-current" id="key-current">—</p><label class="dlg-label" for="key-new">新 Key</label><input id="key-new" type="password" placeholder="粘贴完整新 Key；留空保存 = 不改变" autocomplete="off"><p class="dlg-foot-note">掩码（含 *** / ... / …）会被拦截——请粘贴完整值。</p></div><div class="dlg-foot"><span class="dlg-err" id="key-dlg-err"></span><div class="dlg-foot-actions"><button class="soft-btn" id="key-cancel">取消</button><button class="primary-btn" id="key-save">保存</button></div></div></dialog>
   <dialog class="gw-dialog" id="selftest-dlg" aria-label="批量体检"><div class="dlg-head"><h3>批量体检</h3><div class="dlg-head-actions"><button class="icon-btn" id="selftest-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="selftest-body"></pre><p class="dlg-foot">串行逐个探测（单点失败不中断）；每轮上限 12 个模型。</p></div></dialog>
   <div class="modal-backdrop hidden" id="modalBackdrop"><section class="modal card" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle">设置</h2><button class="icon-btn" id="closeModal" aria-label="关闭">×</button></div><div id="modalBody"></div><div class="modal-actions"><button class="soft-btn" id="cancelModal">取消</button><button class="primary-btn" id="saveModal">保存</button></div></section></div>
@@ -136,6 +256,9 @@
   <script src="./assets/js/share.js"></script>
   <script src="./assets/js/qrcode.js"></script>
   <script src="./assets/js/providers.js"></script>
+  <script src="./assets/js/prompts.js"></script>
+  <script src="./assets/js/voice.js"></script>
+  <script src="./assets/js/workflow.js"></script>
   <script src="./assets/js/app.js"></script>
 </body>
 </html>

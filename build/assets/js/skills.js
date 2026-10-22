@@ -223,39 +223,48 @@ E. 最终任务定义与用户请求一致。
     return { list, feats };
   }
 
-  /* ---------- 装载（含种子化；旧账本零迁移补默认值） ---------- */
+  /* ---------- 装载（含种子化；旧账本零迁移补默认值） ----------
+     in-flight 去重：app.js / prompts.js / setView 可能并发调用，
+     不去重会双双看到空列表 → 双双种子 → 存储端加后缀生成
+     sk-three-sages-2 之类的重复条目（数据完整性 bug）。 */
+  let loadInFlight = null;
   async function load() {
-    try {
-      let data = await gateway.admin("/skills");
-      state.list = data.skills || [];
-      if (state.list.length === 0) {
-        try {
-          await gateway.admin("/skills", { method: "POST", body: {
-            id: "sk-three-sages", title: "三个诸葛亮", prompt: DRILL_PROMPT,
-            summary: "回答前三角度自辩，再统一作答", category: "日常应用", tier: "normal", enabled: true,
-          } });
-          data = await gateway.admin("/skills");
-          state.list = data.skills || [];
-        } catch { /* 种子失败不阻塞 */ }
+    if (loadInFlight) return loadInFlight;
+    loadInFlight = (async () => {
+      try {
+        let data = await gateway.admin("/skills");
+        state.list = data.skills || [];
+        if (state.list.length === 0) {
+          try {
+            await gateway.admin("/skills", { method: "POST", body: {
+              id: "sk-three-sages", title: "三个诸葛亮", prompt: DRILL_PROMPT,
+              summary: "回答前三角度自辩，再统一作答", category: "日常应用", tier: "normal", enabled: true,
+            } });
+            data = await gateway.admin("/skills");
+            state.list = data.skills || [];
+          } catch { /* 种子失败不阻塞 */ }
+        }
+        // 系统级 skill 幂等补种（老账本列表非空时上面不会触发）
+        for (const sys of SYS_SKILLS) {
+          if (state.list.some(s => s.id === sys.id)) continue;
+          try {
+            await gateway.admin("/skills", { method: "POST", body: {
+              id: sys.id, title: sys.title, prompt: sys.prompt, summary: sys.summary,
+              category: "日常应用", tier: "system", enabled: true,
+            } });
+            state.list.push({ ...sys, category: "日常应用", tier: "system", enabled: true, used_count: 0 });
+          } catch { /* 补种失败不阻塞（前端常量保底注入） */ }
+        }
+      } catch { state.list = []; }
+      for (const s of state.list) {
+        if (!s.summary) s.summary = summarizePrompt(s.prompt);
+        if (!SKILL_CATS.includes(s.category)) s.category = SKILL_CATS[0];
+        if (s.tier !== SKILL_TIER_SYSTEM) s.tier = "normal";
       }
-      // 系统级 skill 幂等补种（老账本列表非空时上面不会触发）
-      for (const sys of SYS_SKILLS) {
-        if (state.list.some(s => s.id === sys.id)) continue;
-        try {
-          await gateway.admin("/skills", { method: "POST", body: {
-            id: sys.id, title: sys.title, prompt: sys.prompt, summary: sys.summary,
-            category: "日常应用", tier: "system", enabled: true,
-          } });
-          state.list.push({ ...sys, category: "日常应用", tier: "system", enabled: true, used_count: 0 });
-        } catch { /* 补种失败不阻塞（前端常量保底注入） */ }
-      }
-    } catch { state.list = []; }
-    for (const s of state.list) {
-      if (!s.summary) s.summary = summarizePrompt(s.prompt);
-      if (!SKILL_CATS.includes(s.category)) s.category = SKILL_CATS[0];
-      if (s.tier !== SKILL_TIER_SYSTEM) s.tier = "normal";
-    }
-    return state.list;
+      return state.list;
+    })();
+    try { return await loadInFlight; }
+    finally { loadInFlight = null; }
   }
 
   /* ---------- CRUD（B3 提示词页用；壳层先备边界） ---------- */

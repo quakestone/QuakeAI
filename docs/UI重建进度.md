@@ -114,6 +114,47 @@
 - 语音 TTS/STT 递降、工作流参数 → B3；上游/接入/鉴权/本机调试 → B4。
 - 旧 UI（`src/admin_ui.html`）仍在 main/gh-pages 线上运行，本分支验收后（B7）才删除——当前两套并存属计划内的中间态。
 
+## B3 提示词 + 语音多媒体 + 工作流（F20–F24）✅（门禁 G3 通过 53/53）
+
+### 交付物
+
+| 项 | 文件 | 说明 |
+|---|---|---|
+| 提示词模块 | `src/ui/assets/js/prompts.js` | `QuakePrompts`：F20 全量——统计条（条数/已启用/默认 n/3/累计使用/系统级）、四分类 pill 栏、卡片行（标题/分类/停用徽标/已用 N 次/简介/正文/操作组）、每类独立分页（5 条/页）、新建编辑对话框（标题+正文必填、简介 ≤30 截断）、启停/设默认（≤3，联动对话页 chip）/删除（联动清理默认 id） |
+| 语音多媒体模块 | `src/ui/assets/js/voice.js` | `QuakeVoice`：F21 TTS 三级递降链（网关 `/v1/audio/speech` → 自定义端点 → `speechSynthesis`，逐层输出+只弹一次降级提示）；F22 STT 两级链（`SpeechRecognition` → 网关 `/v1/audio/transcriptions`，MediaRecorder→16kHz 单声道 WAV 重编码）；F23 视觉/视频模型范围（`mmScope` attach/always，`mmModelFor` 选路）；MicHub 麦克风单所有者+强制释放、VoiceInput 单消费者 |
+| 工作流模块 | `src/ui/assets/js/workflow.js` | `QuakeWorkflow`：F24 四开关全接真实行为——usage（消息 meta token 徽标）、title（LLM 总结标题，answers≥2 且非用户命名）、memory（token 超阈 LLM 压缩，`memfsm` 状态字段兼容旧数据）、format（CSS 变量 `--att-thumb/--att-video-w/--att-video-h` 实时下发）；阈值/规格数值 clamp 持久化 `gw_wf_cfg` |
+| 视图 | `src/ui/index.html` | 导航加 prompts/voice/workflow；`#promptsView`（统计/分类栏/卡片/分页）、`#voiceView`（链路状态卡+音频/图片视频/TTS/STT 设置卡+测试按钮）、`#workflowView`（四开关卡+阈值+规格+模型+记忆卡）、`#skill-dlg` 提示词对话框 |
+| 样式 | `gw.css` | sk-catbar/sk-row 卡片族、vc-grid/vc-card/vc-chain 链路图、wf-card/wf-toggle/wf-nums、对话框 textarea、760px 响应式；附件规格改 CSS 变量驱动（视频容器 ≥300px 放大） |
+| 壳接线 | `app.js` | 三视图 setView 装配；`sendWith` 视觉模型选路（`Voice.mmModelFor`）+ token 账本后挂 `Workflow.runWorkflow`；Jarvis 浮层重写（文字入口+回答播报）；消息「播音」按钮走 TTS 递降链；`window.QuakeApp` 导出 `refreshGateway`（渠道账本外部变更后手动刷新模型清单） |
+| 消息动作 | `components.js` | 助手消息动作组加「播音」 |
+| SW | `src/sw.js` | 预缓存补 prompts.js / voice.js / workflow.js |
+| 测试 | `scripts/g3-verify.py` + `scripts/test-ui-g3.sh` | 一键：构建 → 子路径托管 → mock → Playwright（53 断言，A–F 六段） |
+
+### 门禁 G3 实测结果（53/53 PASS）
+
+- **A 提示词 CRUD（F20，21 断言）**：对话框新建（存储端生成 id）→ 编辑回填改名 → 停用/启用徽标 → 设默认（徽标 1/3 + 对话页 chip 联动）→ 分类切换 + 每类独立分页（造 7 条翻页验证）→ 空分类空态 → 手选发送后 `used_count +1`（服务端计数）→ 删除卡片消失 + 默认徽标回 0/3 + chip 同步移除。
+- **B TTS 三级递降链（F21，11 断言）**：链路状态卡文案；auto 第一级测试播报真实命中网关（mock 收到 `/audio/speech`、输入非空）；回答完成「播音」按钮触发合成；browser 模式持久化 + 链路文案切换；自定义端点（第二级）指向 mock 真实命中；三级全部走通。
+- **C STT 两级链（F22，7 断言）**：headless 下浏览器识别不可用（链路如实标注）；gateway 模式持久化；fake mic 录 3s → WAV 重编码 → mock 收到 multipart 并返回 `mock-transcription`；Jarvis 浮层文字入口 → 回答 → 按 TTS 链播报 + 浮层显示文本。
+- **D 视觉/视频模型范围（F23，6 断言）**：vision 下拉来自渠道账本；带图附件选路覆盖（`glm-4v-flash`）；`always` 范围 + 自动选路纯文本也走视觉模型；显式选模型优先于 always；`mmScope`/`visionModel` 持久化。
+- **E 工作流参数（F24，7 断言）**：CSS 变量实时生效（thumb/vw/vh）；`gw_wf_cfg` 数值持久化；auto_title 真实跑（title_auto=true 且标题被 LLM 改写）；memory 压缩真实触发并产出长期记忆（超阈 token 驱动）；usage 关闭后无 token 徽标。
+- **F 零错误**：A–F 控制台/页面零错误。**回归：G0 28/28、G1 56/56、G2 45/45 不回退。**
+
+### 过程中发现并修复的问题
+
+1. **skills 并发种子重复条目（真 bug）**：app.js/prompts.js/setView 并发调用 `Skills.load()`，双双见空列表 → 双双 POST 种子 → 存储端对已存在 id 加后缀产出 `sk-three-sages-2`。修法：`skills.js` `load()` 加 in-flight 去重（与 providers.js 同模式），修复后恰 3 条无重复。
+2. **分页条永不显示（产品缺陷）**：`#prPager`/`#usagePager` 在 index.html 写死 `class="usage-pager hidden"`，JS 只切 `hidden` 属性，`.hidden` 类（display:none）使其永不可见。修法：改用 `hidden` 属性驱动（gw.css 已有 `[hidden]{display:none!important}`）；providers 视图同款潜在问题一并修复。
+3. **冗余元素遮蔽选择器**：index.html 遗留空 `#prDefBadge` div，使 `#prDefBadge, .sk-def-badge` 选择器取到空元素。删除该冗余 div（徽标由 renderRows 在 `#prRows` 内产出）。
+4. **G1 回归被 B3 工作流污染（测试口径）**：B3 引入的 autoTitle/memory 会在主聊天完成后补发 LLM 请求，落在 digest 末条，G1 原有「取末条 digest」断言全部误命中后续请求。修法：g1-verify.py 加 `main_digest()` 定位主请求（user 消息直接是提问、非「用户：」开头的转录）。
+5. **G3 测试口径四处修正（非产品缺陷）**：① `used_count` 是服务端计数，客户端 `state.list` 不自增——发送后需重拉账本再读；② `glm-4-voice` 入库即被 `load_all_channels` 迁移为 `glm-asr-2512`（store.rs 设计行为），断言改验账本实际值；③ memoryUpdate 需消息数 > `memKeepRecent` 才有可折叠区域，E2 测试对话加厚到 10 条；④ 测试经管理面 API 建渠道绕过 UI 的 onChange 联动，需手动触发 `refreshGateway`（据此把该函数导出到 `window.QuakeApp`）。
+6. **E2 分支辨析**：消息数 ≤ keep_recent 时 memoryUpdate 走「无新增可折叠内容」分支（计数减半不压缩）——这是防死循环的设计分支，测试数据需覆盖压缩主路径。
+
+### 已知限制（后续批次处理）
+
+- 旧架构 WASM 工作流内核（`/wf/kernel.wasm`，CF Worker 托管）在纯静态部署下不存在——FSM「何时压缩」决策以同等阈值的 JS 逻辑实现（`workflow.js` 头注已诚实说明），`memfsm` 状态字段与旧数据兼容。
+- headless Chromium 无语音引擎：浏览器 TTS 实际播放与 `SpeechRecognition` 不可用，链路状态如实标注；网关级递降（自定义端点/mock）已真实命中验证。
+- 上游/接入/鉴权/本机调试 → B4；PWA/性能/三轮审查/删旧 UI/部署 → B5–B8。
+- 旧 UI（`src/admin_ui.html`）仍在 main/gh-pages 线上运行，本分支验收后（B7）才删除。
+
 ## 复现命令
 
 ```bash
@@ -121,4 +162,5 @@ bash scripts/build.sh          # 构建
 bash scripts/test-ui-g0.sh     # G0 一键实测（28 断言）
 bash scripts/test-ui-g1.sh     # G1 一键实测（B1 对话全量 56 断言）
 bash scripts/test-ui-g2.sh     # G2 一键实测（B2 服务商与模型 45 断言）
+bash scripts/test-ui-g3.sh     # G3 一键实测（B3 提示词+语音多媒体+工作流 53 断言）
 ```

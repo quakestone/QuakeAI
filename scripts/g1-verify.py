@@ -50,6 +50,15 @@ def chat_digests(since=0):
             out.append(j["chatDigest"])
     return out
 
+def main_digest(digests):
+    """定位**主聊天请求**的 digest——B3 起工作流（autoTitle/memory）会在主聊天
+    完成后补发 LLM 请求（user 消息以「用户：」开头、内容为对话转录），
+    直接取末条会命中它们。主请求的 user 消息直接是用户提问（或以 image_url parts 开头）。"""
+    out = [d for d in digests
+           if any(h.startswith("user:") and not h.startswith("user:用户：")
+                  or "image_url" in h for h in (d.get("msgHeads") or []))]
+    return out[-1] if out else (digests[-1] if digests else {})
+
 # 1x1 透明 PNG（附件验证用）
 PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
 PNG_PATH = "/tmp/g1-att.png"
@@ -133,7 +142,7 @@ with sync_playwright() as p:
     mark = log_len()
     send_and_wait(page, "G1 第二问（带深度思考）")
     digests = chat_digests(mark)
-    d = digests[-1] if digests else {}
+    d = main_digest(digests)
     check("system 消息注入深度思考提示词（全渠道保底通道）",
           any("深度思考模式" in h for h in (d.get("systemHeads") or [])), json.dumps(d, ensure_ascii=False)[:240])
     # x-gw-features 是网关内部消费的头（不转发上游）；其效果按渠道能力落地：
@@ -150,7 +159,7 @@ with sync_playwright() as p:
     mark = log_len()
     send_and_wait(page, "G1 第三问（带图）")
     digests = chat_digests(mark)
-    d = digests[-1] if digests else {}
+    d = main_digest(digests)
     heads = d.get("msgHeads") or []
     check("请求体末条为 [text,image_url] parts",
           bool(heads) and "image_url" in heads[-1], str(heads[-1:]))
@@ -175,7 +184,7 @@ with sync_playwright() as p:
     mark = log_len()
     send_and_wait(page, "G1 第四问（边界后）")
     digests = chat_digests(mark)
-    d = digests[-1] if digests else {}
+    d = main_digest(digests)
     heads = d.get("msgHeads") or []
     user_heads = [h for h in heads if h.startswith("user:")]
     check("边界后请求只带 1 条用户消息（旧历史被截断）", len(user_heads) == 1, str(heads))

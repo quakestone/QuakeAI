@@ -18,10 +18,13 @@
   const Att = window.QuakeAttachments;
   const Share = window.QuakeShare;
   const Providers = window.QuakeProviders;
+  const Prompts = window.QuakePrompts;
+  const Voice = window.QuakeVoice;
+  const Workflow = window.QuakeWorkflow;
   const Store = window.QuakeStore;
   const dbg = (...a) => Magic.dbg(...a);
 
-  const VIEW_NAMES = { home: "智能首页", chat: "AI 对话", providers: "服务商" };
+  const VIEW_NAMES = { home: "智能首页", chat: "AI 对话", providers: "服务商", prompts: "提示词", voice: "语音与多媒体", workflow: "工作流" };
   const state = {
     view: "home",
     currentId: null,
@@ -32,12 +35,13 @@
     health: null,
     streaming: false,
     aborter: null,
-    recognition: null,
     modalSave: null,
     attachments: [],         // 输入区附件实例（含 file/dataUrl，瞬态）
     editCtx: null,           // 修改态 { convoId, idx }
     streamGen: 0,            // 流代号：新会话/新发送抢占时，旧流 finally 只落库不碰 UI
     stream: null,            // 当前 live 流式节点（renderMessages 对流式消息只挂它，单节点原则）
+    speakReply: false,       // 语音助手浮层发起的对话：回答完成按 TTS 链播报
+    micBusy: false,          // 语音助手浮层麦克风状态
   };
 
   /* ================= 持久化 ================= */
@@ -136,7 +140,7 @@
         if (m.channel) meta.push("via " + escapeHTML(m.channel));
         if (m.model) meta.push("模型 " + escapeHTML(m.model));
         if (m.attempts && String(m.attempts).split(";").length > 1) meta.push("⤻ 已自动切换");
-        if (m.usage && m.usage.total_tokens != null) meta.push("⛁ " + fmtTok(m.usage.total_tokens));
+        if (Workflow.cfg.usage && m.usage && m.usage.total_tokens != null) meta.push("⛁ " + fmtTok(m.usage.total_tokens));
         if (m.ttfb != null) meta.push("首字 " + (m.ttfb / 1000).toFixed(1) + "s");
       }
       if (m.error) meta.push('<span class="hb bad">' + escapeHTML(m.error) + "</span>");
@@ -156,10 +160,16 @@
     $("#homeView").classList.toggle("hidden", view !== "home");
     $("#chatView").classList.toggle("hidden", view !== "chat");
     $("#providersView").classList.toggle("hidden", view !== "providers");
+    $("#promptsView").classList.toggle("hidden", view !== "prompts");
+    $("#voiceView").classList.toggle("hidden", view !== "voice");
+    $("#workflowView").classList.toggle("hidden", view !== "workflow");
     $("#breadcrumb").textContent = VIEW_NAMES[view] || "工作台";
     $$(".nav-item[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
     if (view === "chat") renderMessages();
     if (view === "providers") Providers.load();   // 每次进入拉最新账本（load 有 in-flight 去重）
+    if (view === "prompts") Prompts.load();       // 每次进入拉最新账本（含使用计数）
+    if (view === "voice") Voice.load();           // 链路状态 + 能力模型下拉刷新
+    if (view === "workflow") Workflow.refresh();  // 记忆展示 + 参数回填
     closeSidebar();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -373,9 +383,12 @@
         history.unshift(...sk.list.map(s => ({ role: "system", content: s.prompt })));
         for (const s of sk.list) Skills.api.use(s.id).catch(() => {});
       }
+      // F23 视觉/视频选路：本轮带图片/视频附件 → 用设置里锁定的视觉/视频模型覆盖；
+      // 「always」范围仅在自动选路（未显式选模型）下允许无附件覆盖。
+      const mmModel = Voice.mmModelFor(Att.attHasMedia(atts), state.model);
       const result = await gateway.chat({
         messages: history,
-        model: state.model || undefined,
+        model: mmModel || state.model || undefined,
         features: sk.feats,
         signal: state.aborter.signal,
         onDelta: ({ content }) => { stream.setText(content); $("#messages").scrollTop = $("#messages").scrollHeight; },
@@ -395,7 +408,7 @@
       if (result.channel) meta.push("via " + escapeHTML(result.channel));
       if (result.model) meta.push("模型 " + escapeHTML(result.model));
       if (result.attempts && String(result.attempts).split(";").length > 1) meta.push("⤻ 已自动切换");
-      if (result.usage && result.usage.total_tokens != null) meta.push("⛁ " + fmtTok(result.usage.total_tokens));
+      if (Workflow.cfg.usage && result.usage && result.usage.total_tokens != null) meta.push("⛁ " + fmtTok(result.usage.total_tokens));
       if (result.ttfbMs) meta.push("首字 " + result.ttfbMs + "ms");
       stream.setMeta(meta.join(" · "));
       if (!asst.content && !asst.reasoning) {
@@ -406,6 +419,26 @@
       if (!asst.error && result.usage && result.usage.total_tokens != null) {
         c.tokens = (c.tokens || 0) + result.usage.total_tokens;
         c.answers = (Number(c.answers) || 0) + 1;
+      }
+      // F24 工作流（chat.completed）：附件显示规格 / LLM 总结标题 / 会话记忆压缩。
+      // 失败绝不打断聊天主链路；标题变了要刷新侧栏与会话列表。
+      const titleBefore = c.title;
+      Workflow.runWorkflow({ convo: c, atts, usage: result.usage }).then(() => {
+        if (c.title !== titleBefore) { c.updated = Date.now(); persistConvo(c); renderConversations(); }
+      }).catch(() => {});
+      // 语音助手浮层发起的对话：回答完成后按 TTS 链播报
+      if (state.speakReply) {
+        state.speakReply = false;
+        const reply = asst.content || "";
+        if (reply) {
+          $("#jarvisTranscript").textContent = reply;
+          $("#jarvisState").textContent = "播报中";
+          Voice.ttsPlaySentence(reply).then(() => { $("#jarvisState").textContent = "我在听"; })
+            .catch(e => {
+              $("#jarvisState").textContent = "我在听";
+              toast("播报失败：" + (e.message || e), "err");
+            });
+        }
       }
     } catch (e) {
       asst.streaming = false;
@@ -600,45 +633,80 @@
   }
   function closeModal() { $("#modalBackdrop").classList.add("hidden"); state.modalSave = null; }
 
-  /* ================= 侧栏 / 语音助手 ================= */
+  /* ================= 侧栏 / 语音助手（Jarvis 浮层：F22 STT 链 + F21 播报） ================= */
   function closeSidebar() { $("#sidebar").classList.remove("open"); $("#sidebarScrim").classList.remove("show"); }
   function openSidebar() { $("#sidebar").classList.add("open"); $("#sidebarScrim").classList.add("show"); }
-  function openJarvis() { $("#jarvisOverlay").classList.remove("hidden"); $("#jarvisText").focus(); }
-  function closeJarvis() { stopRecognition(); $("#jarvisOverlay").classList.add("hidden"); }
-  function stopRecognition() {
-    if (state.recognition) { try { state.recognition.stop(); } catch (e) {} state.recognition = null; }
-    $("#jarvisMic").classList.remove("listening");
+  function openJarvis() {
+    // 链路提示随当前 STT 模式变化（浏览器识别零上传 / 网关录音转写）
+    const cfg = Voice.cfg;
+    $("#jarvisHint").textContent = cfg.sttMode === "gateway"
+      ? "网关转写模式：点击麦克风录音，松手后上传转写。也可直接输入文字。"
+      : "点击圆形按钮开始语音输入（浏览器实时识别），或直接输入文字。";
+    $("#jarvisOverlay").classList.remove("hidden");
+    $("#jarvisText").focus();
   }
-  function startRecognition() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      $("#jarvisHint").textContent = "当前浏览器不支持 Web Speech API，请使用文字输入。";
-      toast("当前浏览器不支持语音识别，可直接输入文字。");
-      return;
-    }
-    if (state.recognition) { stopRecognition(); $("#jarvisState").textContent = "我在听"; return; }
-    const rec = new SR();
-    state.recognition = rec;
-    rec.lang = "zh-CN"; rec.interimResults = true; rec.continuous = false;
+  function closeJarvis() { stopRecognition(); Voice.ttsStopAll(); $("#jarvisOverlay").classList.add("hidden"); }
+  function stopRecognition() {
+    Voice.VoiceInput.abort("jarvis");
+    state.micBusy = false;
+    $("#jarvisMic").classList.remove("listening");
+    $("#jarvisState").textContent = "我在听";
+  }
+  /// F22 STT 递降链：浏览器 SpeechRecognition（实时 partial）→ 网关转写兜底。
+  /// VoiceInput 内部保证两个麦克风消费者绝不并发（iOS/Android 互斥）。
+  async function startRecognition() {
+    if (state.micBusy) { stopRecognition(); return; }
+    state.micBusy = true;
     $("#jarvisMic").classList.add("listening");
     $("#jarvisState").textContent = "正在聆听…";
     $("#jarvisHint").textContent = "说完后会自动填入识别结果。";
-    rec.onresult = e => {
-      let transcript = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) transcript += e.results[i][0].transcript;
-      $("#jarvisTranscript").textContent = transcript;
-      $("#jarvisText").value = transcript;
-    };
-    rec.onerror = e => toast("语音识别暂不可用：" + e.error);
-    rec.onend = () => { state.recognition = null; $("#jarvisMic").classList.remove("listening"); $("#jarvisState").textContent = "我在听"; };
-    try { rec.start(); } catch (e) { toast("无法启动麦克风，请检查浏览器权限。"); }
+    try {
+      const mode = await Voice.VoiceInput.start("jarvis", p => {
+        $("#jarvisTranscript").textContent = p;
+        $("#jarvisText").value = p;
+      });
+      $("#jarvisHint").textContent = mode === "browser"
+        ? "浏览器实时识别中（零上传）…说完自动填入。"
+        : "录音中…点击麦克风结束并转写。";
+      if (mode === "recorder") {
+        // 录音模式：再点一次麦克风 = 停止并转写
+        $("#jarvisMic").onclick = stopAndTranscribe;
+      }
+    } catch (e) {
+      state.micBusy = false;
+      $("#jarvisMic").classList.remove("listening");
+      $("#jarvisState").textContent = "我在听";
+      $("#jarvisHint").textContent = "语音识别不可用（" + (e.message || e) + "），请使用文字输入。";
+      toast("语音识别暂不可用，可直接输入文字");
+    }
+  }
+  async function stopAndTranscribe() {
+    $("#jarvisState").textContent = "转写中…";
+    try {
+      const r = await Voice.VoiceInput.stop("jarvis");
+      state.micBusy = false;
+      $("#jarvisMic").classList.remove("listening");
+      $("#jarvisMic").onclick = startRecognition;
+      $("#jarvisState").textContent = "我在听";
+      if (r.text) { $("#jarvisTranscript").textContent = r.text; $("#jarvisText").value = r.text; }
+      else { $("#jarvisHint").textContent = "没有识别到内容，再试一次或直接输入文字。"; }
+    } catch (e) {
+      state.micBusy = false;
+      $("#jarvisMic").classList.remove("listening");
+      $("#jarvisMic").onclick = startRecognition;
+      $("#jarvisState").textContent = "我在听";
+      toast("转写失败：" + (e.message || e), "err");
+    }
   }
   function sendJarvis() {
     const t = $("#jarvisText").value.trim();
     if (!t) return;
+    if (state.streaming) { toast("正在生成中，可先停止当前回答"); return; }
+    stopRecognition();
     $("#jarvisTranscript").textContent = "已提交：" + t;
     $("#jarvisText").value = "";
-    closeJarvis();
+    $("#jarvisState").textContent = "思考中…";
+    state.speakReply = true;   // 回答完成后按 TTS 链播报（F21）
     submitText(t, []);
   }
 
@@ -665,16 +733,29 @@
   /* ================= 主题 ================= */
   function applyTheme(v) { document.documentElement.dataset.theme = v === "dark" ? "dark" : "light"; }
 
+  /* ================= 跨模块查询（工作流页「当前会话记忆」用） ================= */
+  // refreshGateway 一并导出：测试/调试可在渠道账本被外部改动后手动触发模型清单刷新
+  // （正常流程由 Providers 的 onChange 回调驱动，见 init 装配）。
+  window.QuakeApp = { currentConvo: () => current(), refreshGateway };
+
   /* ================= 事件装配 ================= */
   function init() {
     applyTheme(Store.theme.get());
     $("#dateChip").textContent = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date());
     $("#buildVersion").textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
-    const pvVer = $("#pvBuildVersion");
-    if (pvVer) pvVer.textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
+    ["#pvBuildVersion", "#prBuildVersion", "#vcBuildVersion", "#wfBuildVersion"].forEach(sel => {
+      const el = $(sel);
+      if (el) el.textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
+    });
 
     // 服务商页：渠道账本变更后联动刷新（模型清单 / 顶栏 / 侧栏状态）
     Providers.init(() => { refreshGateway(); });
+    // 提示词页：账本变更后联动刷新对话页三流条（默认流 chips / 手选态）
+    Prompts.init(() => { renderSkillsBar(); });
+    // 语音页：链路状态 + 能力模型下拉（内部自装载 channels）
+    Voice.init();
+    // 工作流页：参数持久化 + 格式实时生效 + chat 完成钩子由 app.js 调用
+    Workflow.init();
 
     Store.loadConversations().then(convos => {
       state.conversations = convos;
@@ -810,6 +891,13 @@
       } else if (act === "share") {
         if (state.streaming) { toast("正在生成中，请先停止"); return; }
         shareMsg(m);
+      } else if (act === "speak") {
+        // F21 TTS 递降链：网关 → 自定义端点 → 浏览器语音
+        if (!m.content || !m.content.trim()) { toast("这条消息没有可播报的内容"); return; }
+        Voice.ttsStopAll();
+        Voice.ttsPlaySentence(m.content).catch(e => {
+          if (String(e && e.message) !== "stopped") toast("播报失败：" + (e.message || e), "err");
+        });
       } else if (act === "retry") {
         if (state.streaming) { toast("正在生成中，请先停止"); return; }
         const idx = c.msgs.indexOf(m);

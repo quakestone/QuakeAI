@@ -116,11 +116,11 @@
 /* ---------- 消息气泡内附件 ---------- */
 .att-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .att-img-wrap { display: grid; gap: 4px; }
-.att-thumb { width: 132px; max-height: 132px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--line); display: block; }
+.att-thumb { width: var(--att-thumb, 132px); max-height: var(--att-thumb, 132px); object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--line); display: block; }
 .att-media { display: grid; gap: 4px; min-width: 220px; max-width: 320px; }
 .att-media-ic { font-size: 14px; }
 .att-audio { width: 100%; height: 34px; }
-.att-video { width: 100%; max-height: 240px; border-radius: var(--radius-sm); background: #000; display: block; }
+.att-video { width: var(--att-video-w, 100%); max-height: var(--att-video-h, 240px); border-radius: var(--radius-sm); background: #000; display: block; }
 .att-media-nm { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .att-file-wrap { display: grid; gap: 4px; }
 .att-file { display: inline-block; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); font-size: 12px; }
@@ -197,7 +197,7 @@ dialog.gw-dialog::backdrop { background: rgba(15, 20, 30, .45); }
 /* ---------- 响应式：窄屏 skills 条独立成行 ---------- */
 @media (max-width: 760px) {
   .skills-bar { width: 100%; order: 3; }
-  .att-thumb { width: 104px; max-height: 104px; }
+  .att-thumb { width: min(var(--att-thumb, 132px), 104px); max-height: min(var(--att-thumb, 132px), 104px); }
 }
 
 /* ============================================================================
@@ -360,4 +360,104 @@ dialog#channel-dlg .dlg-body, dialog#key-dlg .dlg-body {
   .mm-row { grid-template-columns: minmax(0, 1fr) 72px 72px; grid-auto-rows: auto; }
   .mm-row .mm-prio, .mm-row .mm-en, .mm-row .mm-del { grid-column: auto; }
 }
+
+/* ============================================================================
+   B3 提示词（prompts view）· 语音与多媒体（voice view）· 工作流（workflow view）
+   ==========================================================================*/
+/* ---------- 提示词页 ---------- */
+.sk-catbar { display: flex; gap: 0; margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow-x: auto; }
+.sk-catbar::-webkit-scrollbar { display: none; }
+.sk-cat {
+  flex: 1 1 0; min-width: 72px; border: none; border-right: 1px solid var(--line);
+  background: var(--surface-2); color: var(--muted); cursor: pointer;
+  padding: 8px 10px; font-size: 12px; white-space: nowrap;
+}
+.sk-cat:last-child { border-right: none; }
+.sk-cat:hover { color: var(--accent); }
+.sk-cat.sel { background: var(--accent-soft); color: var(--text); font-weight: 650; }
+.sk-cat b { font-variant-numeric: tabular-nums; }
+.sk-def-badge { font-size: 12px; color: var(--muted); margin: 0 0 12px; }
+.sk-def-badge b { color: var(--ok); }
+.sk-rows { display: grid; gap: 12px; margin-bottom: 26px; }
+.sk-row { display: grid; gap: 8px; padding: 14px 16px; }
+.sk-row-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sk-row-ttl { font-size: 14px; font-weight: 650; }
+.sk-row-cat { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.sk-row-use { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.sk-row-desc { margin: 0; font-size: 12px; color: var(--muted); }
+.sk-row-body {
+  margin: 0; max-height: 132px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; line-height: 1.6;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px 12px; color: var(--text);
+}
+.sk-row-foot { display: flex; flex-wrap: wrap; gap: 8px; }
+.sk-row-foot .soft-btn { font-size: 12px; padding: 4px 12px; }
+.sk-row-foot .danger { border-color: var(--bad); color: var(--bad); }
+.sk-row-foot .danger:hover { background: var(--bad); color: #fff; }
+.sk-row-foot .def-on { border-color: var(--ok); color: var(--ok); }
+dialog#skill-dlg .dlg-body { font-family: inherit; font-size: 13px; line-height: 1.6; background: var(--surface); color: var(--text); white-space: normal; }
+dialog#skill-dlg textarea {
+  width: 100%; padding: 8px 10px; font-size: 13px; line-height: 1.6; resize: vertical;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+dialog#skill-dlg textarea:focus-visible { border-color: var(--accent); outline: none; }
+
+/* ---------- 语音与多媒体页 ---------- */
+.vc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.vc-card { display: grid; gap: 10px; padding: 16px; align-content: start; }
+.vc-card h3 { margin: 0; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.vc-card .vc-sub { font-size: 12px; color: var(--muted); margin: 0; }
+.vc-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.vc-row > label { flex: none; width: 92px; color: var(--muted); font-size: 12px; }
+.vc-row select, .vc-row input[type="text"], .vc-row input[type="password"], .vc-row input[type="number"] {
+  flex: 1; min-width: 0; padding: 7px 10px; font-size: 13px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+}
+.vc-row select:focus-visible, .vc-row input:focus-visible { border-color: var(--accent); outline: none; }
+.vc-rate { display: flex; align-items: center; gap: 10px; }
+.vc-rate input[type="range"] { flex: 1; accent-color: var(--accent); }
+.vc-rate output { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 36px; text-align: right; }
+.vc-chain {
+  font-size: 12px; line-height: 1.8; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px 12px; white-space: pre-wrap; word-break: break-word;
+}
+.vc-chain b { color: var(--text); }
+.vc-chain .chain-arrow { color: var(--accent); }
+.vc-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vc-actions .soft-btn { font-size: 12px; padding: 5px 12px; }
+.vc-hint { font-size: 12px; color: var(--muted); }
+.vc-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 26px; }
+.vc-foot .vc-hint { margin-left: auto; }
+
+/* ---------- 工作流页 ---------- */
+.wf-card { display: grid; gap: 12px; padding: 16px; margin-bottom: 16px; }
+.wf-card h3 { margin: 0; font-size: 14px; }
+.wf-card .wf-sub { font-size: 12px; color: var(--muted); margin: 0; line-height: 1.7; }
+.wf-toggle { display: flex; align-items: center; gap: 10px; font-size: 13px; cursor: pointer; }
+.wf-toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+.wf-nums { display: flex; flex-wrap: wrap; gap: 12px; margin: 2px 0 2px 25px; padding-left: 12px; border-left: 2px solid var(--line); }
+.wf-num { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.wf-num input {
+  width: 92px; padding: 6px 8px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+}
+.wf-num input:focus-visible { border-color: var(--accent); outline: none; }
+.wf-mem {
+  font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px 12px; color: var(--text); margin: 0;
+}
+
+/* ---------- B3 响应式 ---------- */
+@media (max-width: 760px) {
+  .vc-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .vc-row > label { width: auto; }
+  .sk-row-use { margin-left: 0; width: 100%; }
+}
+
 
