@@ -118,6 +118,7 @@
         channel: decodeHeader(resp.headers.get("x-gateway-channel")),
         attempts: decodeHeader(resp.headers.get("x-gateway-attempts")),
         model: decodeHeader(resp.headers.get("x-gateway-model")),
+        degraded: decodeHeader(resp.headers.get("x-gateway-degraded")),
       };
       if (!resp.ok) {
         const j = await resp.json().catch(() => ({}));

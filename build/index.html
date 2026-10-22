@@ -41,7 +41,7 @@
     <main class="main-area">
       <header class="topbar">
         <div class="topbar-left"><button class="icon-btn mobile-only" id="openSidebar" aria-label="打开导航">☰</button><span class="breadcrumb" id="breadcrumb">智能首页</span></div>
-        <div class="topbar-actions"><span class="status-dot" id="gwTopDot"></span><span class="status-label" id="gwTopLabel">网关启动中…</span><button class="icon-btn" id="openJarvis" title="打开语音助手">◉</button></div>
+        <div class="topbar-actions"><span class="status-dot" id="gwTopDot"></span><span class="status-label" id="gwTopLabel">网关启动中…</span><button class="icon-btn" id="btn-console" hidden title="控制台面板（/console: zsj）">⌗</button><button class="icon-btn" id="btn-debug" hidden title="调试日志（/debug on）">🐞</button><button class="icon-btn" id="openJarvis" title="打开语音助手">◉</button></div>
       </header>
       <div class="view-host" id="viewHost">
         <section class="view home-view" id="homeView">
@@ -65,17 +65,48 @@
         <section class="view chat-view hidden" id="chatView">
           <div class="chat-heading"><div><div class="eyebrow">CONVERSATION</div><h1 id="chatTitle">新对话</h1></div><div class="chat-head-actions"><button class="soft-btn" id="chatModelBtn">◈ <span id="chatModelName">自动选择</span></button><button class="soft-btn" id="exportChat">↧ 导出</button><button class="icon-btn" id="chatMore" title="对话选项">···</button></div></div>
           <div class="messages" id="messages" aria-live="polite"></div>
-          <div class="chat-composer-wrap"><div class="chat-composer card"><textarea id="chatPrompt" rows="1" placeholder="给 QuakeAI 发送消息…"></textarea><div class="composer-bottom"><div class="composer-tools"><button class="soft-btn" id="chatStop" hidden>■ 停止</button></div><div class="send-cluster"><span class="composer-hint">Enter 发送 · Shift+Enter 换行</span><button class="send-btn" id="chatSend" aria-label="发送">↑</button></div></div></div><div class="disclaimer">AI 可能会出错。重要信息请核实。</div></div>
+          <div class="chat-composer-wrap">
+            <div class="edit-chip hidden" id="editChip"><span class="edit-chip-title" id="editChipTitle"></span><button class="soft-btn" id="editChipCancel">取消修改</button></div>
+            <div class="chat-composer card">
+              <div class="attach-bar hidden" id="attachBar"></div>
+              <textarea id="chatPrompt" rows="1" placeholder="给 QuakeAI 发送消息…"></textarea>
+              <div class="composer-bottom">
+                <div class="composer-tools">
+                  <button class="soft-btn" id="chatStop" hidden>■ 停止</button>
+                  <button class="soft-btn" id="chatAttach" title="添加附件（图片 5 / 音频 3 / 视频 1 / 文件 5，多媒体合计 3MB）">＋ 附件</button>
+                  <div class="skills-bar" id="skillsBar">
+                    <button class="skill-chip sys" id="skSysThink" data-on="0" title="系统级：深度思考（推理增强）">◐ 深度思考</button>
+                    <button class="skill-chip sys" id="skSysSearch" data-on="0" title="系统级：智能搜索（联网检索）">⌕ 智能搜索</button>
+                    <span class="skill-flow" id="skillDefaultList"></span>
+                    <button class="skill-chip pick" id="skPick" title="选择本轮提示词（SKILL）">✦ 提示词</button>
+                    <button class="skill-chip skip" id="skSkip" data-on="0" title="暂停默认对话 skill（设置保留，可恢复）">⏸ 默认</button>
+                  </div>
+                </div>
+                <div class="send-cluster"><span class="composer-hint">Enter 发送 · Shift+Enter 换行</span><button class="send-btn" id="chatSend" aria-label="发送">↑</button></div>
+              </div>
+            </div>
+            <div class="att-count hidden" id="attCount"></div>
+            <input type="file" id="fileInput" multiple hidden>
+            <div class="disclaimer">AI 可能会出错。重要信息请核实。</div>
+          </div>
         </section>
       </div>
     </main>
   </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <dialog class="gw-dialog" id="debug-dlg" aria-label="调试日志"><div class="dlg-head"><h3>调试日志</h3><div class="dlg-head-actions"><button class="soft-btn" id="dbg-clear">清空</button><button class="soft-btn" id="dbg-copy">复制</button><button class="icon-btn" id="dbg-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="dbg-body"></pre><p class="dlg-foot">魔法指令 <code>/debug on</code> 开启 · <code>/debug off</code> 关闭。iOS 主屏 PWA 无 F12，用此面板；桌面端也可按 F12 看 DevTools。</p></dialog>
+  <dialog class="gw-dialog" id="console-dlg" aria-label="控制台状态"><div class="dlg-head"><h3>控制台状态</h3><div class="dlg-head-actions"><button class="soft-btn" id="console-copy">复制</button><button class="icon-btn" id="console-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="console-body"></pre><p class="dlg-foot">魔法指令 <code>/console: zsj</code> 开启 · <code>/console: off</code> 关闭。只读状态速览，不影响聊天。</p></dialog>
   <div class="modal-backdrop hidden" id="modalBackdrop"><section class="modal card" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle">设置</h2><button class="icon-btn" id="closeModal" aria-label="关闭">×</button></div><div id="modalBody"></div><div class="modal-actions"><button class="soft-btn" id="cancelModal">取消</button><button class="primary-btn" id="saveModal">保存</button></div></section></div>
   <div class="jarvis-overlay hidden" id="jarvisOverlay" role="dialog" aria-modal="true" aria-label="语音助手"><div class="jarvis-backdrop" id="jarvisBackdrop"></div><section class="jarvis-panel"><div class="jarvis-top"><div class="jarvis-brand"><div class="brand-mark">Q</div><div><strong>语音助手</strong><span>说一句话，或直接输入</span></div></div><button class="icon-btn" id="closeJarvis" aria-label="关闭语音助手">×</button></div><div class="jarvis-center"><div class="orb-wrap"><div class="orb-ring ring-one"></div><div class="orb-ring ring-two"></div><button class="jarvis-orb" id="jarvisMic" aria-label="开始语音输入"><span>◉</span></button></div><h2 id="jarvisState">我在听</h2><p id="jarvisHint">点击圆形按钮开始语音输入，或直接输入文字。</p><div class="jarvis-transcript" id="jarvisTranscript">你好，我是 QuakeAI 语音助手。今天有什么可以帮你？</div></div><div class="jarvis-input-row"><input id="jarvisText" placeholder="发送消息…"><button class="send-btn" id="jarvisSend">↑</button></div><div class="jarvis-foot"><span><i class="mini-dot green-dot"></i> 网关已接入</span><span>语音识别取决于浏览器支持</span></div></section></div>
   <script src="./assets/js/store.js"></script>
   <script src="./assets/js/adapters.js"></script>
   <script src="./assets/js/components.js"></script>
+  <script src="./assets/js/points.js"></script>
+  <script src="./assets/js/magic.js"></script>
+  <script src="./assets/js/attachments.js"></script>
+  <script src="./assets/js/skills.js"></script>
+  <script src="./assets/js/share.js"></script>
+  <script src="./assets/js/qrcode.js"></script>
   <script src="./assets/js/app.js"></script>
 </body>
 </html>

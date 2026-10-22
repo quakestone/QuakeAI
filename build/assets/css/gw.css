@@ -56,6 +56,7 @@
 .gw-model-empty { padding: 18px 8px; text-align: center; color: var(--muted); font-size: 13px; }
 
 /* ---------- 流式消息 ---------- */
+.message.streaming .message-actions { visibility: hidden; }   /* 流式中操作组隐身，finish 后现身 */
 .message.streaming .message-text::after {
   content: ""; display: inline-block; width: .55em; height: 1em;
   margin-left: 2px; vertical-align: text-bottom;
@@ -82,3 +83,119 @@
 
 /* ---------- 空态 ---------- */
 .gw-empty-hint { color: var(--muted); font-size: 13px; padding: 14px 4px; }
+
+/* ============================================================
+   B1 对话全量：附件 / 上下文边界 / skills 三流条 / 修改态 /
+   原生对话框（调试浮层 + 控制台面板 + 分享）
+   ============================================================ */
+
+/* ---------- 输入区附件条（chat composer 顶部） ---------- */
+.attach-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 2px 10px; }
+.att-chip {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); font-size: 12px; color: var(--text);
+  max-width: 220px;
+}
+.att-chip.att-pic { width: 46px; height: 46px; padding: 0; overflow: hidden; }
+.att-chip.att-pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.att-chip.att-file { padding: 6px 8px; }
+.att-chip .att-ic { flex: none; }
+.att-chip .att-nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px; }
+.att-chip .att-x {
+  position: absolute; top: -7px; right: -7px; width: 18px; height: 18px;
+  border: none; border-radius: 50%; background: var(--surface-3); color: var(--muted);
+  font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center;
+}
+.att-chip .att-x:hover { background: var(--bad); color: #fff; }
+
+/* ---------- 附件实时计数条 ---------- */
+.att-count { display: flex; flex-wrap: wrap; gap: 10px; padding: 6px 4px 0; font-size: 11px; color: var(--muted); }
+.att-count .ac-i.full { color: var(--warn); font-weight: 700; }
+
+/* ---------- 消息气泡内附件 ---------- */
+.att-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.att-img-wrap { display: grid; gap: 4px; }
+.att-thumb { width: 132px; max-height: 132px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--line); display: block; }
+.att-media { display: grid; gap: 4px; min-width: 220px; max-width: 320px; }
+.att-media-ic { font-size: 14px; }
+.att-audio { width: 100%; height: 34px; }
+.att-video { width: 100%; max-height: 240px; border-radius: var(--radius-sm); background: #000; display: block; }
+.att-media-nm { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-file-wrap { display: grid; gap: 4px; }
+.att-file { display: inline-block; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); font-size: 12px; }
+.att-desc { font-size: 11px; color: var(--muted); max-width: 320px; }
+
+/* ---------- 上下文边界（换模型 divider） ---------- */
+.ctx-div { display: flex; align-items: center; gap: 10px; margin: 14px 0; color: var(--subtle); font-size: 11px; }
+.ctx-div::before, .ctx-div::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.ctx-div span { white-space: nowrap; }
+
+/* ---------- skills 三流条（composer 工具区） ---------- */
+.skills-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.skill-chip {
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  color: var(--muted); font-size: 12px; padding: 4px 10px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.skill-chip:hover { border-color: var(--accent); color: var(--text); }
+.skill-chip.sys[data-on="1"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.skill-chip.pick[data-on="1"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.skill-chip.skip[data-on="1"] { border-color: var(--warn); color: var(--warn); }
+.skill-flow { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.skill-chip.def { border-style: dashed; }
+.skill-chip.def .def-x { color: var(--subtle); margin-left: 2px; }
+.skill-chip.def .def-x:hover { color: var(--bad); }
+
+/* ---------- 修改态提示条 ---------- */
+.edit-chip {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; margin-bottom: 8px;
+  border: 1px dashed var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent-soft); font-size: 12px; color: var(--accent);
+}
+.edit-chip-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edit-chip .soft-btn { padding: 3px 10px; font-size: 12px; }
+
+/* ---------- 原生对话框（调试浮层 / 控制台面板） ---------- */
+dialog.gw-dialog {
+  width: min(680px, 92vw); max-height: 82vh; margin: auto;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); color: var(--text); padding: 0;
+  box-shadow: var(--shadow);
+}
+dialog.gw-dialog::backdrop { background: rgba(15, 20, 30, .45); }
+.dlg-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.dlg-head h3 { margin: 0; font-size: 15px; }
+.dlg-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.dlg-head-actions .soft-btn { padding: 4px 12px; font-size: 12px; }
+.dlg-body {
+  margin: 0; padding: 14px 18px; max-height: 56vh; overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-all;
+  color: var(--code-text); background: var(--code-bg);
+}
+.dlg-foot { margin: 0; padding: 10px 18px 14px; font-size: 11px; color: var(--muted); }
+.dlg-foot code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+
+/* ---------- 分享对话框（modal 复用） ---------- */
+.share-url-row { display: flex; gap: 8px; margin: 10px 0; }
+.share-url-row input {
+  flex: 1; min-width: 0; padding: 8px 10px; font-size: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+}
+.share-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.share-actions .soft-btn { font-size: 12px; }
+.share-qr { text-align: center; margin-top: 12px; }
+.share-qr img { width: min(200px, 56vw); border-radius: 10px; background: #fff; padding: 6px; }
+.muted-text { color: var(--muted); font-size: 13px; }
+
+/* ---------- 模型选择器积分徽标 ---------- */
+.gw-model-item .gw-model-pts { flex: none; font-size: 11px; color: var(--accent); border: 1px solid var(--accent-soft); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; }
+
+/* ---------- 响应式：窄屏 skills 条独立成行 ---------- */
+@media (max-width: 760px) {
+  .skills-bar { width: 100%; order: 3; }
+  .att-thumb { width: 104px; max-height: 104px; }
+}

@@ -1,9 +1,10 @@
 /* ============================================================
-   QuakeAI app.js —— 壳状态 / 视图 / 真实业务接线
-   边界：只调 QuakeAdapters.gateway（适配层）与 QuakeStore（持久化），
-   不直接碰 WASM / gw.* / fetch 细节。
-   B0 范围：首页（真实网关状态）+ 对话（真实一问一答 / 停止 / 重生成 /
-   导出 / 模型选择）+ 语音助手浮层（文字走真实对话、麦克风走 Web Speech）。
+   QuakeAI app.js —— 壳状态 / 视图 / 真实业务接线（B1 对话全量）
+   边界：只调 QuakeAdapters.gateway（适配层）、QuakeStore（持久化）与
+   各业务模块（Points/Skills/Attachments/Share/Magic），不直接碰 WASM。
+   B1 范围：流式/停止/重试/重生成/修改/模型选择（积分排序）/附件
+   （图音视文 + 上限 + 缩略图 + IDB）/skills 三流/上下文边界/积分账本/
+   魔法指令/调试浮层/控制台面板/分享（链接 + 二维码）。
    ============================================================ */
 (function () {
   "use strict";
@@ -11,7 +12,13 @@
   const $ = s => document.querySelector(s), $$ = s => Array.from(document.querySelectorAll(s));
   const { gateway, usableChatModels } = window.QuakeAdapters;
   const { message, streamMessage, toast, escapeHTML, healthBadge } = window.QuakeComponents;
+  const { Points, AUTO_KEY, applyRoutePoints, ctxResetOn } = window.QuakePoints;
+  const Magic = window.QuakeMagic;
+  const Skills = window.QuakeSkills;
+  const Att = window.QuakeAttachments;
+  const Share = window.QuakeShare;
   const Store = window.QuakeStore;
+  const dbg = (...a) => Magic.dbg(...a);
 
   const VIEW_NAMES = { home: "智能首页", chat: "AI 对话" };
   const state = {
@@ -26,6 +33,10 @@
     aborter: null,
     recognition: null,
     modalSave: null,
+    attachments: [],         // 输入区附件实例（含 file/dataUrl，瞬态）
+    editCtx: null,           // 修改态 { convoId, idx }
+    streamGen: 0,            // 流代号：新会话/新发送抢占时，旧流 finally 只落库不碰 UI
+    stream: null,            // 当前 live 流式节点（renderMessages 对流式消息只挂它，单节点原则）
   };
 
   /* ================= 持久化 ================= */
@@ -35,14 +46,30 @@
   const persistMsgThrottled = debounce((c, idx, m) => persistMsg(c, idx, m), 700);
 
   function id() { return "c_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-  function current() { return state.conversations.find(c => c.id === state.currentId); }
+  function current() { return state.conversations.find(c => c.id === state.currentId) || null; }
+  function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n); }
 
-  function createConversation(firstText) {
-    const c = { id: id(), title: firstText ? firstText.slice(0, 26) : "新对话", model: state.model, updated: Date.now(), msgs: [] };
-    state.conversations.unshift(c);
-    state.currentId = c.id;
+  /* ---------- 截断 idx 及其后所有消息（含落库）。
+     重试 / 修改 / 重新生成都靠它把「这条之后」清掉再重发，
+     否则会再追加一条同样的提问。IDB 位置键：删掉旧尾，同位置重写即覆盖。 ---------- */
+  function truncateFrom(c, idx) {
+    if (!c || idx < 0 || idx >= c.msgs.length) return;
+    for (let k = idx; k < c.msgs.length; k++) Store.IDB.deleteMsg(c.id, k);
+    c.msgs = c.msgs.slice(0, idx);
+    // 上下文边界若落在被删区间，前移到截断点：否则 history 切片会退化成「只剩最后一条」
+    if ((c.ctxStart || 0) > idx) c.ctxStart = idx;
+    c.updated = Date.now();
     persistConvo(c);
-    renderConversations();
+  }
+
+  function ensureConvo() {
+    let c = current();
+    if (!c) {
+      c = { id: id(), title: "新对话", model: state.model, ctxStart: 0, msgs: [], updated: Date.now() };
+      state.conversations.unshift(c);
+      state.currentId = c.id;
+      persistConvo(c);
+    }
     return c;
   }
 
@@ -92,11 +119,32 @@
       return;
     }
     c.msgs.forEach((m, i) => {
+      // 流式中的消息：DOM 唯一来源是 live stream 节点（单节点原则）——
+      // 渲染发生在建流前 → 跳过（sendWith 随后 append）；渲染重入于流式中 →
+      // 把 live 节点挂回正确位置（append 会移动已连接的节点）。
+      if (m.streaming) {
+        if (state.stream && m.id === state.stream.id) el.append(state.stream.el);
+        return;
+      }
+      if (m.role === "divider") {
+        el.append(message({ role: "divider", text: m.text, id: m.id }));
+        return;
+      }
       const meta = [];
-      if (m.channel) meta.push(escapeHTML(m.channel));
-      if (m.model) meta.push(escapeHTML(m.model));
+      if (m.role === "assistant") {
+        if (m.channel) meta.push("via " + escapeHTML(m.channel));
+        if (m.model) meta.push("模型 " + escapeHTML(m.model));
+        if (m.attempts && String(m.attempts).split(";").length > 1) meta.push("⤻ 已自动切换");
+        if (m.usage && m.usage.total_tokens != null) meta.push("⛁ " + fmtTok(m.usage.total_tokens));
+        if (m.ttfb != null) meta.push("首字 " + (m.ttfb / 1000).toFixed(1) + "s");
+      }
       if (m.error) meta.push('<span class="hb bad">' + escapeHTML(m.error) + "</span>");
-      el.append(message({ role: m.role, text: m.content || "", id: m.id, meta: meta.length ? meta.join(" · ") : "" }));
+      const retry = m.role === "assistant" && i >= 1 && c.msgs[i - 1].role === "user";
+      el.append(message({
+        role: m.role, text: m.content || "", id: m.id,
+        meta: meta.length ? meta.join(" · ") : "",
+        atts: m.attachments, retry,
+      }));
     });
     el.scrollTop = el.scrollHeight;
   }
@@ -113,6 +161,7 @@
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   function openConversation(cid) {
+    if (state.editCtx) cancelEdit(true);       // 切会话：被动撤修改态（清回填内容）
     state.currentId = cid;
     renderConversations();
     setView("chat");
@@ -140,6 +189,7 @@
       $("#gwSideStatusText").textContent = "网关就绪 · " + usable.usable + "/" + usable.total + " 渠道可用";
       $("#gwTopLabel").textContent = ok ? "网关就绪 · " + state.models.length + " 个可用模型" : "网关就绪 · 暂无可用渠道";
     } catch (e) {
+      dbg("[load] 网关异常:", e && (e.stack || e.message) || e);
       gwDot("bad");
       $("#gwSideStatusText").textContent = "网关异常：" + e.message;
       $("#gwTopLabel").textContent = "网关异常";
@@ -190,84 +240,169 @@
       '</article>';
   }
 
-  /* ================= 模型选择 ================= */
+  /* ================= 模型选择（积分倒序 + sel 记账 + ctx 边界） ================= */
   function modelLabel() { return state.model || "自动选择"; }
   function renderModelButtons() {
     $("#homeModelName").textContent = modelLabel();
     $("#chatModelName").textContent = modelLabel();
   }
   function openModelPicker() {
-    const items = state.models;
+    // 积分倒序，并列按名称排——与旧 UI 同一口径（个人偏好排序）
+    const items = state.models.slice().sort((a, b) =>
+      (Points.score(b.name) - Points.score(a.name)) || String(a.name).localeCompare(String(b.name)));
     let html = '<div class="gw-model-list">';
-    html += '<button class="gw-model-item' + (state.model ? "" : " active") + '" data-m=""><span class="gw-model-tick">' + (state.model ? "○" : "●") + '</span><span class="gw-model-name">自动选择</span><span class="gw-model-ch">由网关按优先级路由</span></button>';
+    html += '<button class="gw-model-item' + (state.model ? "" : " active") + '" data-m=""><span class="gw-model-tick">' + (state.model ? "○" : "●") + '</span><span class="gw-model-name">自动选择</span><span class="gw-model-pts">积分 ' + Points.score(AUTO_KEY) + '</span></button>';
     if (!items.length) {
       html += '<div class="gw-model-empty">暂无可用模型——请先登记渠道并配置 Key。</div>';
     }
     items.forEach(m => {
       const active = state.model === m.name;
-      html += '<button class="gw-model-item' + (active ? " active" : "") + '" data-m="' + escapeHTML(m.name) + '"><span class="gw-model-tick">' + (active ? "●" : "○") + '</span><span class="gw-model-name">' + escapeHTML(m.name) + '</span><span class="gw-model-ch">' + escapeHTML(m.channel) + "</span></button>";
+      html += '<button class="gw-model-item' + (active ? " active" : "") + '" data-m="' + escapeHTML(m.name) + '"><span class="gw-model-tick">' + (active ? "●" : "○") + '</span><span class="gw-model-name">' + escapeHTML(m.name) + '</span><span class="gw-model-ch">' + escapeHTML(m.channel) + '</span><span class="gw-model-pts">' + Points.score(m.name) + '</span></button>';
     });
     html += "</div>";
     openModal("选择模型", html, null);
-    $$("#modalBody .gw-model-item").forEach(b => b.onclick = () => {
-      state.model = b.dataset.m;
-      Store.config.set("gw_model", state.model);
-      renderModelButtons();
-      closeModal();
-      toast(state.model ? "已切换模型：" + state.model : "已恢复自动选择", "ok");
+    $$("#modalBody .gw-model-item").forEach(b => b.onclick = () => pickModel(b.dataset.m));
+  }
+  function pickModel(m) {
+    const changed = state.model !== m;
+    state.model = m;
+    Store.config.set("gw_model", m);
+    if (changed) {
+      Points.add("sel", m || AUTO_KEY);
+      markCtxBoundary(m);
+    }
+    renderModelButtons();
+    closeModal();
+    toast(m ? "已切换模型：" + m : "已恢复自动选择", "ok");
+  }
+
+  /// 换模型时在当前会话里打一条上下文边界。
+  /// 为什么必须做：网关会把整段 messages 原样发给上游，小模型极易照抄上一条
+  /// assistant 的自述（「我的模型名称是 ChatGLM」）。打点后请求只带边界之后的
+  /// 消息——用户自己的提问保留，上一个模型说过的话不再喂进去。
+  function markCtxBoundary(m) {
+    if (!ctxResetOn()) return;
+    const c = current();
+    if (!c || !c.msgs.length) return;           // 空会话没有可重置的上下文
+    const last = c.msgs[c.msgs.length - 1];
+    if (last && last.role === "divider" && (last.model || "") === (m || "")) return;  // 不重复打点
+    const idx = c.msgs.length;
+    c.msgs.push({
+      id: id(), role: "divider", model: m || "",
+      text: m ? "已切换到 " + m + " · 上下文已重置" : "已切换到自动选路 · 上下文已重置",
+      ts: Date.now(),
+    });
+    c.ctxStart = idx;
+    c.updated = Date.now();
+    persistMsg(c, idx, c.msgs[idx]);
+    persistConvo(c);
+    renderMessages();
+  }
+
+  /* ================= 发送 / 流式 / 停止 ================= */
+  /// 统一入口（首页 / 对话 / 语音助手 / 快捷卡都走这里）。
+  /// 魔法指令命中即消费（不发不落库）；限额硬拦；修改态先截断再发。
+  function submitText(text, atts) {
+    text = String(text || "").trim();
+    atts = atts || [];
+    if (!text && !atts.length) return;
+    if (state.streaming) { toast("正在生成中，可先停止当前回答"); return; }
+    if (!atts.length && Magic.handleMagicCommand(text)) return;   // 魔法指令：消费后直接返回
+    const bad = Att.validateSendPayload(text, atts);
+    if (bad) { toast(bad, "err"); return; }
+    if (state.editCtx) {
+      const c = current();
+      if (c && c.id === state.editCtx.convoId) { truncateFrom(c, state.editCtx.idx); renderMessages(); }
+      dropEditCtx();
+    }
+    sendWith(text, atts).catch(e => {
+      dbg("[send] 失败:", e && (e.stack || e.message) || e);
+      toast("发送未开始：" + ((e && e.message) || e), "err");
     });
   }
 
-  /* ================= 发送 / 流式 / 停止 / 重生成 ================= */
-  async function send(text) {
-    text = String(text || "").trim();
-    if (!text || state.streaming) return;
-    let c = current();
-    if (!c) c = createConversation(text);
-    if (!c.msgs.length) c.title = text.slice(0, 26) + (text.length > 26 ? "…" : "");
-    const userMsg = { id: id(), role: "user", content: text, ts: Date.now() };
+  /// 实际发送链路。atts 为内存对象（含 file/dataUrl 的浅拷贝）。
+  async function sendWith(text, atts) {
+    // 纵深防御：哪怕绕过入口拦截（旧缓存 / 其它入口），魔法指令也绝不生成气泡
+    if (!atts || !atts.length) { if (Magic.parseMagic(text)) return; }
+
+    const c = ensureConvo();
+    const convoId = c.id;
+    const userIdx = c.msgs.length;
+    const userMsg = { id: id(), role: "user", content: text, ts: Date.now(), attachments: atts };
     c.msgs.push(userMsg);
+    const asstIdx = c.msgs.length;
+    const asst = { id: id(), role: "assistant", content: "", reasoning: "", streaming: true, ts: Date.now() };
+    c.msgs.push(asst);
+    if (!c.title || c.title === "新对话") c.title = (text || "[附件]").slice(0, 26);
     c.updated = Date.now();
-    persistMsg(c, c.msgs.length - 1, userMsg);
-    persistConvo(c);
     setView("chat");
     renderConversations();
     renderMessages();
 
-    const asst = { id: id(), role: "assistant", content: "", reasoning: "", streaming: true, ts: Date.now() };
-    c.msgs.push(asst);
-    const asstIdx = c.msgs.length - 1;
-    persistMsg(c, asstIdx, asst);
-
-    const stream = streamMessage({ role: "assistant", id: asst.id });
+    // 流式节点即该消息的唯一 DOM（renderMessages 对 streaming 消息只挂 live 节点，
+    // 不建静态占位——杜绝同一消息两个气泡）。retry:true 让终态带「重新生成」。
+    const stream = streamMessage({ role: "assistant", id: asst.id, retry: true });
+    state.stream = stream;
     $("#messages").append(stream.el);
     $("#messages").scrollTop = $("#messages").scrollHeight;
 
+    persistMsg(c, userIdx, userMsg);
+    persistMsg(c, asstIdx, asst);
+    persistConvo(c);
+
     state.streaming = true;
     state.aborter = new AbortController();
+    const myGen = ++state.streamGen;
     setStreamingUI(true);
 
     try {
+      // 历史消息：从**上下文边界**往后取（换过模型就只剩边界后的消息），
+      // 排除 divider 与错误消息；附件消息（可能无文字）也要带上。
+      const ctxStart = Math.min(c.ctxStart || 0, Math.max(0, c.msgs.length - 1));
+      const history = c.msgs.slice(ctxStart, -1)
+        .filter(m => (m.role === "user" || m.role === "assistant") && !m.error && (m.content || (m.attachments && m.attachments.length)))
+        .map(m => ({ role: m.role, content: Att.buildApiContent(m) }));
+      // skills 三流合并（系统级 → 默认流 → 手选）：system 消息注入（全渠道保底）
+      // + x-gw-features（网关按渠道注入真参数）；>100KB 的单条在收集时跳过并提示
+      const sk = Skills.collectSkillMsgs();
+      if (sk.list.length) {
+        history.unshift(...sk.list.map(s => ({ role: "system", content: s.prompt })));
+        for (const s of sk.list) Skills.api.use(s.id).catch(() => {});
+      }
       const result = await gateway.chat({
-        messages: c.msgs.filter(m => m.content && !m.error).map(m => ({ role: m.role, content: m.content })),
+        messages: history,
         model: state.model || undefined,
+        features: sk.feats,
         signal: state.aborter.signal,
         onDelta: ({ content }) => { stream.setText(content); $("#messages").scrollTop = $("#messages").scrollHeight; },
       });
+      // 积分记账：使用 +1（命中模型；自动模式下自动条目也 +1）、降权 −20
+      applyRoutePoints(result, state.model);
       asst.content = result.content;
       asst.reasoning = result.reasoning || "";
       asst.channel = result.channel || "";
+      asst.attempts = result.attempts || "";
       asst.model = result.model || "";
+      asst.ttfb = result.ttfbMs || null;
+      asst.usage = result.usage || null;
       asst.streaming = false;
       stream.finish();
       const meta = [];
-      if (result.channel) meta.push(escapeHTML(result.channel));
-      if (result.model) meta.push(escapeHTML(result.model));
+      if (result.channel) meta.push("via " + escapeHTML(result.channel));
+      if (result.model) meta.push("模型 " + escapeHTML(result.model));
+      if (result.attempts && String(result.attempts).split(";").length > 1) meta.push("⤻ 已自动切换");
+      if (result.usage && result.usage.total_tokens != null) meta.push("⛁ " + fmtTok(result.usage.total_tokens));
       if (result.ttfbMs) meta.push("首字 " + result.ttfbMs + "ms");
       stream.setMeta(meta.join(" · "));
       if (!asst.content && !asst.reasoning) {
         stream.setError("（空响应）");
         asst.error = "（空响应）";
+      }
+      // token 账本（与旧 UI 同一口径）：累加进会话
+      if (!asst.error && result.usage && result.usage.total_tokens != null) {
+        c.tokens = (c.tokens || 0) + result.usage.total_tokens;
+        c.answers = (Number(c.answers) || 0) + 1;
       }
     } catch (e) {
       asst.streaming = false;
@@ -287,7 +422,7 @@
       c.updated = Date.now();
       persistMsg(c, asstIdx, asst);
       persistConvo(c);
-      renderConversations();
+      if (myGen === state.streamGen) renderConversations();   // 被抢占的旧流只落库不碰 UI
     }
   }
 
@@ -299,11 +434,95 @@
     if (state.aborter) state.aborter.abort();
   }
 
+  /* ================= 附件（输入区） ================= */
+  function renderAttachments() {
+    const bar = $("#attachBar");
+    const list = state.attachments;
+    bar.innerHTML = list.map((a, i) => {
+      const thumb = a.dataUrl || a.poster;   // 图片 dataUrl / 视频首帧 → 缩略图
+      const tip = ' title="' + escapeHTML(a.name) + (a.desc ? " · 理解：" + escapeHTML(a.desc.slice(0, 80)) : "") + '"';
+      const x = '<button class="att-x" data-attx="' + i + '" aria-label="移除">×</button>';
+      return thumb
+        ? '<div class="att-chip att-pic" data-st=""' + tip + '><img src="' + thumb + '" alt="">' + x + "</div>"
+        : '<div class="att-chip att-file" data-st=""' + tip + '><span class="att-ic">' + (a.kind === "audio" ? "🎵" : a.kind === "video" ? "🎬" : a.kind === "image" ? "🖼" : "📎") + '</span><span class="att-nm">' + escapeHTML(a.name) + "</span>" + x + "</div>";
+    }).join("");
+    bar.hidden = list.length === 0;
+    renderAttCount();
+  }
+  function renderAttCount() {
+    const el = $("#attCount");
+    const list = state.attachments;
+    if (!list.length) { el.hidden = true; el.innerHTML = ""; return; }
+    const parts = [];
+    for (const k of ["image", "audio", "video", "file"]) {
+      const n = Att.attCount(list, k), cap = Att.KIND_CAPS[k];
+      parts.push('<span class="ac-i' + (n >= cap ? " full" : "") + '">' + Att.KIND_LABEL[k] + " " + n + "/" + cap + "</span>");
+    }
+    const mb = Att.mediaBytes(list);
+    parts.push('<span class="ac-i' + (mb > Att.LIMITS.media ? " full" : "") + '">多媒体 ' + (mb / 1048576).toFixed(1) + "/" + (Att.LIMITS.media / 1048576).toFixed(0) + "MB</span>");
+    el.innerHTML = parts.join("");
+    el.hidden = false;
+  }
+  function removeAttachment(i) { state.attachments.splice(i, 1); renderAttachments(); }
+  function pickFiles() {
+    // 全部类别都满员时不再弹选择器（省一次白选）
+    const full = Object.keys(Att.KIND_CAPS).every(k => Att.attCount(state.attachments, k) >= Att.KIND_CAPS[k]);
+    if (full) { toast("附件已达上限（图片 5 / 音频 3 / 视频 1 / 文件 5），先移除一些再添加", "err"); return; }
+    $("#fileInput").click();
+  }
+  async function onFilesPicked(files) {
+    await Att.pickFiles(files, state.attachments, () => renderAttachments());
+    renderAttachments();
+  }
+
+  /* ================= skills 三流条 ================= */
+  function renderSkillsBar() {
+    $("#skSysThink").dataset.on = Skills.sysSkillOn("think") ? "1" : "0";
+    $("#skSysSearch").dataset.on = Skills.sysSkillOn("search") ? "1" : "0";
+    $("#skSkip").dataset.on = Skills.skipDefault() ? "1" : "0";
+    $("#skillDefaultList").innerHTML = Skills.defaultSkillIds().map(sid => {
+      const s = Skills.state.list.find(x => x.id === sid);
+      if (!s) return "";
+      return '<button class="skill-chip def" data-def="' + escapeHTML(sid) + '" title="默认对话 skill（每次发送必带）· 点 × 移出">✦ ' + escapeHTML(s.title) + '<span class="def-x" data-defx="' + escapeHTML(sid) + '">×</span></button>';
+    }).join("");
+    const pick = $("#skPick");
+    if (Skills.state.active) {
+      pick.dataset.on = "1";
+      pick.textContent = "✦ " + Skills.state.active.title;
+      pick.title = "本轮手选：" + Skills.state.active.title + (Skills.state.active.summary ? " · " + Skills.state.active.summary : "") + "（再点取消）";
+    } else {
+      pick.dataset.on = "0";
+      pick.textContent = "✦ 提示词";
+      pick.title = "选择本轮提示词（SKILL）";
+    }
+  }
+  function openSkillPicker() {
+    const listable = Skills.state.list.filter(Skills.skillListable);
+    if (!listable.length) {
+      openModal("提示词", '<p class="muted-text">暂无可用提示词。提示词管理（新建 / 编辑 / 分类）在 B3「提示词」页提供。</p>', null);
+      return;
+    }
+    const html = '<div class="gw-model-list">' + listable.map(s => {
+      const active = Skills.state.active && Skills.state.active.id === s.id;
+      return '<button class="gw-model-item' + (active ? " active" : "") + '" data-sk="' + escapeHTML(s.id) + '"><span class="gw-model-tick">' + (active ? "●" : "○") + '</span><span class="gw-model-name">' + escapeHTML(s.title) + '</span><span class="gw-model-ch">' + escapeHTML(Skills.skillCat(s)) + " · " + escapeHTML(s.summary || "") + "</span></button>";
+    }).join("") + "</div>";
+    openModal("选择本轮提示词", html, null);
+    $$("#modalBody .gw-model-item").forEach(b => b.onclick = () => {
+      const s = Skills.state.list.find(x => x.id === b.dataset.sk);
+      Skills.state.active = (Skills.state.active && Skills.state.active.id === s.id) ? null : s;
+      renderSkillsBar();
+      closeModal();
+      toast(Skills.state.active ? "本轮将带上：「" + s.title + "」" : "已取消本轮提示词", Skills.state.active ? "ok" : "");
+    });
+  }
+
   /* ================= 导出 ================= */
   function exportChat() {
     const c = current();
     if (!c || !c.msgs.length) { toast("当前没有可导出的对话"); return; }
-    const body = "# " + (c.title || "新对话") + "\n\n" + c.msgs.map(m => "## " + (m.role === "user" ? "你" : "QuakeAI") + "\n\n" + (m.content || m.error || "")).join("\n\n---\n\n");
+    const body = "# " + (c.title || "新对话") + "\n\n" + c.msgs
+      .filter(m => m.role !== "divider")
+      .map(m => "## " + (m.role === "user" ? "你" : "QuakeAI") + "\n\n" + (m.content || m.error || "")).join("\n\n---\n\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([body], { type: "text/markdown;charset=utf-8" }));
     a.download = (c.title || "chat").replace(/[\\/:*?"<>|]/g, "_") + ".md";
@@ -312,12 +531,68 @@
     toast("对话已导出为 Markdown", "ok");
   }
 
+  /* ================= 分享（链接 + 二维码，积分 share +10） ================= */
+  async function shareMsg(m) {
+    const text = m.content || "";
+    if (!text.trim()) { toast("没有可分享的内容", "err"); return; }
+    Points.add("share", m.model || AUTO_KEY);   // 归给这条回答实际命中的模型
+    let url = null;
+    try { url = await Share.buildShareUrl(text, m.model || ""); } catch { /* 压缩不可用：降级走纯文本 */ }
+    if (url && navigator.share) {
+      try { await navigator.share({ title: "QuakeAI 的回答", text: "看看这个 AI 回答", url }); return; }
+      catch (e) { if (e && e.name === "AbortError") return; /* 其余失败落级对话框 */ }
+    }
+    if (!url) {
+      if (navigator.share) {
+        try { await navigator.share({ title: "QuakeAI 的回答", text }); return; }
+        catch (e) { if (e && e.name === "AbortError") return; }
+      }
+      try { await navigator.clipboard.writeText(text); toast("当前环境不支持链接分享，已复制全文", "ok"); } catch { toast("分享失败", "err"); }
+      return;
+    }
+    openShareModal(url);
+  }
+  function openShareModal(url) {
+    const html =
+      '<p class="muted-text">内容压缩后放进链接本身（服务端零存储）。微信里：点右上角 ⋮ → 发送给朋友；或复制链接粘贴到聊天。</p>' +
+      '<div class="share-url-row"><input id="shareUrl" readonly value="' + escapeHTML(url) + '" title="点击全选"></div>' +
+      '<div class="share-actions">' +
+      '<button class="soft-btn" id="shareCopy">复制链接</button>' +
+      (navigator.share ? '<button class="soft-btn" id="shareSys">系统分享</button>' : "") +
+      '<button class="soft-btn" id="shareQr">二维码</button>' +
+      '<button class="soft-btn" id="shareOpen">打开分享页</button>' +
+      "</div>" +
+      '<div class="share-qr" id="shareQrBox" hidden><img id="shareQrImg" alt="分享二维码"></div>';
+    openModal("分享这条回答", html, null, "关闭");
+    $("#shareCopy").onclick = () => {
+      const u = $("#shareUrl").value;
+      (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject())
+        .then(() => toast("链接已复制", "ok")).catch(() => { $("#shareUrl").select(); toast("请手动复制（Ctrl/Cmd+C）", ""); });
+    };
+    const sys = $("#shareSys");
+    if (sys) sys.onclick = () => navigator.share({ title: "QuakeAI 的回答", text: "看看这个 AI 回答", url }).catch(() => {});
+    $("#shareOpen").onclick = () => window.open(url, "_blank", "noopener");
+    $("#shareQr").onclick = () => {
+      const box = $("#shareQrBox");
+      if (!box.hidden) { box.hidden = true; return; }
+      try {
+        const qr = QRLIB(0, "M");
+        qr.addData(url);
+        qr.make();
+        $("#shareQrImg").src = qr.createDataURL(6, 2);
+        box.hidden = false;
+      } catch (e) { toast("二维码生成失败：" + e.message, "err"); }
+    };
+  }
+
   /* ================= 弹层 ================= */
   function openModal(title, html, onSave, saveLabel) {
     $("#modalTitle").textContent = title;
     $("#modalBody").innerHTML = html;
     state.modalSave = onSave;
     $("#saveModal").textContent = saveLabel || "保存";
+    $("#saveModal").hidden = !onSave;
+    $("#cancelModal").textContent = onSave ? "取消" : "关闭";
     $("#modalBackdrop").classList.remove("hidden");
   }
   function closeModal() { $("#modalBackdrop").classList.add("hidden"); state.modalSave = null; }
@@ -361,7 +636,27 @@
     $("#jarvisTranscript").textContent = "已提交：" + t;
     $("#jarvisText").value = "";
     closeJarvis();
-    send(t);
+    submitText(t, []);
+  }
+
+  /* ================= 修改态 ================= */
+  function renderEditChip() {
+    const chip = $("#editChip");
+    if (state.editCtx) {
+      $("#editChipTitle").textContent = "修改中 · 第 " + (state.editCtx.idx + 1) + " 条消息（发送后替换原消息）";
+      chip.hidden = false;
+    } else {
+      chip.hidden = true;
+    }
+  }
+  function dropEditCtx() { state.editCtx = null; renderEditChip(); }
+  function cancelEdit(silent) {
+    if (!state.editCtx) return;
+    dropEditCtx();
+    const input = $("#chatPrompt");
+    if (input) { input.value = ""; input.style.height = "auto"; }
+    state.attachments = []; renderAttachments();
+    if (!silent) toast("已取消修改", "");
   }
 
   /* ================= 主题 ================= */
@@ -384,16 +679,55 @@
     });
 
     refreshGateway();
+    // skills 数据层装载（种子化 + 系统级补种）后渲染三流条
+    Skills.load().then(renderSkillsBar).catch(() => renderSkillsBar());
+    // 魔法指令 / 调试浮层 / 控制台面板：按持久化开关恢复顶栏按钮
+    Magic.setStateProvider(() => ({
+      channels: state.channels,
+      models: state.models.map(m => m.name),
+      model: state.model || "",
+      skills: {
+        active: Skills.state.active ? Skills.state.active.title : null,
+        defaults: Skills.defaultSkillIds(),
+        sys: { think: Skills.sysSkillOn("think"), search: Skills.sysSkillOn("search") },
+        skipDefault: Skills.skipDefault(),
+      },
+    }));
+    Magic.init();
+    renderSkillsBar();
+    renderAttachments();
 
     $$("[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
-    $("#newChat").onclick = () => { state.currentId = null; setView("chat"); renderMessages(); $("#chatPrompt").focus(); };
-    $("#homeSend").onclick = () => { const v = $("#homePrompt").value; $("#homePrompt").value = ""; send(v); };
+    $("#newChat").onclick = () => {
+      if (state.editCtx) cancelEdit(true);       // 新会话不继承「修改中」的输入框内容
+      if (state.streaming) {                     // 旧流干净收尾，否则发送键还是旧流的停止键
+        state.streamGen++;
+        try { state.aborter && state.aborter.abort(); } catch (e) {}
+        state.streaming = false; state.aborter = null; setStreamingUI(false);
+      }
+      state.currentId = null;
+      renderConversations(); renderMessages();
+      setView("chat");
+      $("#chatPrompt").focus();
+    };
+    $("#homeSend").onclick = () => { const v = $("#homePrompt").value; $("#homePrompt").value = ""; submitText(v, []); };
     $("#homePrompt").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#homeSend").click(); } });
-    $("#chatSend").onclick = () => { const v = $("#chatPrompt").value; $("#chatPrompt").value = ""; $("#chatPrompt").style.height = "auto"; send(v); };
+    $("#chatSend").onclick = () => {
+      const v = $("#chatPrompt").value;
+      $("#chatPrompt").value = ""; $("#chatPrompt").style.height = "auto";
+      submitText(v, state.attachments.slice());
+      state.attachments = []; renderAttachments();
+    };
     $("#chatStop").onclick = stopStreaming;
+    $("#chatAttach").onclick = pickFiles;
+    $("#fileInput").addEventListener("change", e => { onFilesPicked(e.target.files); e.target.value = ""; });
+    $("#attachBar").addEventListener("click", e => {
+      const x = e.target.closest("[data-attx]");
+      if (x) removeAttachment(Number(x.dataset.attx));
+    });
     $("#chatPrompt").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chatSend").click(); } });
     $("#chatPrompt").addEventListener("input", e => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 180) + "px"; });
-    $$(".quick-card").forEach(b => b.onclick = () => send(b.dataset.prompt));
+    $$(".quick-card").forEach(b => b.onclick = () => submitText(b.dataset.prompt, []));
     $("#homeModelBtn").onclick = openModelPicker;
     $("#chatModelBtn").onclick = openModelPicker;
     $("#refreshHealth").onclick = refreshGateway;
@@ -404,17 +738,48 @@
       applyTheme(v); Store.theme.set(v);
     };
     $("#exportChat").onclick = exportChat;
-    $("#chatMore").onclick = () => openModal("删除当前对话？",
-      '<p class="muted-text">删除后不可恢复，可先「导出」留存记录。</p>',
-      () => {
+    $("#chatMore").onclick = () => openModal("对话选项",
+      '<div class="gw-model-list">' +
+      '<button class="gw-model-item" data-act="export"><span class="gw-model-tick">↧</span><span class="gw-model-name">导出对话</span><span class="gw-model-ch">保存为 Markdown 文件</span></button>' +
+      '<button class="gw-model-item" data-act="ctxreset"><span class="gw-model-tick">' + (ctxResetOn() ? "●" : "○") + '</span><span class="gw-model-name">换模型重置上下文</span><span class="gw-model-ch">' + (ctxResetOn() ? "已开启：切换模型后只带新消息" : "已关闭：切换模型保留全部历史") + "</span></button>" +
+      '<button class="gw-model-item" data-act="delete"><span class="gw-model-tick">✕</span><span class="gw-model-name">删除当前对话</span><span class="gw-model-ch">不可恢复，可先导出留存</span></button>' +
+      "</div>", null, "关闭");
+    $("#modalBody").addEventListener("click", e => {
+      const b = e.target.closest("button[data-act]");
+      if (!b) return;
+      const act = b.dataset.act;
+      if (act === "export") { closeModal(); exportChat(); }
+      else if (act === "ctxreset") {
+        const { setCtxReset } = window.QuakePoints;
+        setCtxReset(!ctxResetOn());
+        closeModal();
+      } else if (act === "delete") {
         const c = current();
         if (!c) return;
         Store.IDB.deleteConvo(c.id);
         state.conversations = state.conversations.filter(x => x.id !== c.id);
         state.currentId = null;
         renderConversations(); renderMessages();
+        closeModal();
         toast("当前对话已删除", "ok");
-      }, "删除");
+      }
+    });
+    /* ---------- skills 三流条 ---------- */
+    $("#skSysThink").onclick = () => { Skills.toggleSysSkill("think"); renderSkillsBar(); };
+    $("#skSysSearch").onclick = () => { Skills.toggleSysSkill("search"); renderSkillsBar(); };
+    $("#skSkip").onclick = () => { Skills.toggleSkipDefault(); renderSkillsBar(); };
+    $("#skPick").onclick = openSkillPicker;
+    $("#skillsBar").addEventListener("click", e => {
+      const defx = e.target.closest("[data-defx]");
+      if (defx) { e.stopPropagation(); Skills.toggleDefaultSkill(defx.dataset.defx); renderSkillsBar(); return; }
+      const def = e.target.closest("[data-def]");
+      if (def) {
+        const s = Skills.state.list.find(x => x.id === def.dataset.def);
+        if (s) { Skills.state.active = s; renderSkillsBar(); toast("本轮将带上：「" + s.title + "」", "ok"); }
+      }
+    });
+    /* ---------- 修改态 ---------- */
+    $("#editChipCancel").onclick = () => cancelEdit(false);
     $("#openJarvis").onclick = openJarvis; $("#closeJarvis").onclick = closeJarvis;
     $("#jarvisBackdrop").onclick = closeJarvis; $("#jarvisMic").onclick = startRecognition;
     $("#jarvisSend").onclick = sendJarvis;
@@ -430,22 +795,51 @@
       const c = current();
       const m = c && c.msgs.find(x => x.id === msg.dataset.messageId);
       if (!m) return;
-      if (btn.dataset.action === "copy") {
+      const act = btn.dataset.action;
+      if (act === "copy") {
         (navigator.clipboard ? navigator.clipboard.writeText(m.content || "") : Promise.reject())
           .then(() => toast("已复制", "ok")).catch(() => toast("复制失败，请手动选择文本", "err"));
-      } else if (btn.dataset.action === "retry") {
+      } else if (act === "share") {
+        if (state.streaming) { toast("正在生成中，请先停止"); return; }
+        shareMsg(m);
+      } else if (act === "retry") {
         if (state.streaming) { toast("正在生成中，请先停止"); return; }
         const idx = c.msgs.indexOf(m);
-        if (m.role !== "assistant" || idx < 1 || c.msgs[idx - 1].role !== "user") {
-          toast("重生成只对问答对生效"); return;
+        if (m.role === "user") {
+          // 重试（用户消息）：不新增消息——以这条为最后一条重新请求，截断其后的回答
+          if (idx < 0) return;
+          const atts = (m.attachments || []).map(a => ({ ...a }));
+          truncateFrom(c, idx);
+          renderMessages();
+          submitText(m.content || "", atts);
+        } else if (m.role === "assistant") {
+          // 重新生成（助手消息）：回退到对应的提问，截断后重发
+          let j = idx - 1;
+          while (j >= 0 && c.msgs[j].role !== "user") j--;
+          if (j < 0) { toast("找不到对应的提问", "err"); return; }
+          const um = c.msgs[j];
+          const atts = (um.attachments || []).map(a => ({ ...a }));
+          truncateFrom(c, j);
+          renderMessages();
+          submitText(um.content || "", atts);
         }
-        const prev = c.msgs[idx - 1];
-        // 截断到该回答之前（IDB 位置键：删掉旧尾，同位置重写即覆盖，不残留）
-        const removed = c.msgs.splice(idx);
-        removed.forEach((mm, i) => Store.IDB.deleteMsg(c.id, idx + i));
-        persistConvo(c);
-        renderMessages();
-        send(prev.content);
+      } else if (act === "edit") {
+        // 修改（用户消息）：内容打回输入框，不删任何东西；发送那一刻才截断
+        if (state.streaming) { toast("正在生成，稍候再改", ""); return; }
+        const idx = c.msgs.indexOf(m);
+        if (idx < 0 || m.role !== "user") return;
+        if (state.editCtx && state.editCtx.idx !== idx) cancelEdit(true);
+        state.editCtx = { convoId: c.id, idx };
+        const input = $("#chatPrompt");
+        input.value = m.content || "";
+        state.attachments = (m.attachments || []).map(a => ({ ...a }));
+        renderAttachments();
+        input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 180) + "px";
+        renderEditChip();
+        setView("chat");
+        input.focus();
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (e) {}
+        input.scrollIntoView({ block: "nearest", behavior: "smooth" });
       }
     });
     document.addEventListener("keydown", e => {

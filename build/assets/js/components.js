@@ -54,31 +54,64 @@
 
   /* ---------- 消息 ---------- */
   const BRAND_AVATAR = "Q";
-  function message({ role, text, id, meta }) {
+  /* 附件气泡：图片缩略图 / 音视频播放器 / 文件 pill；desc = 发送流水线的理解产出
+     （与请求里发给模型的注记同源——用户看到的就是模型看到的）。
+     音频/视频的 Blob 经 slimAtt 持久化，刷新后 createObjectURL 仍可播放。 */
+  function attMediaUrl(a) {
+    try { if (a.file) return URL.createObjectURL(a.file); } catch (e) {}
+    return "";
+  }
+  function attachChips(atts) {
+    return (atts || []).map(a => {
+      const descLine = a.desc
+        ? '<div class="att-desc">' + (a.kind === "image" ? "🖼" : a.kind === "video" ? "🎬" : "📎") + " 理解：" + escapeHTML(a.desc) + "</div>" : "";
+      const size = a.size ? "（" + fmtAttSize(a.size) + "）" : "";
+      if (a.kind === "image" && a.dataUrl) return '<div class="att-img-wrap"><img class="att-thumb" src="' + a.dataUrl + '" alt="' + escapeHTML(a.name) + '">' + descLine + "</div>";
+      const src = attMediaUrl(a);
+      if (a.kind === "audio" && src) return '<div class="att-media"><div class="att-media-ic">🎵</div><audio class="att-audio" controls preload="metadata" src="' + src + '"></audio><div class="att-media-nm">' + escapeHTML(a.name) + size + "</div>" + descLine + "</div>";
+      if (a.kind === "video" && src) return '<div class="att-media"><video class="att-video" controls preload="metadata" playsinline' + (a.poster ? ' poster="' + a.poster + '"' : "") + ' src="' + src + '"></video><div class="att-media-nm">' + escapeHTML(a.name) + size + "</div>" + descLine + "</div>";
+      return '<div class="att-file-wrap"><span class="att-file">📎 ' + escapeHTML(a.name) + size + "</span>" + descLine + "</div>";
+    }).join("");
+  }
+  function fmtAttSize(b) {
+    if (b == null) return "";
+    if (b < 1024) return b + "B";
+    if (b < 1048576) return (b / 1024).toFixed(0) + "KB";
+    return (b / 1048576).toFixed(1) + "MB";
+  }
+  function message({ role, text, id, meta, atts, retry }) {
     const el = document.createElement("article");
-    el.className = "message " + role;
     el.dataset.messageId = id || "";
+    if (role === "divider") {
+      el.className = "ctx-div";
+      el.innerHTML = "<span>" + escapeHTML(text || "上下文已重置") + "</span>";
+      return el;
+    }
+    el.className = "message " + role;
     const avatar = role === "assistant" ? BRAND_AVATAR : "Q", label = role === "assistant" ? "QuakeAI" : "你";
+    const attRow = (atts && atts.length) ? '<div class="att-row">' + attachChips(atts) + "</div>" : "";
+    const actions = role === "assistant"
+      ? '<button data-action="copy">复制</button><button data-action="share">分享</button>' + (retry ? '<button data-action="retry">重新生成</button>' : "")
+      : '<button data-action="copy">复制</button><button data-action="edit">修改</button><button data-action="retry">重试</button>';
     el.innerHTML =
       '<div class="message-avatar">' + avatar + '</div>' +
       '<div class="message-content">' +
       '<div class="message-role">' + label + '</div>' +
+      attRow +
       '<div class="message-text"></div>' +
       (meta ? '<div class="msg-meta"></div>' : "") +
-      '<div class="message-actions">' +
-      (role === "assistant"
-        ? '<button data-action="copy">复制</button><button data-action="retry">重新生成</button>'
-        : '<button data-action="copy">复制</button>') +
-      '</div></div>';
-    el.querySelector(".message-text").innerHTML = md(text || "");
+      '<div class="message-actions">' + actions + '</div></div>';
+    const textEl = el.querySelector(".message-text");
+    if (textEl) textEl.innerHTML = md(text || "");
     if (meta) el.querySelector(".msg-meta").innerHTML = meta;
     return el;
   }
 
   /* 流式消息：返回 { el, setText(text), setError(msg), setMeta(html), finish() }。
-     只改自己这条的 .message-text，不重建整列——历史消息的 DOM/选区/滚动不被打断。 */
-  function streamMessage({ role, id }) {
-    const el = message({ role, text: "", id, meta: true });
+     只改自己这条的 .message-text，不重建整列——历史消息的 DOM/选区/滚动不被打断。
+     retry：终态是否需要「重新生成」按钮（流式中由 CSS 隐藏，finish 后现身）。 */
+  function streamMessage({ role, id, retry }) {
+    const el = message({ role, text: "", id, meta: true, retry: !!retry });
     el.classList.add("streaming");
     const textEl = el.querySelector(".message-text");
     const metaEl = el.querySelector(".msg-meta");
@@ -114,5 +147,5 @@
     return '<span class="hb ' + cls + '">' + escapeHTML(label || ({ healthy: "健康", degraded: "降级", unknown: "未知", down: "故障", bad: "异常" }[s] || "未知")) + "</span>";
   }
 
-  global.QuakeComponents = { escapeHTML, esc, md, message, streamMessage, toast, healthBadge };
+  global.QuakeComponents = { escapeHTML, esc, md, message, streamMessage, toast, healthBadge, attachChips, attMediaUrl, fmtAttSize };
 })(window);

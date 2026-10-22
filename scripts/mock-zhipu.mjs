@@ -38,15 +38,22 @@ const server = createServer((req, res) => {
         bodyLength: body.length,
         // v0.19.25 测试基建：chat 请求摘要——验证网关侧系统级流参数注入
         // （thinking / web_search tools）与三流 system 消息合并。
+        // B1 增补：x-gw-features 头 + 消息清单（ctx 边界 / 附件 parts 验证用）。
         chatDigest: (req.url?.includes("/chat/completions") ? (() => {
           try {
-            const p = JSON.parse(body);
+            // body 以 latin1 累积（二进制安全），解析前按 utf8 解码回原文——
+            // 否则中文成 mojibake，system 提示词等断言无法匹配。
+            const p = JSON.parse(Buffer.from(body, "latin1").toString("utf8"));
+            const head = (c) => typeof c === "string" ? c.slice(0, 24)
+              : (Array.isArray(c) ? "[" + c.map(x => x.type).join(",") + "]" : String(c).slice(0, 24));
             return {
               model: p.model ?? null,
               thinking: p.thinking ?? null,
               tools: p.tools ?? null,
+              gwFeatures: req.headers["x-gw-features"] ?? null,
               systemCount: (p.messages || []).filter(m => m.role === "system").length,
               systemHeads: (p.messages || []).filter(m => m.role === "system").map(m => String(m.content).slice(0, 20)),
+              msgHeads: (p.messages || []).map(m => m.role + ":" + head(m.content)),
             };
           } catch { return null; }
         })() : undefined),
