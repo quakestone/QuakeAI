@@ -17,10 +17,11 @@
   const Skills = window.QuakeSkills;
   const Att = window.QuakeAttachments;
   const Share = window.QuakeShare;
+  const Providers = window.QuakeProviders;
   const Store = window.QuakeStore;
   const dbg = (...a) => Magic.dbg(...a);
 
-  const VIEW_NAMES = { home: "智能首页", chat: "AI 对话" };
+  const VIEW_NAMES = { home: "智能首页", chat: "AI 对话", providers: "服务商" };
   const state = {
     view: "home",
     currentId: null,
@@ -154,9 +155,11 @@
     state.view = view;
     $("#homeView").classList.toggle("hidden", view !== "home");
     $("#chatView").classList.toggle("hidden", view !== "chat");
+    $("#providersView").classList.toggle("hidden", view !== "providers");
     $("#breadcrumb").textContent = VIEW_NAMES[view] || "工作台";
     $$(".nav-item[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
     if (view === "chat") renderMessages();
+    if (view === "providers") Providers.load();   // 每次进入拉最新账本（load 有 in-flight 去重）
     closeSidebar();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -667,6 +670,11 @@
     applyTheme(Store.theme.get());
     $("#dateChip").textContent = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date());
     $("#buildVersion").textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
+    const pvVer = $("#pvBuildVersion");
+    if (pvVer) pvVer.textContent = "QuakeAI " + (window.__BUILD_VERSION__ || "dev");
+
+    // 服务商页：渠道账本变更后联动刷新（模型清单 / 顶栏 / 侧栏状态）
+    Providers.init(() => { refreshGateway(); });
 
     Store.loadConversations().then(convos => {
       state.conversations = convos;

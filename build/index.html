@@ -26,6 +26,7 @@
         <div class="section-label">工作空间</div>
         <button class="nav-item active" data-view="home"><span class="nav-icon">◫</span> 智能首页</button>
         <button class="nav-item" data-view="chat"><span class="nav-icon">◌</span> AI 对话</button>
+        <button class="nav-item" data-view="providers"><span class="nav-icon">▤</span> 服务商</button>
       </div>
       <div class="history-head"><span class="section-label">最近对话</span><button class="tiny-icon" id="clearSearch" title="清除搜索">···</button></div>
       <div class="conversation-list" id="conversationList"></div>
@@ -90,12 +91,39 @@
             <div class="disclaimer">AI 可能会出错。重要信息请核实。</div>
           </div>
         </section>
+        <section class="view providers-view hidden" id="providersView">
+          <div class="prov-heading">
+            <div><div class="eyebrow">PROVIDERS</div><h1>服务商与模型</h1><p class="subhead">渠道登记、Key 轮换、连通测试、用量对账——全部只存本机。</p></div>
+            <div class="prov-actions">
+              <button class="primary-btn" id="pvAdd">＋ 添加服务商</button>
+              <button class="soft-btn" id="pvSeed" title="一键载入默认渠道（国内优先 + 海外兜底，Key 待登记）">载入默认</button>
+              <button class="soft-btn" id="pvImport" title="从内置 gateway-channels.json 逐条登记（已存在 id 自动跳过）">一键导入</button>
+              <button class="soft-btn" id="pvExport" title="导出 {exported_at, note, channels}（Key 为掩码）">导出配置</button>
+              <button class="soft-btn" id="pvSelftest" title="逐个单轮探测可用模型（串行，避免打爆上游限流）">批量体检</button>
+              <button class="soft-btn" id="pvRefresh">刷新 ↗</button>
+            </div>
+          </div>
+          <div class="prov-banner hidden" id="pvBanner"></div>
+          <div class="prov-summary" id="pvSummary"></div>
+          <div class="section-heading"><div><h2>已登记渠道</h2><p id="chHint">Key 只以掩码展示（前3后4）。轮换点「换 Key」粘贴新值；留空保存 = 不改变。</p></div><span class="prov-count" id="chCount"></span></div>
+          <div class="ch-rows" id="chRows"></div>
+          <div class="section-heading"><div><h2>预设服务商</h2><p>点「添加」把预设填进登记表，补上 Key 即可用。</p></div><label class="search-box"><span>⌕</span><input id="pvPresetSearch" type="search" placeholder="筛选预设…"></label></div>
+          <div class="preset-grid" id="pvPresets"></div>
+          <div class="section-heading"><div><h2>用量与对账</h2><p>本机网关记录的请求 / token / 成本估算。</p></div><button class="text-btn" id="pvUsageExport">导出 CSV ↗</button></div>
+          <div class="usage-cards" id="usageCards"></div>
+          <div class="usage-tables" id="usageTables"></div>
+          <div class="usage-pager hidden" id="usagePager"><button class="soft-btn" id="usagePrev">‹ 上一页</button><span id="usagePageN"></span><button class="soft-btn" id="usageNext">下一页 ›</button></div>
+          <footer class="page-footer">QuakeAI · 免费资源智能聚合网关 <span>数据只保存在当前浏览器 · <span id="pvBuildVersion"></span></span></footer>
+        </section>
       </div>
     </main>
   </div>
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
   <dialog class="gw-dialog" id="debug-dlg" aria-label="调试日志"><div class="dlg-head"><h3>调试日志</h3><div class="dlg-head-actions"><button class="soft-btn" id="dbg-clear">清空</button><button class="soft-btn" id="dbg-copy">复制</button><button class="icon-btn" id="dbg-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="dbg-body"></pre><p class="dlg-foot">魔法指令 <code>/debug on</code> 开启 · <code>/debug off</code> 关闭。iOS 主屏 PWA 无 F12，用此面板；桌面端也可按 F12 看 DevTools。</p></dialog>
   <dialog class="gw-dialog" id="console-dlg" aria-label="控制台状态"><div class="dlg-head"><h3>控制台状态</h3><div class="dlg-head-actions"><button class="soft-btn" id="console-copy">复制</button><button class="icon-btn" id="console-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="console-body"></pre><p class="dlg-foot">魔法指令 <code>/console: zsj</code> 开启 · <code>/console: off</code> 关闭。只读状态速览，不影响聊天。</p></dialog>
+  <dialog class="gw-dialog gw-dialog-wide" id="channel-dlg" aria-label="服务商登记"><div class="dlg-head"><h3 id="chDlgTitle">添加服务商</h3><div class="dlg-head-actions"><button class="icon-btn" id="ch-close" aria-label="关闭">×</button></div></div><div class="dlg-body ch-form"><div class="ch-form-grid"><div><label for="ch-provider">Provider *</label><input id="ch-provider" placeholder="zhipu / siliconflow / openrouter…" autocomplete="off"></div><div><label for="ch-name">名称 *</label><input id="ch-name" placeholder="显示用名称" autocomplete="off"></div><div class="full"><label for="ch-base">Base URL *</label><input id="ch-base" placeholder="https://…" autocomplete="off"></div><div><label for="ch-kind">类型</label><select id="ch-kind"><option value="chat">chat（对话）</option><option value="audio">audio（转写）</option></select></div><div><label for="ch-tier">档位</label><select id="ch-tier"><option>T1</option><option>T2</option><option>T3</option></select></div><div><label for="ch-priority">优先级（大者优先）</label><input id="ch-priority" type="number" value="50"></div><div><label for="ch-enabled">状态</label><select id="ch-enabled"><option value="1">启用</option><option value="0">停用</option></select></div><div class="full" id="ch-key-wrap"><label for="ch-key">API Key</label><input id="ch-key" type="password" placeholder="sk-…（暂不登记可留空）" autocomplete="off"><p class="ch-hint" id="ch-key-hint" hidden>编辑态不显示原 Key；轮换请用渠道卡「换 Key」。</p><p class="ch-hint" id="ch-zhipu-hint" hidden>智谱系：Key 为 {id}.{secret} 两段式时，网关自动生成短期 JWT。</p></div><div class="full"><label for="ch-models">模型列表（逗号分隔，与下方精细配置同步）</label><input id="ch-models" placeholder="glm-4-flash, glm-4-plus" autocomplete="off"></div><div class="full"><label>模型精细配置（能力 / 次要能力 / 优先级 / 启停）</label><div class="mm-rows" id="ch-meta-rows"></div><button class="soft-btn" id="ch-meta-add" type="button">＋ 添加一行</button></div><div class="full"><label for="ch-note">备注</label><input id="ch-note" placeholder="免费额度 / 用途说明（可选）" autocomplete="off"></div></div></div><div class="dlg-foot"><span class="dlg-err" id="ch-dlg-err"></span><div class="dlg-foot-actions"><button class="soft-btn" id="ch-cancel">取消</button><button class="primary-btn" id="ch-save">保存</button></div></div></dialog>
+  <dialog class="gw-dialog" id="key-dlg" aria-label="轮换 Key"><div class="dlg-head"><h3>轮换 API Key</h3><div class="dlg-head-actions"><button class="icon-btn" id="key-close" aria-label="关闭">×</button></div></div><div class="dlg-body"><p class="dlg-label">当前 Key（掩码）</p><p class="key-current" id="key-current">—</p><label class="dlg-label" for="key-new">新 Key</label><input id="key-new" type="password" placeholder="粘贴完整新 Key；留空保存 = 不改变" autocomplete="off"><p class="dlg-foot-note">掩码（含 *** / ... / …）会被拦截——请粘贴完整值。</p></div><div class="dlg-foot"><span class="dlg-err" id="key-dlg-err"></span><div class="dlg-foot-actions"><button class="soft-btn" id="key-cancel">取消</button><button class="primary-btn" id="key-save">保存</button></div></div></dialog>
+  <dialog class="gw-dialog" id="selftest-dlg" aria-label="批量体检"><div class="dlg-head"><h3>批量体检</h3><div class="dlg-head-actions"><button class="icon-btn" id="selftest-close" aria-label="关闭">×</button></div></div><pre class="dlg-body" id="selftest-body"></pre><p class="dlg-foot">串行逐个探测（单点失败不中断）；每轮上限 12 个模型。</p></div></dialog>
   <div class="modal-backdrop hidden" id="modalBackdrop"><section class="modal card" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-head"><h2 id="modalTitle">设置</h2><button class="icon-btn" id="closeModal" aria-label="关闭">×</button></div><div id="modalBody"></div><div class="modal-actions"><button class="soft-btn" id="cancelModal">取消</button><button class="primary-btn" id="saveModal">保存</button></div></section></div>
   <div class="jarvis-overlay hidden" id="jarvisOverlay" role="dialog" aria-modal="true" aria-label="语音助手"><div class="jarvis-backdrop" id="jarvisBackdrop"></div><section class="jarvis-panel"><div class="jarvis-top"><div class="jarvis-brand"><div class="brand-mark">Q</div><div><strong>语音助手</strong><span>说一句话，或直接输入</span></div></div><button class="icon-btn" id="closeJarvis" aria-label="关闭语音助手">×</button></div><div class="jarvis-center"><div class="orb-wrap"><div class="orb-ring ring-one"></div><div class="orb-ring ring-two"></div><button class="jarvis-orb" id="jarvisMic" aria-label="开始语音输入"><span>◉</span></button></div><h2 id="jarvisState">我在听</h2><p id="jarvisHint">点击圆形按钮开始语音输入，或直接输入文字。</p><div class="jarvis-transcript" id="jarvisTranscript">你好，我是 QuakeAI 语音助手。今天有什么可以帮你？</div></div><div class="jarvis-input-row"><input id="jarvisText" placeholder="发送消息…"><button class="send-btn" id="jarvisSend">↑</button></div><div class="jarvis-foot"><span><i class="mini-dot green-dot"></i> 网关已接入</span><span>语音识别取决于浏览器支持</span></div></section></div>
   <script src="./assets/js/store.js"></script>
@@ -107,6 +135,7 @@
   <script src="./assets/js/skills.js"></script>
   <script src="./assets/js/share.js"></script>
   <script src="./assets/js/qrcode.js"></script>
+  <script src="./assets/js/providers.js"></script>
   <script src="./assets/js/app.js"></script>
 </body>
 </html>

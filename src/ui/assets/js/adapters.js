@@ -90,10 +90,16 @@
       const j = await this.admin("/channels");
       return Array.isArray(j.channels) ? j.channels : (Array.isArray(j) ? j : []);
     }
+    /// 完整列表响应：channels + summary + presets + store 态（服务商页一次性拿全）
+    async listChannels() { return this.admin("/channels"); }
     async createChannel(body) { return this.admin("/channels", { method: "POST", body }); }
     async updateChannel(id, body) { return this.admin("/channels/" + encodeURIComponent(id), { method: "PUT", body }); }
     async removeChannel(id) { return this.admin("/channels/" + encodeURIComponent(id), { method: "DELETE" }); }
     async testChannel(id) { return this.admin("/channels/" + encodeURIComponent(id) + "/test", { method: "POST", body: {} }); }
+    /// 一键载入默认渠道（国内优先 + 海外兜底，Key 待登记）
+    async seed() { return this.admin("/seed", { method: "POST", body: {} }); }
+    /// 按模型自检：单轮空历史探测「能不能用 + 到底谁回答」
+    async testModel(model) { return this.admin("/models/test", { method: "POST", body: { model } }); }
 
     /* ---- 对话（流式 SSE） ----
        chat({messages, model, features, signal, onDelta})
@@ -196,6 +202,21 @@
     async diag() { return this.admin("/diag"); }
     async events() { return this.admin("/events"); }
     async usage() { return this.admin("/usage"); }
+    /// 管理面原文响应（CSV 导出用）：admin() 会 JSON 化，这里只要 text
+    async adminRaw(path, opts) {
+      opts = opts || {};
+      const gw = await this.init();
+      const headers = gwHeaders(Object.assign({ "Content-Type": "application/json", "x-gw-sub": "/api" + path }, opts.headers || {}));
+      const resp = await gw.admin(new Request("/admin/api" + path, {
+        method: (opts.method || "GET").toUpperCase(), headers,
+        body: opts.body === undefined || opts.body === null ? null : JSON.stringify(opts.body),
+      }));
+      const text = await resp.text();
+      if (!resp.ok) throw new Error("HTTP " + resp.status + (text ? " — " + text.slice(0, 120) : ""));
+      return text;
+    }
+    /// 用量对账 CSV（列名与旧 UI 导出一致）
+    async usageExportCsv() { return this.adminRaw("/usage/export"); }
   }
 
   /* ---------- 可用模型口径（与旧 UI 一致：effModels + 可用渠道过滤） ---------- */

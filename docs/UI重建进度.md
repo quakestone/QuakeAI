@@ -73,9 +73,44 @@
 4. **mock 中文乱码**：mock 以 latin1 累积 body，digest 直接 `JSON.parse` 致中文 mojibake。digest 解析改 `Buffer.from(body,'latin1').toString('utf8')`（bodyLength 仍按 latin1 二进制安全）。
 5. **x-gw-features 口径**：该头由网关内部消费、不转发上游；效果按渠道能力落地（智谱系注入 thinking/web_search，其他渠道 system 提示词保底）。G1 段 B 断言改验**效果**（mock 渠道注册为 `mock-zhipu`，`is_zhipu_like` 命中注入路径；`bearer_token` 仅 provider 精确 `zhipu` 走 JWT，raw key 原样透传不受影响）。
 
+## B2 服务商与模型管理（F8–F18）✅（门禁 G2 通过 45/45）
+
+### 交付物
+
+| 项 | 文件 | 说明 |
+|---|---|---|
+| 服务商模块 | `src/ui/assets/js/providers.js` | `QuakeProviders`：渠道 CRUD、Key 轮换、启停/优先级、连通测试、模型元数据行编辑、预设预填、seed/导入/导出、批量体检、用量三表——旧 UI（admin_ui.html 模型服务商标签）行为对齐，表现层换 Clarity Kit |
+| 视图 | `src/ui/index.html` | 导航「服务商」+ `#providersView`（统计条/渠道卡/预设网格/用量区）+ 三对话框（渠道表单 / 换 Key / 批量体检） |
+| 适配层扩展 | `adapters.js` | `listChannels`（含 summary+presets）、`seed`、`testModel`、`adminRaw`、`usageExportCsv`（CSV 原文，不经 JSON 化） |
+| 样式 | `gw.css` | 渠道卡/健康点/档位/能力徽标/预设卡/用量卡与三表/模型行编辑器/表单对话框/窄屏塌陷 |
+| 壳接线 | `app.js` | VIEW_NAMES + setView 进入服务商视图即 `Providers.load()`；`Providers.init(refreshGateway)` 渠道变更联动模型/顶栏 |
+| 导入数据源 | `build.sh` | 仓库根 `gateway-channels.json` 复制进 `build/`（页面相对路径拉取，子路径托管可用） |
+| SW | `src/sw.js` | 预缓存补 `providers.js` + `gateway-channels.json` |
+| 测试 | `scripts/g2-verify.py` + `scripts/test-ui-g2.sh` | 一键：构建 → 托管 → mock → Playwright（45 断言） |
+
+### 门禁 G2 实测结果（45/45 PASS）
+
+- **A CRUD**：表单建渠道（provider/名称/Base/类型/档位/优先级/Key/模型行/备注）→ 列表卡片 → models 落库。
+- **B Key 轮换**：掩码回显（前3后4）；`5bc8...4bRY` 掩码被前端拦截（对话框不关+错误提示）；真实轮换掩码更新；轮换回有效 Key。
+- **C 启停/优先级**：停用卡片置灰 + 徽标「停用」；优先级 ▲▼ ±10 即时生效。
+- **D 连通测试**：探测写回 `healthy`（mock 200），卡片徽标「健康」。
+- **E 模型元数据**：编辑弹窗回填；加第二行模型 → `models_meta` 2 行落库。
+- **F 预设**：筛选 → 「添加」预填表单（provider/模型行）→ 取消关闭。
+- **G seed**：一键载入默认渠道（数量增加），重试幂等不重复。
+- **H 一键导入**：内置 7 通道 id 与 seed 同命名空间 → 首导全跳过；UI 删一个 → 再导恰好补回（数量 +1）；重导再全跳过。
+- **I 导出**：`gateway-channels.json` 下载，结构 `{exported_at, note, channels}`，无明文 Key。
+- **J 批量体检**：串行探测，产出「可用 x/y」汇总，mock 渠道模型 ✅。
+- **K 用量对账**：真实对话产生 usage → 6 张统计卡 → 三表（按源/按源×模型/按日）→ CSV 列名与旧 UI 一致（带 BOM）。
+- **L 删除 + 零错误**：删除后卡片消失；A–L 控制台/页面零错误。回归：G0 28/28、G1 56/56 不回退。
+
+### 过程中发现并修复的问题
+
+1. **G2 段 D 超时（测试数据问题，非产品缺陷）**：连通测试探测带轮换后的 Key，mock 只认 `test-key-local` → 401 → 健康落 `degraded`（设计口径正确）。测试改为轮换后验完**轮换回有效 Key** 再探测。
+2. **G2 段 H 断言口径错误**：原断言假设「导入 = 纯新增」，但 seed 默认渠道与内置文件同 id 命名空间（`seed-{provider}-{kind}`），首导本应全跳过。重构为「跳过路径 + 删后再导补回」双路径验证。
+3. **后端口径确认（无需改动）**：`api_update` 对缺失/空/掩码 `api_key` 一律视为不修改，仅新明文才轮换——providers.js 编辑态不发 api_key 字段，与后端口径一致。
+
 ### 已知限制（后续批次处理）
 
-- 服务商/模型管理页、用量对账、一键导入内置通道 → B2。
 - 语音 TTS/STT 递降、工作流参数 → B3；上游/接入/鉴权/本机调试 → B4。
 - 旧 UI（`src/admin_ui.html`）仍在 main/gh-pages 线上运行，本分支验收后（B7）才删除——当前两套并存属计划内的中间态。
 
@@ -83,6 +118,7 @@
 
 ```bash
 bash scripts/build.sh          # 构建
-bash scripts/test-ui-g0.sh     # G0 一键实测（构建+托管+mock+Playwright 28 断言）
+bash scripts/test-ui-g0.sh     # G0 一键实测（28 断言）
 bash scripts/test-ui-g1.sh     # G1 一键实测（B1 对话全量 56 断言）
+bash scripts/test-ui-g2.sh     # G2 一键实测（B2 服务商与模型 45 断言）
 ```

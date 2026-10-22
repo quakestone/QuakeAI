@@ -48,4 +48,9 @@ cp -f src/sw.js build/sw.js
 cp -f src/manifest.webmanifest build/manifest.webmanifest
 cp -f src/icon.svg build/icon.svg
 
+echo "== 复制内置通道清单（服务商页「一键导入」数据源）=="
+# 源在仓库根（历史位置不变）；页面经相对路径 ./gateway-channels.json 拉取，
+# 子路径托管（/QuakeAI/）时随 index.html 一同解析，故必须落在 build/ 根。
+cp -f gateway-channels.json build/gateway-channels.json
+
 echo "✅ 构建完成：build/index.html + build/assets/{css,js,wasm}（纯静态 PWA，相对路径）"
